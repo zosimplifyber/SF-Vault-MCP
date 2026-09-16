@@ -11,7 +11,6 @@ single authenticated session created at launch.
 * ``gui.purchasing_list_sync``  — BOM → Purchased Parts SharePoint sync
 * ``gui.publish_bom``           — BOM → published PDF / STEP deliverables
 * ``gui.file_property_check``   — File property compliance check
-* ``gui.wrike_mfg_tasks``       — BOM → Wrike manufacturing tasks
 * ``gui.formed_fiber_handoff``  — Formed Fiber design-to-process handoff
 * ``gui.mfg_package``           — Manufacturing package builder (item-based; off the dashboard)
 * ``gui.search_dialog``         — Item search dialog used by gui.mfg_package only

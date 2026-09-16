@@ -3,10 +3,6 @@
     "vault": {
       "type": "sse",
       "url": "http://127.0.0.1:8765/sse"
-    },
-    "wrike": {
-      "type": "sse",
-      "url": "http://127.0.0.1:8766/sse"
     }
   }
 }

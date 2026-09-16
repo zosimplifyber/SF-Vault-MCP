@@ -5,18 +5,6 @@
         "password": "your-password-here",
         "database": "Vault"
     },
-    "wrike": {
-        "token": "your-wrike-permanent-access-token-here",
-        "base_url": "https://www.wrike.com/api/v4",
-        "allowed_folders": [],
-        "mfg_tasks": {
-            "project_id": "",
-            "owners": {},
-            "purchasing_days": 2,
-            "manufacturing_days": 10,
-            "shipping_days": 3
-        }
-    },
     "purchasing_reference": {
         "source": "mslist",
         "mslist": {
