@@ -154,6 +154,67 @@ def _intake_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+ATTACHMENT_ASSOC = "Attachment"   # REST fileAssocType for attachments; confirmed by scripts/probes/probe_intake_sdk.py
+DEPENDENCY_ASSOC = "Dependency"
+MAX_PARTS = 500
+
+
+def _is_content_center(f: dict[str, Any]) -> bool:
+    return (f.get("category") == "Part - Content Center"
+            or str(f.get("folder") or "").startswith("$/Content Center Files"))
+
+
+async def _uses(api, vault: str, file_version_id: str) -> list[dict[str, Any]]:
+    import vault_slim as slim
+    res = await api.get_file_uses(vault_id=vault, file_version_id=str(file_version_id), limit=500)
+    if res.get("error"):
+        raise IntakeError(f"Could not read uses of file version {file_version_id}: {res.get('data')}")
+    return slim._records(res.get("data"))
+
+
+async def _spec_for(api, vault: str, f: dict[str, Any]) -> tuple[Optional[dict], str]:
+    from part_specs import card_from_standard
+    if _is_content_center(f):
+        card = card_from_standard(f["name"])
+        return (card, "") if card else (None, "Content Center family or size not in standard_specs.json")
+    for row in await _uses(api, vault, f["file_version_id"]):
+        child = row.get("childFile") or {}
+        if row.get("fileAssocType") == ATTACHMENT_ASSOC and str(child.get("name", "")).endswith(".specs.json"):
+            res = await api.download_file_version_content(vault_id=vault, file_version_id=str(child["id"]))
+            if res.get("error"):
+                return None, f"spec card download failed: {res.get('data')}"
+            try:
+                return json.loads(res["data"]), ""
+            except ValueError as exc:
+                return None, f"spec card is not valid JSON: {exc}"
+    return None, "no spec card attached"
+
+
+async def _collect_parts(api, vault: str, root: dict[str, Any]) -> list[dict[str, Any]]:
+    """Unique .ipt files under an assembly (recursive), or [root] for a part."""
+    import vault_slim as slim
+    if not root["name"].lower().endswith(".iam"):
+        return [root]
+    parts: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    queue = [root]
+    while queue and len(parts) < MAX_PARTS:
+        asm = queue.pop()
+        if asm["file_version_id"] in seen:
+            continue
+        seen.add(asm["file_version_id"])
+        for row in await _uses(api, vault, asm["file_version_id"]):
+            if row.get("fileAssocType") != DEPENDENCY_ASSOC:
+                continue
+            child = slim.file_version(row.get("childFile") or {})
+            name = str(child.get("name", ""))
+            if name.lower().endswith(".iam"):
+                queue.append(child)
+            elif name.lower().endswith(".ipt"):
+                parts.setdefault(name, child)
+    return list(parts.values())
+
+
 def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = None,
              store: Optional[PreviewStore] = None, inventor=None, sleep=asyncio.sleep) -> None:
     from vault_write_tools import _dump, _sdk, _sdk_error
@@ -366,6 +427,39 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
 
         return _dump({"applied": True, "verified": not problems, "cd_number": cd,
                       "vault_path": f"{folder_path}/{names['ipt']}", "problems": problems, "steps": steps})
+
+    @mcp.tool()
+    async def vault_get_part_specs(part: str, vault_id_param: str = "") -> str:
+        """Spec cards for a part, or for every part in an assembly.
+
+        Purchased parts return the <CD>.specs.json attached at intake.
+        Content Center parts (ISO/DIN) return nominal dimensions from
+        standard_specs.json. Parts with neither are listed under no_data.
+        Use this for stackup and interface checks.
+
+        Args:
+            part: File name (CD-001887.iam, CD-001888.ipt) or file id.
+            vault_id_param: Vault ID. Leave empty for the configured vault.
+        """
+        import vault_slim as slim
+        from vault_write_tools import find_file
+        vault = resolved_vault(vault_id_param)
+        fv_raw, problem = await find_file(api, vault, part)
+        if problem or fv_raw is None:
+            return err(problem or f"{part} not found")
+        root = slim.file_version(fv_raw)
+        try:
+            files = await _collect_parts(api, vault, root)
+            specs, no_data = [], []
+            for f in files:
+                card, reason = await _spec_for(api, vault, f)
+                if card is None:
+                    no_data.append({"file": f["name"], "reason": reason})
+                else:
+                    specs.append({"file": f["name"], **card})
+        except IntakeError as exc:
+            return err(str(exc))
+        return _dump({"part": root["name"], "specs": specs, "no_data": no_data})
 
 
 async def _verify(api, vault: str, ipt_name: str, sleep, attempts: int = 3) -> list[str]:
