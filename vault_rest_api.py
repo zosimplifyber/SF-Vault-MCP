@@ -400,26 +400,54 @@ class VaultRestAPI:
 
     async def get_file_versions(
         self,
+        vault_id: str,
         file_id: str,
         *,
-        include_properties: bool = False,
         limit: int = 100,
-        offset: int = 0,
     ) -> Dict[str, Any]:
-        """GET /files/{fileId}/versions."""
-        params: Dict[str, Any] = {
-            "includeProperties": str(include_properties).lower(),
-            "limit": limit,
-            "offset": offset,
-        }
-        return await self._request("GET", f"/files/{file_id}/versions", params=params)
+        """GET /vaults/{vaultId}/files/{id}/versions — version history of a master file."""
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET", f"/vaults/{resolved}/files/{file_id}/versions", params={"limit": limit}
+        )
 
-    async def get_file_download_url(self, file_id: str, version: Optional[int] = None) -> Dict[str, Any]:
-        """GET /files/{fileId}/download — get download URL for a file."""
-        params: Dict[str, Any] = {}
-        if version is not None:
-            params["version"] = version
-        return await self._request("GET", f"/files/{file_id}/download", params=params)
+    async def get_file_version_signed_url(
+        self, vault_id: str, file_version_id: str
+    ) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/file-versions/{id}/signedurl — time-limited download link.
+
+        Vault answers with a server-relative path; it is made absolute here so
+        the caller can fetch it without knowing the server name.
+        """
+        resolved = vault_id or self._vault_id or ""
+        result = await self._request(
+            "GET", f"/vaults/{resolved}/file-versions/{file_version_id}/signedurl"
+        )
+        data = result.get("data")
+        if not result.get("error") and isinstance(data, dict) and data.get("url"):
+            host = self.base_url[: -len(API_PATH)] if self.base_url.endswith(API_PATH) else self.base_url
+            data["url"] = host + data["url"]
+        return result
+
+    async def get_file_parents(
+        self, vault_id: str, file_version_id: str, *, limit: int = 100
+    ) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/file-versions/{id}/parents — CAD where-used."""
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET",
+            f"/vaults/{resolved}/file-versions/{file_version_id}/parents",
+            params={"limit": limit},
+        )
+
+    async def get_file_item_versions(
+        self, vault_id: str, file_version_id: str
+    ) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/file-versions/{id}/item-versions — items linked to a file."""
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET", f"/vaults/{resolved}/file-versions/{file_version_id}/item-versions"
+        )
 
     async def get_file_uses(
         self,
@@ -598,27 +626,34 @@ class VaultRestAPI:
     async def advanced_search(
         self,
         vault_id: str,
-        search_criteria: Dict[str, Any],
+        body: Dict[str, Any],
         *,
-        extended_models: bool = False,
-        prop_def_ids: Optional[str] = None,
         limit: int = 100,
+        search_sub_folders: bool = True,
+        released_files_only: bool = False,
+        released_items_only: bool = False,
+        latest_only: bool = True,
         cursor_state: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """POST /vaults/{vaultId}:advanced-search — structured criteria search."""
+        """POST /vaults/{vaultId}:advanced-search — structured criteria search.
+
+        ``body`` is the request schema as-is: ``searchCriterias`` (required),
+        plus optional ``entityTypesToSearch``, ``foldersToSearch`` and
+        ``sortCriterias``. Paging and the release/latest switches are query
+        parameters, not body fields.
+        """
         resolved = vault_id or self._vault_id or ""
-        body: Dict[str, Any] = {
-            "searchCriteria": search_criteria,
+        params: Dict[str, Any] = {
             "limit": limit,
+            "option[searchSubFolders]": str(search_sub_folders).lower(),
+            "option[releasedFilesOnly]": str(released_files_only).lower(),
+            "option[releasedItemsOnly]": str(released_items_only).lower(),
+            "option[latestOnly]": str(latest_only).lower(),
         }
-        if extended_models:
-            body["extendedModels"] = True
-        if prop_def_ids:
-            body["propDefIds"] = prop_def_ids
         if cursor_state:
-            body["cursorState"] = cursor_state
+            params["cursorState"] = cursor_state
         return await self._request(
-            "POST", f"/vaults/{resolved}:advanced-search", json_data=body
+            "POST", f"/vaults/{resolved}:advanced-search", params=params, json_data=body
         )
 
     # ------------------------------------------------------------------
@@ -731,6 +766,38 @@ class VaultRestAPI:
             params["cursorState"] = cursor_state
         return await self._request(
             "GET", f"/vaults/{resolved}/items/{item_id}/change-orders", params=params
+        )
+
+    async def list_change_orders(
+        self,
+        vault_id: str,
+        *,
+        open_only: bool = False,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/change-orders."""
+        resolved = vault_id or self._vault_id or ""
+        params: Dict[str, Any] = {"limit": limit}
+        if open_only:
+            params["filter[openCOsOnly]"] = "true"
+        return await self._request(
+            "GET", f"/vaults/{resolved}/change-orders", params=params
+        )
+
+    async def get_change_order(self, vault_id: str, change_order_id: str) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/change-orders/{id}."""
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET", f"/vaults/{resolved}/change-orders/{change_order_id}"
+        )
+
+    async def get_change_order_entities(
+        self, vault_id: str, change_order_id: str
+    ) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/change-orders/{id}/associated-entities — items and files on an ECO."""
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET", f"/vaults/{resolved}/change-orders/{change_order_id}/associated-entities"
         )
 
     # ------------------------------------------------------------------
@@ -864,17 +931,6 @@ class VaultRestAPI:
         resolved = vault_id or self._vault_id or ""
         return await self._request(
             "GET", f"/vaults/{resolved}/lifecycle-definitions", params={"limit": limit}
-        )
-
-    async def get_category_definitions(
-        self, vault_id: str, limit: int = 100
-    ) -> Dict[str, Any]:
-        """GET /vaults/{vaultId}/category-definitions."""
-        resolved = vault_id or self._vault_id or ""
-        return await self._request(
-            "GET",
-            f"/vaults/{resolved}/category-definitions",
-            params={"limit": limit},
         )
 
     # ------------------------------------------------------------------

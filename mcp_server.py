@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 import bom_purchasing
+import vault_slim as slim
 from pdf_watermark import apply_watermark
 from vault_rest_api import VaultRestAPI
 
@@ -150,6 +151,15 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         """Serialize an API result dict to a pretty JSON string."""
         return json.dumps(result, indent=2, default=str)
 
+    def _view(result: Dict[str, Any], view, raw: bool = False) -> str:
+        """Return the compact view of a successful call, or the raw envelope.
+
+        Errors always pass through untouched so the status and message survive.
+        """
+        if raw or result.get("error"):
+            return _fmt(result)
+        return json.dumps(view(result.get("data")), ensure_ascii=False, default=str)
+
     # ------------------------------------------------------------------
     # Server information
     # ------------------------------------------------------------------
@@ -214,7 +224,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         Returns vault names, IDs, and descriptions.
         """
         result = await api.get_vaults()
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     @mcp.tool()
     async def vault_get_vault(vault_id_param: str = "") -> str:
@@ -238,9 +248,14 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         query: str = "",
         search_sub_folders: bool = False,
         limit: int = 100,
+        raw: bool = False,
     ) -> str:
         """
-        List the contents of a vault folder (files and sub-folders).
+        List the contents of a vault folder (sub-folders and files).
+
+        Returns {total, returned, results}; each result is a folder
+        (name, path, folder_id) or a file (name, revision, state,
+        file_version_id, file_id, checked_out_by).
 
         Args:
             folder_id: Folder ID. Use "$" or leave empty for the root folder.
@@ -248,6 +263,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             query: Optional keyword filter applied to folder contents.
             search_sub_folders: When True, include results from sub-folders.
             limit: Maximum number of results to return (default 100).
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_folder_contents(
             vault_id=_resolved_vault(vault_id_param),
@@ -256,19 +272,20 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             search_sub_folders=search_sub_folders,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     @mcp.tool()
-    async def vault_get_folder(folder_id: str, vault_id_param: str = "") -> str:
+    async def vault_get_folder(folder_id: str, vault_id_param: str = "", raw: bool = False) -> str:
         """
-        Get metadata for a specific folder.
+        Get a folder's name, full path and sub-folder count.
 
         Args:
             folder_id: The folder ID to retrieve.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_folder_by_id(_resolved_vault(vault_id_param), folder_id)
-        return _fmt(result)
+        return _view(result, slim.folder, raw)
 
     # ------------------------------------------------------------------
     # Files
@@ -279,57 +296,140 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         file_id: str,
         vault_id_param: str = "",
         released_only: bool = False,
+        include_properties: bool = True,
+        raw: bool = False,
     ) -> str:
         """
-        Get metadata for a specific file.
+        Get the latest version of a file: name, revision, state, folder,
+        who has it checked out, and its properties as {name: value}.
 
         Args:
-            file_id: The file ID to retrieve.
+            file_id: Master file ID or any file-version ID of the file.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
-            released_only: When True, only return the file if it is in a released state.
+            released_only: When True, return the latest released version instead.
+            include_properties: Include the property values (default True).
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_file_by_id(
             vault_id=_resolved_vault(vault_id_param),
             file_id=file_id,
             released_only=released_only,
         )
-        return _fmt(result)
+        return _view(
+            result,
+            lambda d: slim.file_version(
+                (d or {}).get("fileVersion") or {}, with_properties=include_properties
+            ),
+            raw,
+        )
 
     @mcp.tool()
     async def vault_get_file_versions(
         file_id: str,
-        include_properties: bool = False,
+        vault_id_param: str = "",
         limit: int = 50,
+        raw: bool = False,
     ) -> str:
         """
-        Get all versions of a file.
+        List the version history of a file (version, revision, state, date).
 
         Args:
-            file_id: The master file ID.
-            include_properties: When True, include user-defined properties in the response.
+            file_id: The master file ID (the "file_id" field of other tools).
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of versions to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_file_versions(
-            file_id=file_id,
-            include_properties=include_properties,
-            limit=limit,
+            vault_id=_resolved_vault(vault_id_param), file_id=file_id, limit=limit
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     @mcp.tool()
-    async def vault_get_file_download_url(file_id: str, version: int = 0) -> str:
+    async def vault_get_file_download_url(
+        file_id: str, file_version_id: str = "", vault_id_param: str = ""
+    ) -> str:
         """
-        Get the download URL for a file.
+        Get a time-limited, signed download link for a file. The link needs
+        no Vault session, so it can be fetched with any HTTP client on the
+        network that reaches the Vault server.
 
         Args:
-            file_id: The file ID.
-            version: Specific version number. Use 0 for the latest version.
+            file_id: Master file ID or file-version ID; the latest version is used.
+            file_version_id: A specific version to download instead of the latest.
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
         """
-        result = await api.get_file_download_url(
-            file_id=file_id,
-            version=version if version > 0 else None,
+        vault = _resolved_vault(vault_id_param)
+        name = ""
+        fv_id = file_version_id.strip()
+        if not fv_id:
+            file_resp = await api.get_file_by_id(vault_id=vault, file_id=file_id)
+            if file_resp.get("error"):
+                return _fmt(file_resp)
+            fv = (file_resp.get("data") or {}).get("fileVersion") or {}
+            fv_id, name = str(fv.get("id") or ""), fv.get("name") or ""
+        if not fv_id:
+            return _fmt({"error": True, "message": f"Could not resolve a file version from file_id={file_id}"})
+        result = await api.get_file_version_signed_url(vault_id=vault, file_version_id=fv_id)
+        return _view(
+            result,
+            lambda d: {"name": name, "file_version_id": fv_id, "download_url": (d or {}).get("url")},
         )
-        return _fmt(result)
+
+    @mcp.tool()
+    async def vault_get_file_where_used(
+        file_id: str, vault_id_param: str = "", limit: int = 100, raw: bool = False
+    ) -> str:
+        """
+        CAD where-used: the assemblies and drawings that reference a file.
+        The file-side counterpart of vault_get_item_parents.
+
+        Args:
+            file_id: Master file ID or file-version ID; the latest version is used.
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            limit: Maximum number of parents to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
+        """
+        vault = _resolved_vault(vault_id_param)
+        file_resp = await api.get_file_by_id(vault_id=vault, file_id=file_id)
+        if file_resp.get("error"):
+            return _fmt(file_resp)
+        fv = (file_resp.get("data") or {}).get("fileVersion") or {}
+        result = await api.get_file_parents(
+            vault_id=vault, file_version_id=str(fv.get("id") or file_id), limit=limit
+        )
+        return _view(
+            result,
+            lambda d: {"file": slim.file_version(fv), **slim.file_parents(d or {})},
+            raw,
+        )
+
+    @mcp.tool()
+    async def vault_get_file_items(
+        file_id: str, vault_id_param: str = "", raw: bool = False
+    ) -> str:
+        """
+        The engineering item(s) a CAD file is linked to, e.g. CD-001621.iam ->
+        SF-001942. Use it to go from a drawing or model to its part number, BOM
+        and purchasing data.
+
+        Args:
+            file_id: Master file ID or file-version ID; the latest version is used.
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            raw: Return the unprocessed Vault response instead of the compact view.
+        """
+        vault = _resolved_vault(vault_id_param)
+        file_resp = await api.get_file_by_id(vault_id=vault, file_id=file_id)
+        if file_resp.get("error"):
+            return _fmt(file_resp)
+        fv = (file_resp.get("data") or {}).get("fileVersion") or {}
+        result = await api.get_file_item_versions(
+            vault_id=vault, file_version_id=str(fv.get("id") or file_id)
+        )
+        return _view(
+            result,
+            lambda d: {"file": slim.file_version(fv), **slim.collection(d)},
+            raw,
+        )
 
     # ------------------------------------------------------------------
     # Search
@@ -344,18 +444,23 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         released_files_only: bool = False,
         latest_only: bool = True,
         limit: int = 50,
+        raw: bool = False,
     ) -> str:
         """
         Search for files in the vault using a keyword query.
 
+        Returns {total, returned, results}; each file has name, revision, state,
+        folder path, file_version_id and file_id.
+
         Args:
-            query: Keyword(s) to search for (e.g. "pump assembly").
+            query: Keyword(s) to search for (e.g. "pump assembly" or "CD-001621").
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             search_content: When True, also search inside file content.
             search_sub_folders: When True, include sub-folders in the search.
             released_files_only: When True, only return released files.
             latest_only: When True, return only the latest version of each file.
             limit: Maximum number of results to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.search_files(
             vault_id=_resolved_vault(vault_id_param),
@@ -366,34 +471,99 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             latest_only=latest_only,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
+
+    _SEARCH_OPERATORS = {
+        "Contains", "DoesNotContain", "IsExactly", "IsEmpty", "IsNotEmpty",
+        "GreaterThan", "GreaterThanOrEqualTo", "LessThan", "LessThanOrEqualTo",
+        "NotEqualTo",
+    }
 
     @mcp.tool()
     async def vault_advanced_search(
-        search_criteria_json: str,
+        conditions_json: str,
+        entity_types: str = "",
+        folder_id: str = "",
+        released_only: bool = False,
+        latest_only: bool = True,
         vault_id_param: str = "",
         limit: int = 50,
+        raw: bool = False,
     ) -> str:
         """
-        Perform an advanced search using structured criteria.
+        Property search: find files, items, folders or change orders whose
+        properties match every condition (AND).
 
         Args:
-            search_criteria_json: JSON string describing the search criteria.
-                Example: {"conditions": [{"propDefId": "35", "value": "Released"}]}
+            conditions_json: JSON list of conditions, each
+                {"property": <display name, system name or definition id>,
+                 "operator": <operator>, "value": <text>}.
+                Operators: Contains, DoesNotContain, IsExactly, IsEmpty,
+                IsNotEmpty, GreaterThan, GreaterThanOrEqualTo, LessThan,
+                LessThanOrEqualTo, NotEqualTo.
+                Example: '[{"property": "State", "operator": "IsExactly",
+                "value": "Work in Progress"}, {"property": "Category Name",
+                "operator": "IsExactly", "value": "Assembly - Engineering"}]'
+            entity_types: Comma list of File, Item, Folder, ChangeOrder.
+                Empty searches all of them.
+            folder_id: Limit the search to this folder (and its sub-folders).
+            released_only: Only released files and items.
+            latest_only: Only the latest version of each file/item (default True).
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of results to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
+        vault = _resolved_vault(vault_id_param)
         try:
-            criteria = json.loads(search_criteria_json)
+            conditions = json.loads(conditions_json)
         except json.JSONDecodeError as exc:
-            return json.dumps({"error": True, "message": f"Invalid JSON in search_criteria_json: {exc}"})
+            return _fmt({"error": True, "message": f"Invalid JSON in conditions_json: {exc}"})
+        if isinstance(conditions, dict):
+            conditions = [conditions]
+        if not isinstance(conditions, list) or not conditions:
+            return _fmt({"error": True, "message": "conditions_json must be a non-empty JSON list."})
+
+        defs = await api.get_property_definitions(vault_id=vault, limit=1000)
+        if defs.get("error"):
+            return _fmt({"step": "get_property_definitions", "result": defs})
+        by_name: Dict[str, str] = {}
+        for d in _extract_collection(defs.get("data")):
+            for key in (d.get("id"), d.get("displayName"), d.get("systemName")):
+                if key:
+                    by_name[str(key).strip().lower()] = str(d.get("id"))
+
+        criteria = []
+        for c in conditions:
+            prop = str(c.get("property", "")).strip()
+            op = str(c.get("operator", "")).strip()
+            prop_id = by_name.get(prop.lower())
+            if not prop_id:
+                return _fmt({"error": True, "message": f"Unknown property {prop!r}. See vault_list_property_definitions."})
+            if op not in _SEARCH_OPERATORS:
+                return _fmt({"error": True, "message": f"Unknown operator {op!r}. Use one of {sorted(_SEARCH_OPERATORS)}."})
+            criteria.append({
+                "propertyDefinitionUrl": f"/AutodeskDM/Services/api/vault/v2/vaults/{vault}/property-definitions/{prop_id}",
+                "operator": op,
+                "searchString": "" if c.get("value") is None else str(c.get("value")),
+            })
+
+        body: Dict[str, Any] = {"searchCriterias": criteria}
+        types = [t.strip() for t in entity_types.split(",") if t.strip()]
+        if types:
+            body["entityTypesToSearch"] = types
+        if folder_id:
+            body["foldersToSearch"] = [f"/AutodeskDM/Services/api/vault/v2/vaults/{vault}/folders/{folder_id}"]
 
         result = await api.advanced_search(
-            vault_id=_resolved_vault(vault_id_param),
-            search_criteria=criteria,
+            vault_id=vault,
+            body=body,
             limit=limit,
+            released_files_only=released_only,
+            released_items_only=released_only,
+            latest_only=latest_only,
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
+
 
     # ------------------------------------------------------------------
     # Accounts
@@ -408,7 +578,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             limit: Maximum number of groups to return.
         """
         result = await api.get_groups(limit=limit)
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     @mcp.tool()
     async def vault_get_group(group_id: str) -> str:
@@ -419,7 +589,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             group_id: The group ID.
         """
         result = await api.get_group_by_id(group_id)
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     @mcp.tool()
     async def vault_list_users(limit: int = 100) -> str:
@@ -430,7 +600,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             limit: Maximum number of users to return.
         """
         result = await api.get_users(limit=limit)
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     @mcp.tool()
     async def vault_get_user(user_id: str) -> str:
@@ -441,7 +611,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             user_id: The user ID.
         """
         result = await api.get_user_by_id(user_id)
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     # ------------------------------------------------------------------
     # Property definitions
@@ -461,7 +631,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         result = await api.get_property_definitions(
             vault_id=_resolved_vault(vault_id_param), limit=limit
         )
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     @mcp.tool()
     async def vault_get_property_definition(
@@ -477,7 +647,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         result = await api.get_property_definition_by_id(
             vault_id=_resolved_vault(vault_id_param), prop_def_id=prop_def_id
         )
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     # ------------------------------------------------------------------
     # Items (Engineering)
@@ -488,37 +658,52 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         query: str,
         vault_id_param: str = "",
         limit: int = 50,
+        raw: bool = False,
     ) -> str:
         """
-        Search for engineering items (BOM items) in the vault.
+        Search for engineering items (part numbers) in the vault.
+
+        Returns {total, returned, results}; each item has number, title,
+        description, revision, state, category, item_version_id and item_id.
 
         Args:
             query: Keyword(s) to search for.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of results to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.search_items(
             vault_id=_resolved_vault(vault_id_param), query=query, limit=limit
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     @mcp.tool()
-    async def vault_get_item(item_id: str, vault_id_param: str = "") -> str:
+    async def vault_get_item(
+        item_id: str,
+        vault_id_param: str = "",
+        include_properties: bool = True,
+        raw: bool = False,
+    ) -> str:
         """
-        Get details for a specific engineering item.
+        Get an engineering item's latest version, with its properties as
+        {name: value}.
 
         Args:
-            item_id: The item ID.
+            item_id: The master item ID.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            include_properties: Include the property values (default True).
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_by_id(
             vault_id=_resolved_vault(vault_id_param), item_id=item_id
         )
-        return _fmt(result)
+        return _view(
+            result, lambda d: slim.item(d or {}, with_properties=include_properties), raw
+        )
 
     @mcp.tool()
     async def vault_get_item_version_history(
-        item_id: str, vault_id_param: str = "", limit: int = 50
+        item_id: str, vault_id_param: str = "", limit: int = 50, raw: bool = False
     ) -> str:
         """
         Get the full version history for a master engineering item.
@@ -527,15 +712,16 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             item_id: The master item ID.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of versions to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_version_history(
             vault_id=_resolved_vault(vault_id_param), item_id=item_id, limit=limit
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     @mcp.tool()
     async def vault_get_item_change_orders(
-        item_id: str, vault_id_param: str = "", limit: int = 100
+        item_id: str, vault_id_param: str = "", limit: int = 100, raw: bool = False
     ) -> str:
         """
         Get change orders linked to a specific item.
@@ -544,11 +730,12 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             item_id: The master item ID.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of change orders to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_change_orders(
             vault_id=_resolved_vault(vault_id_param), item_id=item_id, limit=limit
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     # ------------------------------------------------------------------
     # Item versions & Bill of Materials
@@ -556,7 +743,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
 
     @mcp.tool()
     async def vault_list_item_versions(
-        query: str = "", vault_id_param: str = "", limit: int = 100
+        query: str = "", vault_id_param: str = "", limit: int = 100, raw: bool = False
     ) -> str:
         """
         List item versions in the vault, optionally filtered by a keyword query.
@@ -565,253 +752,290 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             query: Optional keyword filter (e.g. a part number). Leave empty to list all.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of results to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.list_item_versions(
             vault_id=_resolved_vault(vault_id_param),
             query=query or None,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, slim.collection, raw)
 
     @mcp.tool()
     async def vault_get_item_version(
-        item_version_id: str, vault_id_param: str = ""
+        item_version_id: str,
+        vault_id_param: str = "",
+        include_properties: bool = True,
+        raw: bool = False,
     ) -> str:
         """
-        Get details for a specific item version (a versioned engineering item).
+        Get a specific item version, with its properties as {name: value}.
 
         Args:
             item_version_id: The item-version ID (different from the master item ID).
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            include_properties: Include the property values (default True).
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_version_by_id(
             vault_id=_resolved_vault(vault_id_param), item_version_id=item_version_id
         )
-        return _fmt(result)
+        return _view(
+            result,
+            lambda d: slim.item_version(d or {}, with_properties=include_properties),
+            raw,
+        )
 
     @mcp.tool()
     async def vault_get_item_bom(
-        item_version_id: str, vault_id_param: str = "", limit: int = 200
+        item_version_id: str, vault_id_param: str = "", limit: int = 200, raw: bool = False
     ) -> str:
         """
-        Get the Bill of Materials (child items) for a specific item version.
+        Get the Bill of Materials for an item version.
 
-        The BOM endpoint operates on item-versions, not master items. If you only have
-        a part number, use vault_get_bom_by_part_number for the full lookup chain.
+        Returns {assembly, row_count, rows}. Rows are depth-first with a dotted
+        "row" number ("1", "1.2") like Inventor's structured BOM; qty is per
+        parent. If you only have a part number, use vault_get_bom_by_part_number.
 
         Args:
             item_version_id: The item-version ID whose BOM you want.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of BOM rows to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_bom(
             vault_id=_resolved_vault(vault_id_param),
             item_version_id=item_version_id,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, lambda d: slim.item_bom(d or {}, item_version_id), raw)
 
     @mcp.tool()
     async def vault_get_item_parents(
-        item_version_id: str, vault_id_param: str = "", limit: int = 100
+        item_version_id: str, vault_id_param: str = "", limit: int = 100, raw: bool = False
     ) -> str:
         """
-        Get parent items (where-used) for an item version.
+        Where-used for an item version: the assemblies that use it directly
+        (with quantity), plus the higher-level assemblies above those.
 
         Args:
             item_version_id: The item-version ID.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of parents to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_parents(
             vault_id=_resolved_vault(vault_id_param),
             item_version_id=item_version_id,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, lambda d: slim.item_parents(d or {}, item_version_id), raw)
 
     @mcp.tool()
     async def vault_get_item_associated_files(
-        item_version_id: str, vault_id_param: str = "", limit: int = 100
+        item_version_id: str, vault_id_param: str = "", limit: int = 100, raw: bool = False
     ) -> str:
         """
-        Get files associated with a specific item version (e.g. CAD files linked to the item).
+        Get the files linked to an item version (e.g. its primary .iam/.ipt
+        and drawings), with the association type.
 
         Args:
             item_version_id: The item-version ID.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of associated files to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         result = await api.get_item_associated_files(
             vault_id=_resolved_vault(vault_id_param),
             item_version_id=item_version_id,
             limit=limit,
         )
-        return _fmt(result)
+        return _view(result, slim.associated_files, raw)
+
+    @mcp.tool()
+    async def vault_list_change_orders(
+        open_only: bool = True, vault_id_param: str = "", limit: int = 100, raw: bool = False
+    ) -> str:
+        """
+        List change orders (ECOs): number, title, state, due date, change_order_id.
+
+        Args:
+            open_only: Only open change orders (default True).
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            limit: Maximum number of change orders to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
+        """
+        result = await api.list_change_orders(
+            vault_id=_resolved_vault(vault_id_param), open_only=open_only, limit=limit
+        )
+        return _view(result, slim.collection, raw)
+
+    @mcp.tool()
+    async def vault_get_change_order(
+        change_order_id: str, vault_id_param: str = "", raw: bool = False
+    ) -> str:
+        """
+        Get one change order plus the items and files attached to it.
+
+        Args:
+            change_order_id: The change order ID (from vault_list_change_orders
+                or vault_get_item_change_orders).
+            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
+            raw: Return the unprocessed Vault response instead of the compact view.
+        """
+        vault = _resolved_vault(vault_id_param)
+        co = await api.get_change_order(vault_id=vault, change_order_id=change_order_id)
+        if co.get("error"):
+            return _fmt(co)
+        entities = await api.get_change_order_entities(vault_id=vault, change_order_id=change_order_id)
+        if raw:
+            return _fmt({"change_order": co, "associated_entities": entities})
+        out: Dict[str, Any] = {"change_order": slim.change_order(co.get("data") or {}, with_properties=True)}
+        if entities.get("error"):
+            out["associated_entities_error"] = entities
+        else:
+            out["associated"] = slim.collection(entities.get("data"))
+        return json.dumps(out, ensure_ascii=False, default=str)
+
+    def _best_match(records: List[Dict[str, Any]], part_number: str, key) -> Tuple[Dict[str, Any], List[str]]:
+        """Prefer an exact part-number match over Vault's keyword ranking."""
+        notes: List[str] = []
+        target = part_number.strip().lower()
+        exact = [r for r in records if key(r).strip().lower() == target]
+        if exact:
+            chosen = exact[0]
+        else:
+            chosen = records[0]
+            notes.append(f"No exact match for '{part_number}'; using closest result '{key(chosen)}'.")
+        if len(records) > 1 and not exact:
+            others = ", ".join(key(r) for r in records[1:6])
+            notes.append(f"{len(records)} matches; others: {others}.")
+        return chosen, notes
+
+    async def _resolve_item(vault: str, part_number: str) -> Dict[str, Any]:
+        """Find the item for a part number and its latest item-version ID.
+
+        Returns {master, item_version_id, item_version, notes} or {error: <payload>}.
+        """
+        search = await api.search_items(vault_id=vault, query=part_number, limit=10)
+        if search["error"]:
+            return {"error": {"step": "search_items", "result": search}}
+        items = _extract_collection(search.get("data"))
+        if not items:
+            return {"error": {"step": "search_items", "message": f"No items found matching '{part_number}'."}}
+        master, notes = _best_match(items, part_number, lambda r: str((r.get("itemVersion") or {}).get("number") or ""))
+        item_id = _extract_id(master)
+        if not item_id:
+            return {"error": {"step": "extract_item_id", "message": "Could not determine the master item ID.", "matched_item": master}}
+
+        item_version_id, item_version = _pick_latest_version(master)
+        if not item_version_id and isinstance(master.get("itemVersion"), dict):
+            item_version = master["itemVersion"]
+            item_version_id = _extract_id(item_version)
+        if not item_version_id:
+            history = await api.get_item_version_history(vault_id=vault, item_id=item_id, limit=50)
+            if history["error"]:
+                return {"error": {"step": "get_item_version_history", "result": history}}
+            item_version = _latest_by_revision(_extract_collection(history.get("data")))
+            item_version_id = _extract_id(item_version)
+        if not item_version_id:
+            return {"error": {"step": "resolve_item_version_id", "message": "Could not determine an item-version ID.", "matched_item": master}}
+        return {"master": master, "item_version_id": item_version_id, "item_version": item_version, "notes": notes}
 
     @mcp.tool()
     async def vault_get_cad_bom_by_part_number(
-        part_number: str, vault_id_param: str = "", limit: int = 200
+        part_number: str, vault_id_param: str = "", limit: int = 200, raw: bool = False
     ) -> str:
         """
-        Convenience tool: look up a CAD assembly file by part number / file name,
-        resolve its latest file version, and return the CAD Bill of Materials
-        (child file associations) in a single call.
+        CAD BOM in one call: find the CAD file by part number / file name and
+        list the files it references (one level deep), with association type.
 
-        The CAD BOM reflects the assembly structure as modeled in CAD (.iam → child
-        files), which may differ from the engineering item BOM. Returns one level deep.
-        Use vault_get_bom_by_part_number for the engineering item BOM instead.
-
-        Returns a JSON object containing:
-          - matched_file: the file that was found
-          - file_version_id: the file-version used for the BOM lookup
-          - bom: the CAD BOM response (child file associations)
-          - notes: any warnings (e.g. multiple matches)
+        This is the assembly structure as modeled in CAD (.iam -> child files),
+        which can differ from the engineering item BOM. For the item BOM use
+        vault_get_bom_by_part_number.
 
         Args:
-            part_number: Exact or partial part number / file name to search for.
+            part_number: CD number or file name, e.g. "CD-001621" or "CD-001621.iam".
+                An exact file-name match wins; assemblies beat parts and drawings.
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of BOM rows to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         vault = _resolved_vault(vault_id_param)
-        notes: list[str] = []
-
         search = await api.search_files(
-            vault_id=vault,
-            query=part_number,
-            search_sub_folders=True,
-            latest_only=True,
-            limit=10,
+            vault_id=vault, query=part_number, search_sub_folders=True, latest_only=True, limit=20
         )
         if search["error"]:
             return _fmt({"step": "search_files", "result": search})
-
         files = _extract_collection(search.get("data"))
         if not files:
-            return _fmt({
-                "step": "search_files",
-                "message": f"No files found matching '{part_number}'.",
-                "result": search,
-            })
+            return _fmt({"step": "search_files", "message": f"No files found matching '{part_number}'."})
 
-        if len(files) > 1:
-            notes.append(
-                f"{len(files)} files matched '{part_number}'; using the first. "
-                "Refine the part number to disambiguate."
-            )
+        target = part_number.strip().lower()
+        rank = {".iam": 0, ".ipt": 1, ".idw": 2, ".dwg": 3}
 
-        matched = files[0]
-        file_version_id, embedded = _pick_latest_version(matched)
+        def score(f: Dict[str, Any]):
+            name = str(f.get("name") or "").lower()
+            stem, ext = (name.rsplit(".", 1)[0], "." + name.rsplit(".", 1)[1]) if "." in name else (name, "")
+            exact = name == target or stem == target
+            return (0 if exact else 1, rank.get(ext, 9))
+
+        matched = sorted(files, key=score)[0]
+        notes: List[str] = []
+        if score(matched)[0]:
+            notes.append(f"No exact file-name match for '{part_number}'; using '{matched.get('name')}'.")
+        file_version_id, _ = _pick_latest_version(matched)
+        file_version_id = file_version_id or _extract_id(matched)
         if not file_version_id:
-            file_version_id = _extract_id(matched)
-        if not file_version_id:
-            return _fmt({
-                "step": "extract_file_version_id",
-                "message": "Could not determine the file-version ID from the search response.",
-                "matched_file": matched,
-            })
+            return _fmt({"step": "extract_file_version_id", "message": "Could not determine the file-version ID.", "matched_file": matched})
 
-        bom = await api.get_file_uses(
-            vault_id=vault, file_version_id=file_version_id, limit=limit
-        )
-
-        return _fmt({
-            "matched_file": matched,
-            "file_version_id": file_version_id,
-            "bom": bom,
-            "notes": notes,
-        })
+        bom = await api.get_file_uses(vault_id=vault, file_version_id=file_version_id, limit=limit)
+        if raw or bom.get("error"):
+            return _fmt({"matched_file": matched, "file_version_id": file_version_id, "bom": bom, "notes": notes})
+        uses = slim.file_uses(bom.get("data") or {})
+        out = {"file": slim.file_version(matched), "children": uses["children"]}
+        if notes:
+            out["notes"] = notes
+        return json.dumps(out, ensure_ascii=False, default=str)
 
     @mcp.tool()
     async def vault_get_bom_by_part_number(
-        part_number: str, vault_id_param: str = "", limit: int = 200
+        part_number: str, vault_id_param: str = "", limit: int = 200, raw: bool = False
     ) -> str:
         """
-        Convenience tool: look up an item by part number, resolve its latest version,
-        and return the Bill of Materials in a single call.
+        Item BOM in one call: find the item by part number, take its latest
+        version, and return its Bill of Materials.
 
-        Returns a JSON object containing:
-          - matched_item: the master item that was found
-          - item_version: the item-version used for the BOM lookup
-          - bom: the BOM response (child items)
-          - notes: any warnings (e.g. multiple matches, no version found)
+        Returns {assembly, row_count, rows, notes}. Rows are depth-first with a
+        dotted "row" number ("1", "1.2"), qty per parent, plus number, title,
+        description, revision, state and item_version_id. An exact part-number
+        match always wins over Vault's keyword ranking.
 
         Args:
-            part_number: The exact or partial part number to search for.
+            part_number: The part number, e.g. "SF-001942".
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
             limit: Maximum number of BOM rows to return.
+            raw: Return the unprocessed Vault response instead of the compact view.
         """
         vault = _resolved_vault(vault_id_param)
-        notes: list[str] = []
-
-        search = await api.search_items(vault_id=vault, query=part_number, limit=10)
-        if search["error"]:
-            return _fmt({"step": "search_items", "result": search})
-
-        items = _extract_collection(search.get("data"))
-        if not items:
-            return _fmt({
-                "step": "search_items",
-                "message": f"No items found matching '{part_number}'.",
-                "result": search,
-            })
-
-        if len(items) > 1:
-            notes.append(
-                f"{len(items)} items matched '{part_number}'; using the first. "
-                "Refine the part number to disambiguate."
-            )
-
-        master = items[0]
-        item_id = _extract_id(master)
-        if not item_id:
-            return _fmt({
-                "step": "extract_item_id",
-                "message": "Could not determine the master item ID from the search response.",
-                "matched_item": master,
-            })
-
-        item_version_id, item_version = _pick_latest_version(master)
-
-        if not item_version_id:
-            history = await api.get_item_version_history(
-                vault_id=vault, item_id=item_id, limit=50
-            )
-            if history["error"]:
-                return _fmt({
-                    "step": "get_item_version_history",
-                    "matched_item": master,
-                    "result": history,
-                })
-            versions = _extract_collection(history.get("data"))
-            if not versions:
-                return _fmt({
-                    "step": "get_item_version_history",
-                    "message": "Item has no versions.",
-                    "matched_item": master,
-                })
-            item_version = _latest_by_revision(versions)
-            item_version_id = _extract_id(item_version)
-
-        if not item_version_id:
-            return _fmt({
-                "step": "resolve_item_version_id",
-                "message": "Could not determine an item-version ID.",
-                "matched_item": master,
-                "item_version_candidate": item_version,
-            })
-
+        found = await _resolve_item(vault, part_number)
+        if "error" in found:
+            return _fmt(found["error"])
         bom = await api.get_item_bom(
-            vault_id=vault, item_version_id=item_version_id, limit=limit
+            vault_id=vault, item_version_id=found["item_version_id"], limit=limit
         )
-
-        return _fmt({
-            "matched_item": master,
-            "item_version": item_version,
-            "item_version_id": item_version_id,
-            "bom": bom,
-            "notes": notes,
-        })
+        if raw or bom.get("error"):
+            return _fmt({
+                "matched_item": found["master"],
+                "item_version": found["item_version"],
+                "item_version_id": found["item_version_id"],
+                "bom": bom,
+                "notes": found["notes"],
+            })
+        out = slim.item_bom(bom.get("data") or {}, found["item_version_id"])
+        if found["notes"]:
+            out["notes"] = found["notes"]
+        return json.dumps(out, ensure_ascii=False, default=str)
 
     # ------------------------------------------------------------------
     # Lifecycle & Categories
@@ -826,18 +1050,9 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             vault_id_param: Vault ID. Leave empty to use the vault from config.json.
         """
         result = await api.get_lifecycle_definitions(_resolved_vault(vault_id_param))
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
-    @mcp.tool()
-    async def vault_list_category_definitions(vault_id_param: str = "") -> str:
-        """
-        List all category definitions configured in the vault.
 
-        Args:
-            vault_id_param: Vault ID. Leave empty to use the vault from config.json.
-        """
-        result = await api.get_category_definitions(_resolved_vault(vault_id_param))
-        return _fmt(result)
 
     # ------------------------------------------------------------------
     # Jobs (Vault Job Queue)
@@ -1084,7 +1299,7 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         result = await api.get_job_by_id(
             vault_id=_resolved_vault(vault_id_param), job_id=job_id
         )
-        return _fmt(result)
+        return _view(result, slim.strip_noise)
 
     # ------------------------------------------------------------------
     # PDF watermarking
@@ -1240,63 +1455,11 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             BOM lookup itself failed.
         """
         vault = _resolved_vault(vault_id_param)
-        notes: list[str] = []
-
-        search = await api.search_items(vault_id=vault, query=part_number, limit=10)
-        if search["error"]:
-            return _fmt({"step": "search_items", "result": search})
-
-        items = _extract_collection(search.get("data"))
-        if not items:
-            return _fmt({
-                "step": "search_items",
-                "message": f"No items found matching '{part_number}'.",
-                "result": search,
-            })
-
-        if len(items) > 1:
-            notes.append(
-                f"{len(items)} items matched '{part_number}'; using the first. "
-                "Refine the part number to disambiguate."
-            )
-
-        master = items[0]
-        item_id = _extract_id(master)
-        if not item_id:
-            return _fmt({
-                "step": "extract_item_id",
-                "message": "Could not determine the master item ID from the search response.",
-                "matched_item": master,
-            })
-
-        item_version_id, item_version = _pick_latest_version(master)
-        if not item_version_id:
-            history = await api.get_item_version_history(
-                vault_id=vault, item_id=item_id, limit=50
-            )
-            if history["error"]:
-                return _fmt({
-                    "step": "get_item_version_history",
-                    "matched_item": master,
-                    "result": history,
-                })
-            versions = _extract_collection(history.get("data"))
-            if not versions:
-                return _fmt({
-                    "step": "get_item_version_history",
-                    "message": "Item has no versions.",
-                    "matched_item": master,
-                })
-            item_version = _latest_by_revision(versions)
-            item_version_id = _extract_id(item_version)
-
-        if not item_version_id:
-            return _fmt({
-                "step": "resolve_item_version_id",
-                "message": "Could not determine an item-version ID.",
-                "matched_item": master,
-                "item_version_candidate": item_version,
-            })
+        found = await _resolve_item(vault, part_number)
+        if "error" in found:
+            return _fmt(found["error"])
+        notes = found["notes"]
+        item_version_id = found["item_version_id"]
 
         bom = await api.get_item_bom(
             vault_id=vault, item_version_id=item_version_id, limit=limit
@@ -1304,23 +1467,25 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         if bom["error"]:
             return _fmt({"step": "get_item_bom", "result": bom})
 
-        bom_rows = _extract_collection(bom.get("data"))
+        # Slim rows carry the quantity from the BOM links; the raw itemVersions
+        # list has none and its lower-case keys never matched VAULT_FIELD_MAP.
+        bom_rows = slim.item_bom(bom.get("data") or {}, item_version_id)["rows"]
         if not bom_rows:
             return _fmt({
                 "step": "get_item_bom",
                 "message": "BOM lookup succeeded but returned no rows.",
-                "matched_item": master,
+                "matched_item": slim.item(found["master"]),
                 "item_version_id": item_version_id,
             })
 
         result = bom_purchasing.generate_from_vault_bom(
-            vault_bom_response={"bom": bom_rows},
+            vault_bom_response={"rows": bom_rows},
             assembly_number=part_number,
             output_dir=output_dir,
         )
         if notes:
             result.setdefault("warnings", []).extend(notes)
-        result["matched_item"] = master
+        result["matched_item"] = slim.item(found["master"])
         result["item_version_id"] = item_version_id
         return _fmt(result)
 
@@ -1341,8 +1506,9 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         for you in a single call.
 
         Args:
-            vault_bom_json: The full JSON string returned by
-                vault_get_bom_by_part_number (must contain a 'bom' key).
+            vault_bom_json: The JSON string returned by
+                vault_get_bom_by_part_number (its 'rows' key, or the 'bom'
+                key of a raw=True response).
             assembly_number: Assembly or job number label (e.g. "MFG-00037").
             output_dir: Folder for the .xlsx. Defaults to the user's Desktop.
 

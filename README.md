@@ -215,6 +215,12 @@ The single visible-to-the-user 401 entry above is harmless — the retry on the 
 
 ## Available Tools
 
+Read tools return a compact view: the fields a person reads (number, title,
+state, revision, quantity) plus the ids the next call needs. Property values
+come back as `{name: value}`. Pass `raw=true` to any of them for the untouched
+Vault response. For scale: a three-row BOM is about 1,300 characters, against
+about 120,000 raw.
+
 | Tool | Description |
 |---|---|
 | **Server / auth** | |
@@ -227,30 +233,33 @@ The single visible-to-the-user 401 entry above is harmless — the retry on the 
 | `vault_get_folder_contents` | List files and sub-folders in a folder |
 | `vault_get_folder` | Get metadata for a specific folder |
 | **Files** | |
-| `vault_get_file` | Get metadata for a specific file |
+| `vault_get_file` | Latest version of a file, with its properties |
 | `vault_get_file_versions` | List all versions of a file |
-| `vault_get_file_download_url` | Get the download URL for a file |
+| `vault_get_file_download_url` | Signed, time-limited download link for a file version |
+| `vault_get_file_where_used` | CAD where-used: assemblies and drawings that reference a file |
+| `vault_get_file_items` | The engineering item(s) a CAD file is linked to |
 | `vault_search_files` | Keyword search across vault files |
-| `vault_advanced_search` | Structured search using property criteria |
+| `vault_advanced_search` | Property search by name, operator and value, across files, items, folders, change orders |
 | **Users / groups** | |
 | `vault_list_groups` | List all groups in the vault |
 | `vault_get_group` | Get details for a specific group |
 | `vault_list_users` | List all users in the vault |
 | `vault_get_user` | Get details for a specific user |
-| **Properties / categories / lifecycles** | |
+| **Properties / lifecycles** | |
 | `vault_list_property_definitions` | List user-defined property definitions |
 | `vault_get_property_definition` | Get a specific property definition |
 | `vault_list_lifecycle_definitions` | List lifecycle definitions |
-| `vault_list_category_definitions` | List category definitions |
 | **Items (engineering BOM)** | |
 | `vault_search_items` | Search for engineering/BOM items |
 | `vault_get_item` | Get details for a specific engineering item |
 | `vault_get_item_version_history` | List all versions of a master item |
 | `vault_get_item_change_orders` | List change orders linked to an item |
+| `vault_list_change_orders` | List change orders (open only by default) |
+| `vault_get_change_order` | One change order plus the items and files on it |
 | `vault_list_item_versions` | List item versions, optionally filtered by query |
 | `vault_get_item_version` | Get details for a specific item version |
-| `vault_get_item_bom` | Get the Bill of Materials for an item version |
-| `vault_get_item_parents` | Get parent items (where-used) for an item version |
+| `vault_get_item_bom` | Multi-level BOM for an item version, with dotted row numbers and quantities |
+| `vault_get_item_parents` | Where-used: direct parents with quantity, plus higher assemblies |
 | `vault_get_item_associated_files` | Get files associated with an item version |
 | `vault_get_bom_by_part_number` | **One-call lookup: part number → item → BOM** |
 | `vault_get_cad_bom_by_part_number` | **One-call lookup: part number → CAD assembly BOM** |
