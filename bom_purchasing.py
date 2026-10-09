@@ -190,6 +190,7 @@ VAULT_FIELD_MAP: dict[str, str] = {
     "revision": "Revision",
     "state": "State",
     "description": "Description (Item,CO)",
+    "source": "Source",
 }
 
 

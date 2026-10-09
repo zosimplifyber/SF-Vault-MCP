@@ -227,11 +227,18 @@ def item_bom(data: Dict[str, Any], root_item_version_id: str) -> Dict[str, Any]:
             child_id = str(link.get("childItemId"))
             child = versions.get(child_id, {"id": child_id})
             row_no = f"{prefix}{i}"
+            props = properties(child)
             rows.append(_compact({
                 "row": row_no,
                 "qty": _qty(link),
                 "units": link.get("units"),
                 **item_version(child),
+                # Source (Buy/Make/Other) decides which rows the purchasing
+                # sheet treats as bought; vendor fields save a lookup.
+                "source": props.get("Source"),
+                "vendor": props.get("Vendor"),
+                "vendor_number": props.get("Vendor Number"),
+                "material": props.get("Material"),
             }))
             if child_id not in seen:
                 walk(child_id, row_no + ".", seen | {child_id})
