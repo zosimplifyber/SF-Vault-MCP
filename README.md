@@ -286,9 +286,11 @@ about 120,000 raw.
 | **Files / utilities** | |
 | `vault_watermark_pdfs_in_folder` | Download every PDF in a Vault folder, watermark it, save locally |
 | **McMaster intake** | |
-| `vault_mcmaster_intake_preview` | Preview a new replacement part from a McMaster download (number, folder, properties) |
+| `vault_mcmaster_intake_preview` | Preview a new part from a McMaster download (number, folder, properties) |
 | `vault_mcmaster_intake_commit` | Write the approved preview to Vault as a Part - Purchased with two attachments |
 | `vault_get_part_specs` | Spec card for a CD part or an assembly, built from the attached specs |
+
+The `wrike_*` MCP tools (search/create/update tasks, folders, comments, timelogs, metadata) live in [SF-WrikeConnector](https://github.com/zosimplifyber/SF-WrikeConnector) — see that repo's README for the tool list. This project no longer talks to Wrike at all.
 
 ## McMaster intake
 
@@ -296,10 +298,10 @@ about 120,000 raw.
 2. Ask Claude for the part (for example, "intake the DIN 6796 M8 washer from McMaster").
 3. Review the preview and approve it.
 4. Close Vault Explorer before the commit. The commit uses the Vault SDK, which needs the single client licence seat.
+5. Have Inventor running and signed out of its Vault add-in before the commit. The commit attaches to that Inventor to convert the STEP; it never starts one.
+6. In Inventor, set the STEP import option to Convert Model (not Reference Model). A STEP that opens as a reference model is rejected.
 
-Before first use, run `py -3.14 scripts/probes/probe_intake_sdk.py --write` once. It prints the numbering scheme name. Put that name in `config.json` under `intake.numbering_scheme`.
-
-The `wrike_*` MCP tools (search/create/update tasks, folders, comments, timelogs, metadata) live in [SF-WrikeConnector](https://github.com/zosimplifyber/SF-WrikeConnector) — see that repo's README for the tool list. This project no longer talks to Wrike at all.
+Before first use, run `py -3.14 scripts/probes/probe_intake_sdk.py --write` once. To also test an Inventor part, save a scratch .ipt with custom iProperty "Vendor Number" = "PROBE-0000" and add `--ipt part.ipt`. The probe prints the numbering scheme name. Put that name in `config.json` under `intake.numbering_scheme`.
 
 ## Known issues / caveats
 
