@@ -17,6 +17,9 @@
 #   CheckoutFile                    -> reserve a file (no download)
 #   UndoCheckoutFile                -> release a file's checkout
 #   UpdateFileProperties            -> set Vault properties on files
+#   GetCadBom                       -> Inventor's stored multi-level BOM
+#
+# Read operations sign in read-only and take no license seat.
 #
 # Examples:
 #   pwsh -File vault_sdk.ps1 -Operation GetLifecycleStates
@@ -158,7 +161,7 @@ function Find-VaultClientFormsDll {
     return $candidates
 }
 
-function Connect-Vault {
+function Connect-Vault([switch]$ReadOnly) {
     if (-not (Test-Path $configPath)) { Die ('config.json not found at ' + $configPath) }
     $cfg = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $server = $cfg.vault.servername
@@ -200,6 +203,17 @@ function Connect-Vault {
     }
     $afType = [Autodesk.DataManagement.Client.Framework.Vault.Currency.Connections.AuthenticationFlags]
     $cm = [Autodesk.DataManagement.Client.Framework.Vault.Library]::ConnectionManager
+    # Read-only sessions take no license seat, so reads keep working while
+    # Inventor / Vault Explorer hold it (or when no seat can be had at all).
+    if ($ReadOnly) {
+        $r = $cm.LogIn($serverHost, $db, $user, $pass, $afType::ReadOnly, $null)
+        if ($r -and $r.Success) { return $r.Connection.WebServiceManager }
+        $msgs = @()
+        if ($r -and $r.ErrorMessages) {
+            foreach ($kv in $r.ErrorMessages.GetEnumerator()) { $msgs += ('{0}: {1}' -f $kv.Key, $kv.Value) }
+        }
+        Die ('Read-only LogIn failed: ' + ($msgs -join ' | '))
+    }
     $combos = @(
         @{ name = 'Standard';                            flags = $afType::Standard },
         @{ name = 'Standard|ServerLicense';              flags = ($afType::Standard -bor $afType::ServerLicense) },
@@ -633,13 +647,94 @@ function Invoke-UpdateFileProperties($mgr) {
     return @{ updated = $out.Count; files = $out }
 }
 
+function Invoke-GetCadBom($mgr) {
+    # Reads the BOM Inventor stored in Vault when the assembly was checked in:
+    # every level, per-parent quantities and BOM structure, no items needed.
+    # Part properties come from each component file's own stored BOM (its
+    # component 0 carries that file's iProperties).
+    $masterId = Get-Arg 'masterId'
+    if ($null -eq $masterId) { Die 'GetCadBom requires masterId' }
+    $file = $mgr.DocumentService.GetLatestFileByMasterId([int64]$masterId)
+    $root = [ordered]@{
+        name          = [string]$file.Name
+        fileVersionId = [int64]$file.Id
+        masterId      = [int64]$file.MasterId
+        checkedOut    = [bool]$file.CheckedOut
+        checkedIn     = [string]$file.CkInDate.ToString('o')
+    }
+    $bom = $mgr.DocumentService.GetBOMByFileId([int64]$file.Id)
+    if (-not $bom -or -not $bom.CompArray) { return [ordered]@{ found = $false; root = $root } }
+
+    $want = @('Part Number','Title','Description','Source','Vendor','Material',
+              'Stock Number','Revision','Cost','Content Center File')
+    function Get-Attrs($b, [int64]$compId) {
+        $names = @{}
+        foreach ($p in $b.PropArray) { $names[[int64]$p.Id] = [string]$p.DispName }
+        $out = [ordered]@{}
+        foreach ($a in $b.CompAttrArray) {
+            if ([int64]$a.CompId -ne $compId) { continue }
+            $n = $names[[int64]$a.PropId]
+            $v = [string]$a.Val
+            if ($n -and ($want -contains $n) -and $v -and -not $v.StartsWith('01/01/1601')) { $out[$n] = $v }
+        }
+        return $out
+    }
+
+    $xrefs = @($bom.CompArray | Where-Object { $_.XRefTyp -eq 'External' -and $_.XRefId -gt 0 } |
+               ForEach-Object { [int64]$_.XRefId } | Select-Object -Unique)
+    $files = @{}
+    $props = @{}
+    if ($xrefs.Count -gt 0) {
+        foreach ($f in $mgr.DocumentService.GetFilesByIds([int64[]]$xrefs)) { $files[[int64]$f.Id] = $f }
+        foreach ($x in $xrefs) {
+            try {
+                $cb = $mgr.DocumentService.GetBOMByFileId($x)
+                $props[$x] = if ($cb) { Get-Attrs $cb 0 } else { [ordered]@{} }
+            } catch { $props[$x] = [ordered]@{} }
+        }
+    }
+
+    $comps = @()
+    foreach ($c in $bom.CompArray) {
+        $ext = ($c.XRefTyp -eq 'External' -and $c.XRefId -gt 0)
+        $f = if ($ext) { $files[[int64]$c.XRefId] } else { $null }
+        $comps += [ordered]@{
+            id            = [int64]$c.Id
+            name          = if ($f) { [string]$f.Name } else { [string]$c.Name }
+            fileVersionId = if ($ext) { [int64]$c.XRefId } else { $null }
+            fileMasterId  = if ($f) { [int64]$f.MasterId } else { $null }
+            type          = [string]$c.CompTyp
+            bomStructure  = [string]$c.BOMStruct
+            uom           = [string]$c.BaseUOM
+            props         = if ($ext) { $props[[int64]$c.XRefId] } else { Get-Attrs $bom ([int64]$c.Id) }
+        }
+    }
+    $insts = @()
+    foreach ($i in $bom.InstArray) {
+        # BOMStructOverde is the per-occurrence override (Default / Reference /
+        # Phantom / Purchased ...); Reference occurrences are not in the BOM.
+        $insts += [ordered]@{
+            parent    = [int64]$i.ParId
+            child     = [int64]$i.CldId
+            qty       = [double]$i.Quant
+            structure = [string]$i.BOMStructOverde
+        }
+    }
+    return [ordered]@{ found = $true; root = $root; comps = $comps; insts = $insts }
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
+# Operations that only read run on a read-only session (no license seat).
+$readOnlyOps = @('GetLifecycleStates','GetItemPropertyDefinitions','GetItemCategories',
+                 'LookupItem','LookupFile','GetCadBom')
+
 try {
-    $mgr = Connect-Vault
+    $mgr = if ($readOnlyOps -contains $Operation) { Connect-Vault -ReadOnly } else { Connect-Vault }
     $result = switch ($Operation) {
+        'GetCadBom'                  { Invoke-GetCadBom                  $mgr }
         'GetLifecycleStates'         { Invoke-GetLifecycleStates         $mgr }
         'GetItemPropertyDefinitions' { Invoke-GetItemPropertyDefinitions $mgr }
         'GetItemCategories'          { Invoke-GetItemCategories          $mgr }

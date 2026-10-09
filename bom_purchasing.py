@@ -190,6 +190,7 @@ VAULT_FIELD_MAP: dict[str, str] = {
     "revision": "Revision",
     "state": "State",
     "description": "Description (Item,CO)",
+    "source": "Source",
 }
 
 
@@ -1290,6 +1291,25 @@ def generate_from_file(
     except Exception as exc:  # noqa: BLE001
         return {"error": True, "message": f"Could not read BOM file: {exc}"}
 
+    return generate_from_dataframe(
+        raw,
+        assembly_number=assembly_number,
+        output_dir=output_dir or os.path.dirname(bom_file_path),
+        reference_path=reference_path,
+    )
+
+
+def generate_from_dataframe(
+    raw: pd.DataFrame,
+    assembly_number: str,
+    output_dir: str = "",
+    reference_path: str = "",
+) -> dict[str, Any]:
+    """Build a purchasing sheet from an Inventor-export-shaped DataFrame.
+
+    Same path as a file export (used by the CAD BOM tool, which reads the BOM
+    Inventor stored in Vault). ``output_dir`` defaults to the Desktop.
+    """
     df, err = coerce_bom_dataframe(raw)
     if err:
         return {"error": True, "message": err}
@@ -1303,7 +1323,7 @@ def generate_from_file(
     warnings.extend(_fill_state_from_vault(df))
 
     if not output_dir:
-        output_dir = os.path.dirname(bom_file_path)
+        output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, f"{assembly_number}-PurchasingExport.xlsx")
 

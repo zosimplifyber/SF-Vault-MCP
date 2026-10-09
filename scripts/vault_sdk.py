@@ -367,6 +367,16 @@ def update_item_categories(
     })
 
 
+def get_cad_bom(master_id: int | str) -> dict[str, Any]:
+    """Read the BOM Inventor stored in Vault for a file (by master ID).
+
+    Returns ``{"found", "root", "comps", "insts"}``: components with file
+    name, type, BOM structure and iProperties, and parent/child links with
+    per-parent quantities. Read-only session, so no license seat is used.
+    """
+    return _call_ps("GetCadBom", {"masterId": int(master_id)}, timeout=600)
+
+
 def checkout_file(master_id: int | str, *, comment: str = "") -> dict[str, Any]:
     """Check out the latest version of a file (by master ID) without
     downloading it. Returns the file's id, masterId, name and checkout flag."""

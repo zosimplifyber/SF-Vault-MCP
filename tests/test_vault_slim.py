@@ -100,13 +100,17 @@ def test_unknown_entities_fall_back_to_stripping_urls_and_colours():
 def test_slim_bom_rows_feed_the_purchasing_sheet():
     import bom_purchasing
 
+    child = _iv("2", "SF-2", description="pin")
+    child["properties"].append(
+        {"propertyDefinitionId": "9", "value": "Buy", "definition": {"displayName": "Source"}})
     data = {
-        "itemVersions": [_iv("1", "TOP"), _iv("2", "SF-2", description="pin")],
+        "itemVersions": [_iv("1", "TOP"), child],
         "itemBomLinks": [_link("1", "2", 4)],
     }
     payload = slim.item_bom(data, "1")
+    assert payload["rows"][0]["source"] == "Buy" and payload["rows"][0]["material"] == "Steel"
     df = bom_purchasing.vault_bom_to_dataframe(bom_purchasing.extract_bom_list(payload))
     row = df.iloc[0]
-    assert (row["Number"], row["Row Order"], row["Item Qty"], row["Description (Item,CO)"]) == (
-        "SF-2", "1", 4, "pin",
+    assert (row["Number"], row["Row Order"], row["Item Qty"], row["Description (Item,CO)"], row["Source"]) == (
+        "SF-2", "1", 4, "pin", "Buy",
     )
