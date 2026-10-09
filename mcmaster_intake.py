@@ -241,6 +241,12 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
 
     cfg = _intake_config(config)
     store = store or PreviewStore()
+    # pn -> CD number, or "in progress"; kept for the life of the process
+    in_flight_or_done: dict[str, str] = {}
+
+    def already_msg(pn: str) -> str:
+        return (f"McMaster {pn} was already committed in this session as {in_flight_or_done[pn]}; "
+                "check Vault before trying again.")
 
     def _inventor():
         if inventor is not None:
@@ -274,6 +280,10 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         vault = resolved_vault(vault_id_param)
         try:
             pn = normalize_pn(mcmaster_pn)
+            if pn in in_flight_or_done:
+                return err(already_msg(pn))
+            if not description or not description.strip():
+                raise IntakeError("description is required")
             existing = await find_by_vendor_number(api, vault, pn)
             if existing:
                 return _dump({"duplicate": True, "existing": existing,
@@ -329,12 +339,17 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         p = store.take(token)
         if p is None:
             return err("Preview token is unknown, already used, or expired. Run the preview again.")
+        if p["pn"] in in_flight_or_done:
+            return err(already_msg(p["pn"]))
+        in_flight_or_done[p["pn"]] = "in progress"
         steps: list[dict[str, Any]] = []
         written: list[dict[str, Any]] = []
         state: dict[str, Any] = {"cd": None, "uncertain": []}
         sdk = _sdk()
 
         def failed(step: str, exc: Exception) -> str:
+            if step in ("inventor check", "recheck"):
+                in_flight_or_done.pop(p["pn"], None)   # nothing written
             out = {"applied": False, "failed_step": step, "error": str(exc), "steps": steps,
                    "already_in_vault": written, "uncertain": list(state["uncertain"])}
             if state["cd"]:
@@ -386,6 +401,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             if not re.match(r"^CD-\d{6}$", cd):
                 raise IntakeError(f"Vault generated {cd!r}, which is not a CD-###### number")
             state["cd"] = cd
+            in_flight_or_done[p["pn"]] = cd
             clash = await _files_named(api, p["vault"], cd)
             if clash:
                 raise IntakeError(

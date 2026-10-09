@@ -360,3 +360,58 @@ def test_inventor_check_failure_stops_before_number(env):
 def test_inventor_check_is_first_step(env):
     out = commit(env, preview(env)["token"])
     assert [s["step"] for s in out["steps"]][:3] == ["inventor check", "recheck", "number"]
+
+
+def test_preview_refuses_pn_already_committed_this_session(env):
+    out = commit(env, preview(env)["token"])
+    assert out["applied"] is True
+    (env.dl / "90510A313.STEP").write_bytes(b"s")
+    (env.dl / "90510A313x.pdf").write_bytes(b"p")
+    again = preview(env)
+    assert again["error"] is True
+    assert "already committed in this session as CD-001900" in again["message"]
+
+
+def test_preview_refuses_pn_after_failed_commit_past_number(env):
+    token = preview(env)["token"]
+    env.sdk.fail_on = "update_file_categories"
+    assert commit(env, token)["applied"] is False
+    again = preview(env)
+    assert again["error"] is True and "CD-001900" in again["message"]
+
+
+def test_second_token_for_same_pn_refused_at_commit(env):
+    t1 = preview(env)["token"]
+    t2 = preview(env)["token"]
+    assert commit(env, t1)["applied"] is True
+    out = commit(env, t2)
+    assert out["error"] is True and "already committed" in out["message"]
+    assert sum(1 for c in env.sdk.calls if c[0] == "generate_file_number") == 1
+
+
+def test_pn_is_in_progress_marker_blocks_preview(env):
+    t1 = preview(env)["token"]
+    env.inv.not_running = None
+    seen = {}
+    orig = env.inv.check_inventor_running
+
+    def spy():
+        seen["msg"] = preview(env)
+    env.inv.check_inventor_running = spy
+    commit(env, t1)
+    assert "in progress" in seen["msg"]["message"]
+
+
+def test_pn_released_when_commit_fails_at_inventor_check(env):
+    token = preview(env)["token"]
+    env.inv.not_running = "Inventor is not running."
+    assert commit(env, token)["failed_step"] == "inventor check"
+    env.inv.not_running = None
+    assert preview(env)["preview"] is True
+
+
+def test_pn_released_when_commit_fails_at_recheck(env):
+    token = preview(env)["token"]
+    (env.dl / "90510A313.pdf").write_bytes(b"changed")
+    assert commit(env, token)["failed_step"] == "recheck"
+    assert preview(env)["preview"] is True
