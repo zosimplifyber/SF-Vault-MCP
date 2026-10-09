@@ -2138,6 +2138,10 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
     import vault_cad_tools
     vault_cad_tools.register(mcp, api, _resolved_vault)
 
+    # McMaster intake (preview/commit) and spec cards for parts and assemblies.
+    import mcmaster_intake
+    mcmaster_intake.register(mcp, api, _resolved_vault)
+
     # McMaster -> Microsoft List price updates (additive; safe no-op if absent).
     try:
         import supplier_pricing.mcp_tools as _supplier_pricing_tools

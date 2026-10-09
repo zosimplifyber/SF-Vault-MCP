@@ -285,6 +285,19 @@ about 120,000 raw.
 | `vault_get_job` | Get a job's status and metadata by ID |
 | **Files / utilities** | |
 | `vault_watermark_pdfs_in_folder` | Download every PDF in a Vault folder, watermark it, save locally |
+| **McMaster intake** | |
+| `vault_mcmaster_intake_preview` | Preview a new replacement part from a McMaster download (number, folder, properties) |
+| `vault_mcmaster_intake_commit` | Write the approved preview to Vault as a Part - Purchased with two attachments |
+| `vault_get_part_specs` | Spec card for a CD part or an assembly, built from the attached specs |
+
+## McMaster intake
+
+1. Download the STEP and PDF for the part from McMaster into your Downloads folder.
+2. Ask Claude for the part (for example, "intake the DIN 6796 M8 washer from McMaster").
+3. Review the preview and approve it.
+4. Close Vault Explorer before the commit. The commit uses the Vault SDK, which needs the single client licence seat.
+
+Before first use, run `py -3.14 scripts/probes/probe_intake_sdk.py --write` once. It prints the numbering scheme name. Put that name in `config.json` under `intake.numbering_scheme`.
 
 The `wrike_*` MCP tools (search/create/update tasks, folders, comments, timelogs, metadata) live in [SF-WrikeConnector](https://github.com/zosimplifyber/SF-WrikeConnector) — see that repo's README for the tool list. This project no longer talks to Wrike at all.
 
