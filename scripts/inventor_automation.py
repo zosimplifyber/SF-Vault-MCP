@@ -182,6 +182,58 @@ def save_document(doc) -> None:
         raise InventorAutomationError(f"Document.Save failed: {exc}") from exc
 
 
+PART_DOCUMENT = 12290  # Inventor DocumentTypeEnum.kPartDocumentObject
+_DESIGN_TRACKING = "Design Tracking Properties"
+_USER_DEFINED = "Inventor User Defined Properties"
+
+
+def set_iproperties(doc, design: dict[str, str], custom: dict[str, str]) -> None:
+    """Write Design Tracking iProperties and create-or-update custom ones."""
+    dt = doc.PropertySets.Item(_DESIGN_TRACKING)
+    for name, value in design.items():
+        dt.Item(name).Value = value
+    ud = doc.PropertySets.Item(_USER_DEFINED)
+    for name, value in custom.items():
+        try:
+            ud.Item(name).Value = value
+        except Exception:  # noqa: BLE001
+            ud.Add(value, name)
+
+
+def import_step_as_part(step_path: str | Path, out_ipt: str | Path, iproperties: dict) -> Path:
+    """Open a STEP in Inventor as a part, set iProperties, save as out_ipt.
+
+    Safe on a worker thread (initialises COM itself). Refuses to overwrite an
+    existing .ipt and rejects STEPs that open as assemblies.
+
+    ``visible=True`` on purpose: ``get_inventor_app`` sets ``app.Visible``, and
+    the running Inventor must not disappear.
+    """
+    step, out = Path(step_path), Path(out_ipt)
+    if not step.is_file():
+        raise InventorAutomationError(f"STEP file not found: {step}")
+    if out.exists():
+        raise InventorAutomationError(f"Refusing to overwrite existing file {out}")
+    pythoncom, _ = _import_win32()
+    pythoncom.CoInitialize()
+    try:
+        app = get_inventor_app(visible=True)
+        doc = app.Documents.Open(str(step), False)
+        try:
+            if doc.DocumentType != PART_DOCUMENT:
+                raise InventorAutomationError(
+                    f"{step.name} opened as an assembly, not a single part. Import it by hand.")
+            set_iproperties(doc, iproperties.get("design", {}), iproperties.get("custom", {}))
+            out.parent.mkdir(parents=True, exist_ok=True)
+            doc.SaveAs(str(out), False)
+        finally:
+            doc.Close(True)
+        del doc, app
+    finally:
+        pythoncom.CoUninitialize()
+    return out
+
+
 def _doc_name(doc) -> str:
     try:
         return str(doc.FullFileName)
@@ -358,6 +410,9 @@ __all__ = [
     "open_document",
     "rebuild_document",
     "save_document",
+    "PART_DOCUMENT",
+    "set_iproperties",
+    "import_step_as_part",
     "vault_get_latest",
     "vault_check_in",
     "rebuild_and_save_assembly",
