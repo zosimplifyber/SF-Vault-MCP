@@ -22,19 +22,23 @@ class SpecsAPI:
         self.files = {
             "CD-001887.iam": fv("CD-001887.iam", 100, "Assembly - Engineering", "$/DESIGNS/PRODUCTION EQUIPMENT"),
             "CD-001888.ipt": fv("CD-001888.ipt", 200),
+            "CD-001890.iam": fv("CD-001890.iam", 600, "Assembly - Engineering", "$/DESIGNS/PRODUCTION EQUIPMENT"),
+            "CD-001890.ipt": fv("CD-001890.ipt", 700),
         }
         self.uses = {
             "100": [("CD-001888.ipt", 200, "Dependency"),
                     ("ISO 4762 - M8 x 30 - Steel.ipt", 300, "Dependency"),
                     ("CD-001888.ipt", 200, "Dependency"),
                     ("CD-001886.ipt", 400, "Dependency"),
-                    ("Odd Washer.ipt", 500, "Dependency")],
+                    ("Odd Washer.ipt", 500, "Dependency"),
+                    ("CD-001700.ipt", 800, "Dependency")],
             "200": [("CD-001888.specs.json", 210, "Attachment"), ("CD-001888 McMaster 90510A313.pdf", 220, "Attachment")],
-            "300": [], "400": [], "500": [],
+            "300": [], "400": [], "500": [], "600": [], "700": [], "800": [],
         }
         self.content = {"210": json.dumps(card).encode()}
         self.cats = {300: ("Part - Content Center", "$/Content Center Files/en-US/ISO 4762"),
-                     500: ("Part - Content Center", "$/Content Center Files/en-US/Odd")}
+                     500: ("Part - Content Center", "$/Content Center Files/en-US/Odd"),
+                     800: ("Part - Engineering", "$/DESIGNS/PRODUCTION EQUIPMENT")}
 
     async def search_files(self, vault_id, query, latest_only=True, limit=20):
         f = self.files.get(query)
@@ -86,3 +90,26 @@ def test_assembly_walk_unique_parts_and_gaps(tool):
 def test_unknown_part(tool):
     out = run(tool(part="CD-999999.ipt"))
     assert out["error"] is True
+
+
+def test_in_house_part_is_not_a_purchased_gap(tool):
+    out = run(tool(part="CD-001887.iam"))
+    gaps = {g["file"]: g["reason"] for g in out["no_data"]}
+    assert gaps["CD-001700.ipt"] == "not a purchased or Content Center part"
+
+
+def test_bare_cd_resolves_ipt(tool):
+    out = run(tool(part="cd-001888"))
+    assert out["part"] == "CD-001888.ipt"
+    assert out["specs"][0]["file"] == "CD-001888.ipt"
+
+
+def test_bare_cd_prefers_iam(tool):
+    out = run(tool(part="CD-001890"))
+    assert out["part"] == "CD-001890.iam"
+
+
+def test_bare_cd_missing(tool):
+    out = run(tool(part="CD-999999"))
+    assert out["error"] is True
+    assert "CD-999999" in json.dumps(out)

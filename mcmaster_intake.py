@@ -154,9 +154,10 @@ def _intake_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-ATTACHMENT_ASSOC = "Attachment"   # REST fileAssocType for attachments; confirmed by scripts/probes/probe_intake_sdk.py
+ATTACHMENT_ASSOC = "Attachment"   # REST fileAssocType for attachments; UNVERIFIED until scripts/probes/probe_intake_sdk.py --write is run live
 DEPENDENCY_ASSOC = "Dependency"
 MAX_PARTS = 500
+_BARE_CD = re.compile(r"^CD-\d{6}$", re.IGNORECASE)
 
 
 def _is_content_center(f: dict[str, Any]) -> bool:
@@ -444,14 +445,28 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         import vault_slim as slim
         from vault_write_tools import find_file
         vault = resolved_vault(vault_id_param)
-        fv_raw, problem = await find_file(api, vault, part)
-        if problem or fv_raw is None:
-            return err(problem or f"{part} not found")
+        ref = part.strip()
+        if _BARE_CD.match(ref):
+            fv_raw, problem = None, ""
+            for ext in (".iam", ".ipt"):
+                fv_raw, problem = await find_file(api, vault, ref.upper() + ext)
+                if fv_raw is not None and not problem:
+                    break
+                fv_raw = None
+            if fv_raw is None:
+                return err(f"No .iam or .ipt found for {ref.upper()}")
+        else:
+            fv_raw, problem = await find_file(api, vault, ref)
+            if problem or fv_raw is None:
+                return err(problem or f"{part} not found")
         root = slim.file_version(fv_raw)
         try:
             files = await _collect_parts(api, vault, root)
             specs, no_data = [], []
             for f in files:
+                if f.get("category") not in ("Part - Purchased", "Part - Content Center"):
+                    no_data.append({"file": f["name"], "reason": "not a purchased or Content Center part"})
+                    continue
                 card, reason = await _spec_for(api, vault, f)
                 if card is None:
                     no_data.append({"file": f["name"], "reason": reason})
