@@ -86,7 +86,8 @@ _CC_NAME = re.compile(
 
 
 def parse_content_center_name(name: str) -> Optional[dict[str, Any]]:
-    """'ISO 4762 - M8 x 45 - Steel.ipt' -> standard, nominal, length, material."""
+    """'ISO 4762 - M8 x 45 - Steel.ipt' -> standard, nominal, length, material
+    (plus pitch for fine-pitch names like 'M8 x 1 x 30')."""
     m = _CC_NAME.match(name or "")
     if not m:
         return None
@@ -95,9 +96,14 @@ def parse_content_center_name(name: str) -> Optional[dict[str, Any]]:
     nums = re.findall(r"\d+(?:\.\d+)?", size)
     if not nums:
         return None
-    length = float(nums[1]) if re.search(r"\bx\b", size, re.IGNORECASE) and len(nums) > 1 else None
-    return {"standard": std, "nominal": f"M{nums[0]}", "length": length,
-            "material": m["material"].strip()}
+    has_x = re.search(r"\bx\b", size, re.IGNORECASE) is not None
+    pitch = float(nums[1]) if has_x and len(nums) == 3 else None   # M8 x 1 x 30
+    length = float(nums[-1]) if has_x and len(nums) > 1 else None
+    out = {"standard": std, "nominal": f"M{nums[0]}", "length": length,
+           "material": m["material"].strip()}
+    if pitch is not None:
+        out["pitch"] = pitch
+    return out
 
 
 def load_standard_tables(path: Path = STANDARD_SPECS_PATH) -> dict[str, Any]:
@@ -123,7 +129,7 @@ def card_from_standard(file_name: str, tables: Optional[dict[str, Any]] = None) 
         dims["length"] = parsed["length"]
     thread = None
     if family["threaded"]:
-        pitch = tables["pitch"].get(parsed["nominal"])
+        pitch = parsed.get("pitch") or tables["pitch"].get(parsed["nominal"])
         thread = {"designation": f"{parsed['nominal']}x{pitch:g}" if pitch else parsed["nominal"],
                   "length": parsed["length"] if family["type"] == "screw" else dims.get("height"),
                   "through": family["type"] == "nut"}

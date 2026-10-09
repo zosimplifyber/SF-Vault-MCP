@@ -415,3 +415,29 @@ def test_pn_released_when_commit_fails_at_recheck(env):
     (env.dl / "90510A313.pdf").write_bytes(b"changed")
     assert commit(env, token)["failed_step"] == "recheck"
     assert preview(env)["preview"] is True
+
+
+def test_commit_refuses_duplicate_added_since_preview(env):
+    token = preview(env)["token"]
+    env.api.existing = [{"name": "CD-001899.ipt", "id": 5, "file": {"id": 4}}]
+    out = commit(env, token)
+    assert out["applied"] is False and out["failed_step"] == "recheck"
+    assert "CD-001899.ipt" in out["error"]
+    assert not any(c[0] in ("generate_file_number", "add_file", "add_folder") for c in env.sdk.calls)
+
+
+def test_tidy_failure_does_not_flip_verified(env, monkeypatch):
+    def boom(src, dst):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr(mi.shutil, "move", boom)
+    out = commit(env, preview(env)["token"])
+    assert out["verified"] is True
+    assert any("tidy failed" in p for p in out["problems"])
+
+
+@pytest.mark.parametrize("desc", ["", "   "])
+def test_preview_rejects_blank_description(env, desc):
+    out = run(env.tools["vault_mcmaster_intake_preview"](
+        mcmaster_pn="90510A313", spec_card_json=json.dumps(CARD), description=desc))
+    assert out["error"] is True and "description is required" in out["message"]

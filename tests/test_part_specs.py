@@ -106,3 +106,11 @@ def test_card_from_standard_washer_aliases_7093():
 def test_card_from_standard_unknown_family_or_size():
     assert ps.card_from_standard("ISO 9999 - M8 - Steel.ipt") is None
     assert ps.card_from_standard("ISO 4762 - M64 x 200 - Steel.ipt") is None
+
+
+def test_card_from_standard_fine_pitch_screw():
+    c = ps.card_from_standard("ISO 4762 - M8 x 1 x 30 - Steel.ipt")
+    assert c["thread"]["designation"] == "M8x1"
+    assert c["thread"]["length"] == 30.0
+    assert c["dimensions"]["length"] == 30.0
+    assert ps.parse_content_center_name("ISO 4762 - M8 x 1 x 30 - Steel.ipt")["pitch"] == 1.0

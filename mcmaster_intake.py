@@ -209,11 +209,12 @@ async def _spec_for(api, vault: str, f: dict[str, Any]) -> tuple[Optional[dict],
     return None, "no spec card attached"
 
 
-async def _collect_parts(api, vault: str, root: dict[str, Any]) -> list[dict[str, Any]]:
-    """Unique .ipt files under an assembly (recursive), or [root] for a part."""
+async def _collect_parts(api, vault: str, root: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    """Unique .ipt files under an assembly (recursive), or [root] for a part,
+    and whether MAX_PARTS cut the walk short."""
     import vault_slim as slim
     if not root["name"].lower().endswith(".iam"):
-        return [root]
+        return [root], False
     parts: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
     queue = [root]
@@ -231,7 +232,7 @@ async def _collect_parts(api, vault: str, root: dict[str, Any]) -> list[dict[str
                 queue.append(child)
             elif name.lower().endswith(".ipt"):
                 parts.setdefault(name, child)
-    return list(parts.values())
+    return list(parts.values()), bool(queue)
 
 
 def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = None,
@@ -466,10 +467,11 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         steps.append({"step": "category", "ok": True})
 
         try:
-            problems = await _verify(api, p["vault"], names["ipt"], sleep)
+            vault_problems = await _verify(api, p["vault"], names["ipt"], sleep)
         except Exception as exc:
-            problems = [f"verify failed: {exc}"]
-        steps.append({"step": "verify", "ok": not problems})
+            vault_problems = [f"verify failed: {exc}"]
+        problems = list(vault_problems)
+        steps.append({"step": "verify", "ok": not vault_problems})
 
         try:
             done = Path(cfg["downloads_dir"]) / DONE_FOLDER
@@ -484,7 +486,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             problems.append(f"tidy failed, move the downloads by hand: {exc}")
             steps.append({"step": "tidy", "ok": False, "error": str(exc)})
 
-        return _dump({"applied": True, "verified": not problems, "cd_number": cd,
+        return _dump({"applied": True, "verified": not vault_problems, "cd_number": cd,
                       "vault_path": f"{folder_path}/{names['ipt']}", "problems": problems, "steps": steps})
 
     @mcp.tool()
@@ -519,7 +521,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
                 return err(problem or f"{part} not found")
         root = slim.file_version(fv_raw)
         try:
-            files = await _collect_parts(api, vault, root)
+            files, truncated = await _collect_parts(api, vault, root)
             specs, no_data = [], []
             for f in files:
                 if f.get("category") not in ("Part - Purchased", "Part - Content Center"):
@@ -532,7 +534,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
                     specs.append({"file": f["name"], **card})
         except IntakeError as exc:
             return err(str(exc))
-        return _dump({"part": root["name"], "specs": specs, "no_data": no_data})
+        return _dump({"part": root["name"], "specs": specs, "no_data": no_data, "truncated": truncated})
 
 
 async def _verify(api, vault: str, ipt_name: str, sleep, attempts: int = 3) -> list[str]:

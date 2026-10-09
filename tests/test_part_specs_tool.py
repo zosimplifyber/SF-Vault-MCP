@@ -113,3 +113,20 @@ def test_bare_cd_missing(tool):
     out = run(tool(part="CD-999999"))
     assert out["error"] is True
     assert "CD-999999" in json.dumps(out)
+
+
+def test_truncated_flag_when_max_parts_hit(monkeypatch, tmp_path):
+    api = SpecsAPI()
+    api.files["CD-001890.iam"] = fv("CD-001890.iam", 600, "Assembly - Engineering", "$/DESIGNS/PRODUCTION EQUIPMENT")
+    api.uses["600"] = [("CD-001888.ipt", 200, "Dependency"), ("Sub.iam", 650, "Dependency")]
+    api.uses["650"] = [("CD-001886.ipt", 400, "Dependency")]
+    monkeypatch.setitem(sys.modules, "vault_sdk", FakeSDK())
+    monkeypatch.setattr(mi, "MAX_PARTS", 1)
+    mcp = FakeMCP()
+    mi.register(mcp, api, lambda v: "1", config={"downloads_dir": str(tmp_path)})
+    out = run(mcp.tools["vault_get_part_specs"](part="CD-001890.iam"))
+    assert out["truncated"] is True
+
+
+def test_not_truncated_normally(tool):
+    assert run(tool(part="CD-001887.iam"))["truncated"] is False
