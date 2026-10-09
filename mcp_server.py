@@ -947,8 +947,8 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
         part_number: str, vault_id_param: str = "", limit: int = 200, raw: bool = False
     ) -> str:
         """
-        CAD BOM in one call: find the CAD file by part number / file name and
-        list the files it references (one level deep), with association type.
+        File references of a CAD file, one level deep, with association type.
+        For the real multi-level BOM with quantities use vault_get_cad_bom.
 
         This is the assembly structure as modeled in CAD (.iam -> child files),
         which can differ from the engineering item BOM. For the item BOM use
@@ -2133,6 +2133,10 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
     # Lifecycle, category, file-property and check-out writes (SOAP bridge).
     import vault_write_tools
     vault_write_tools.register(mcp, api, _resolved_vault, _resolve_item)
+
+    # Multi-level BOM and purchasing sheet from Inventor's stored CAD BOM.
+    import vault_cad_tools
+    vault_cad_tools.register(mcp, api, _resolved_vault)
 
     # McMaster -> Microsoft List price updates (additive; safe no-op if absent).
     try:

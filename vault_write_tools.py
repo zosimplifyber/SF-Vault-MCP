@@ -100,6 +100,35 @@ def _sdk_error(exc: Exception) -> Dict[str, Any]:
     return out
 
 
+async def find_file(api, vault: str, ref: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Find a file by master/version id or exact name; return its latest
+    file-version record (with properties) or an error message."""
+    ref = ref.strip()
+    file_id = ref
+    if not ref.isdigit():
+        search = await api.search_files(vault_id=vault, query=ref, latest_only=True, limit=20)
+        if search.get("error"):
+            return None, f"search failed: {search.get('data')}"
+        files = slim._records(search.get("data"))
+        low = ref.lower()
+        exact = [f for f in files if str(f.get("name", "")).lower() == low]
+        if not exact:
+            exact = [f for f in files if str(f.get("name", "")).lower().rsplit(".", 1)[0] == low]
+        if not exact:
+            return None, f"no file named {ref!r}"
+        if len(exact) > 1:
+            names = ", ".join(sorted(str(f.get("name")) for f in exact))
+            return None, f"{ref!r} matches several files ({names}); give the full file name"
+        file_id = str((exact[0].get("file") or {}).get("id") or exact[0].get("id"))
+    resp = await api.get_file_by_id(vault_id=vault, file_id=file_id)
+    if resp.get("error"):
+        return None, f"file lookup failed: {resp.get('data')}"
+    fv = (resp.get("data") or {}).get("fileVersion")
+    if not fv:
+        return None, f"no file version for {ref!r}"
+    return fv, ""
+
+
 def register(
     mcp,
     api,
@@ -110,32 +139,7 @@ def register(
     is the server's exact-match item resolver."""
 
     async def resolve_file(vault: str, ref: str) -> Tuple[Optional[Dict[str, Any]], str]:
-        """Find a file by master/version id or exact name; return its latest
-        file-version record (with properties) or an error message."""
-        ref = ref.strip()
-        file_id = ref
-        if not ref.isdigit():
-            search = await api.search_files(vault_id=vault, query=ref, latest_only=True, limit=20)
-            if search.get("error"):
-                return None, f"search failed: {search.get('data')}"
-            files = slim._records(search.get("data"))
-            low = ref.lower()
-            exact = [f for f in files if str(f.get("name", "")).lower() == low]
-            if not exact:
-                exact = [f for f in files if str(f.get("name", "")).lower().rsplit(".", 1)[0] == low]
-            if not exact:
-                return None, f"no file named {ref!r}"
-            if len(exact) > 1:
-                names = ", ".join(sorted(str(f.get("name")) for f in exact))
-                return None, f"{ref!r} matches several files ({names}); give the full file name"
-            file_id = str((exact[0].get("file") or {}).get("id") or exact[0].get("id"))
-        resp = await api.get_file_by_id(vault_id=vault, file_id=file_id)
-        if resp.get("error"):
-            return None, f"file lookup failed: {resp.get('data')}"
-        fv = (resp.get("data") or {}).get("fileVersion")
-        if not fv:
-            return None, f"no file version for {ref!r}"
-        return fv, ""
+        return await find_file(api, vault, ref)
 
     async def resolve_items(vault: str, part_numbers: List[str]) -> List[Dict[str, Any]]:
         """Exact part-number matches only; anything else becomes an error row."""

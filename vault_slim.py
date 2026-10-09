@@ -8,7 +8,7 @@ revision, quantity, ids needed for the next call) and drop the rest. Every
 slimmed tool also takes ``raw=True`` for the untouched payload.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Keys that never help a reader: links back into the API and UI colours.
 _NOISE_KEYS = {"url", "stateColor", "categoryColor", "color"}
@@ -306,3 +306,82 @@ def associated_files(data: Dict[str, Any]) -> Dict[str, Any]:
         "association": r.get("itemAssociationType"),
         **file_version(r.get("file") or {}, folders=folders),
     })
+
+
+# ----------------------------------------------------------------------
+# CAD BOM (Inventor's BOM stored in Vault at check-in)
+# ----------------------------------------------------------------------
+
+def cad_bom(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Depth-first rows from the stored Inventor BOM, like Inventor's
+    structured all-levels export: dotted ``row``, per-parent ``qty``.
+
+    Reference components are left out. Phantom components are dropped and
+    their children promoted to the phantom's parent with the quantity
+    multiplied through, as Inventor's structured view does. A per-occurrence
+    override (``structure`` on the link) beats the component's own setting.
+    """
+    comps = {int(c["id"]): c for c in data.get("comps") or []}
+    children: Dict[int, List[Dict[str, Any]]] = {}
+    for inst in data.get("insts") or []:
+        children.setdefault(int(inst["parent"]), []).append(inst)
+
+    def expand(parent: int, mult: float, seen: frozenset) -> List[Tuple[Dict[str, Any], float]]:
+        """Children of ``parent`` with phantoms flattened away."""
+        out: List[Tuple[Dict[str, Any], float]] = []
+        for inst in children.get(parent, []):
+            cid = int(inst["child"])
+            comp = comps.get(cid)
+            if comp is None or cid in seen:
+                continue
+            qty = float(inst.get("qty") or 0) * mult
+            override = str(inst.get("structure") or "Default")
+            struct = override if override != "Default" else str(comp.get("bomStructure") or "")
+            if struct == "Reference":
+                continue
+            if struct == "Phantom":
+                out.extend(expand(cid, qty, seen | {cid}))
+                continue
+            out.append((dict(comp, bomStructure=struct), qty))
+        return out
+
+    rows: List[Dict[str, Any]] = []
+
+    def walk(parent: int, prefix: str, seen: frozenset) -> None:
+        for i, (comp, qty) in enumerate(expand(parent, 1.0, seen), start=1):
+            props = comp.get("props") or {}
+            row_no = f"{prefix}{i}"
+            rows.append(_compact({
+                "row": row_no,
+                "qty": int(qty) if float(qty).is_integer() else qty,
+                "file": comp.get("name"),
+                "part_number": props.get("Part Number"),
+                "title": props.get("Title"),
+                "description": props.get("Description"),
+                "source": props.get("Source")
+                or ("Buy" if comp.get("bomStructure") == "Purchased" else None),
+                "vendor": props.get("Vendor"),
+                "stock_number": props.get("Stock Number"),
+                "material": props.get("Material"),
+                "revision": props.get("Revision"),
+                "units": comp.get("uom"),
+                "bom_structure": comp.get("bomStructure"),
+                "content_center": props.get("Content Center File") == "True",
+            }))
+            cid = int(comp["id"])
+            walk(cid, row_no + ".", seen | {cid})
+
+    walk(0, "", frozenset({0}))
+    root = data.get("root") or {}
+    top = (comps.get(0) or {}).get("props") or {}
+    return {
+        "assembly": _compact({
+            "file": root.get("name"),
+            "part_number": top.get("Part Number"),
+            "description": top.get("Description"),
+            "checked_in": str(root.get("checkedIn") or "")[:16].replace("T", " "),
+            "checked_out": root.get("checkedOut"),
+        }),
+        "row_count": len(rows),
+        "rows": rows,
+    }

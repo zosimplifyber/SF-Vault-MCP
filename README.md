@@ -263,9 +263,11 @@ about 120,000 raw.
 | `vault_get_item_parents` | Where-used: direct parents with quantity, plus higher assemblies |
 | `vault_get_item_associated_files` | Get files associated with an item version |
 | `vault_get_bom_by_part_number` | **One-call lookup: part number → item → BOM** |
-| `vault_get_cad_bom_by_part_number` | **One-call lookup: part number → CAD assembly BOM** |
+| `vault_get_cad_bom` | **Multi-level BOM from Inventor's stored CAD BOM: quantities, Source, Vendor; no items needed** |
+| `vault_get_cad_bom_by_part_number` | One level of file references for a CAD file |
 | **Purchasing sheets** | |
-| `vault_generate_purchasing_sheet` | **End-to-end: part number → BOM → enriched .xlsx** |
+| `vault_generate_purchasing_sheet_from_cad` | **End-to-end from CAD alone: assembly file → stored Inventor BOM → enriched .xlsx** |
+| `vault_generate_purchasing_sheet` | End-to-end from the engineering item BOM (needs SF items) |
 | `vault_generate_purchasing_sheet_from_vault_bom` | Build a sheet from an already-fetched Vault BOM payload |
 | `vault_generate_purchasing_sheet_from_file` | Build a sheet from a manually-exported BOM file (.xls/.xlsx/.csv) |
 | `vault_lookup_purchased_part` | Look up vendor / cost / lead-time for one part number |
