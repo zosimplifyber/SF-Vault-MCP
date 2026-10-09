@@ -18,6 +18,13 @@
 #   UndoCheckoutFile                -> release a file's checkout
 #   UpdateFileProperties            -> set Vault properties on files
 #   GetCadBom                       -> Inventor's stored multi-level BOM
+#   GetFileCategories               -> all FILE categories
+#   GetNumberingSchemes             -> activated FILE numbering schemes
+#   GetFolderByPath                 -> one folder by full path (found=false if none)
+#   GenerateFileNumber              -> next number from a FILE numbering scheme
+#   AddFolder                       -> create a sub-folder under a parent path
+#   AddFile                         -> add a new checked-in file, optional attachments
+#   UpdateFileCategories            -> set the category on files by master id
 #
 # Read operations sign in read-only and take no license seat.
 #
@@ -207,7 +214,10 @@ function Connect-Vault([switch]$ReadOnly) {
     # Inventor / Vault Explorer hold it (or when no seat can be had at all).
     if ($ReadOnly) {
         $r = $cm.LogIn($serverHost, $db, $user, $pass, $afType::ReadOnly, $null)
-        if ($r -and $r.Success) { return $r.Connection.WebServiceManager }
+        if ($r -and $r.Success) {
+            $script:VdfConn = $r.Connection
+            return $r.Connection.WebServiceManager
+        }
         $msgs = @()
         if ($r -and $r.ErrorMessages) {
             foreach ($kv in $r.ErrorMessages.GetEnumerator()) { $msgs += ('{0}: {1}' -f $kv.Key, $kv.Value) }
@@ -228,6 +238,7 @@ function Connect-Vault([switch]$ReadOnly) {
             $r = $cm.LogIn($serverHost, $db, $user, $pass, $c.flags, $null)
             if ($r -and $r.Success) {
                 [Console]::Error.WriteLine("VAULT_LOGIN_OK via=ConnectionManager combo=$($c.name) flags=$($r.Connection.AuthenticationFlags)")
+                $script:VdfConn = $r.Connection
                 return $r.Connection.WebServiceManager
             }
             $comboMsgs += ('{0} did not Success' -f $c.name)
@@ -723,13 +734,87 @@ function Invoke-GetCadBom($mgr) {
     return [ordered]@{ found = $true; root = $root; comps = $comps; insts = $insts }
 }
 
+function Invoke-GetFileCategories($mgr) {
+    $cats = $mgr.CategoryService.GetCategoriesByEntityClassId('FILE', $true)
+    return @{ categories = @($cats | ForEach-Object { [ordered]@{ id = [int64]$_.Id; name = [string]$_.Name } }) }
+}
+
+function Invoke-GetNumberingSchemes($mgr) {
+    $s = $mgr.NumberingService.GetNumberingSchemes('FILE', [Autodesk.Connectivity.WebServices.NumSchmType]::Activated)
+    return @{ schemes = @($s | ForEach-Object { [ordered]@{ id = [int64]$_.SchmID; name = [string]$_.Name; isDefault = [bool]$_.IsDflt } }) }
+}
+
+function Invoke-GetFolderByPath($mgr) {
+    $p = [string](Get-Arg 'path')
+    try { $f = $mgr.DocumentService.GetFolderByPath($p) } catch { return @{ found = $false } }
+    if ($null -eq $f) { return @{ found = $false } }
+    return [ordered]@{ found = $true; id = [int64]$f.Id; fullName = [string]$f.FullName; isLibrary = [bool]$f.IsLibrary }
+}
+
+function Invoke-GenerateFileNumber($mgr) {
+    $id = Get-Arg 'schemeId'
+    if ($null -eq $id) { Die 'GenerateFileNumber requires schemeId' }
+    $n = $mgr.DocumentService.GenerateFileNumber([int64]$id, [string[]]@())
+    return @{ number = [string]$n }
+}
+
+function Invoke-AddFolder($mgr) {
+    $parent = $mgr.DocumentService.GetFolderByPath([string](Get-Arg 'parentPath'))
+    $f = $mgr.DocumentService.AddFolder([string](Get-Arg 'name'), [int64]$parent.Id, [bool]$parent.IsLibrary)
+    return [ordered]@{ id = [int64]$f.Id; fullName = [string]$f.FullName }
+}
+
+function Invoke-AddFile($mgr) {
+    $folderPath = [string](Get-Arg 'folderPath')
+    $localPath  = [string](Get-Arg 'localPath')
+    $fileName   = [string](Get-Arg 'fileName')
+    $comment    = [string](Get-Arg 'comment' '')
+    $attachIds  = Get-Arg 'attachmentFileIds' @()
+    if (-not (Test-Path $localPath)) { Die ('Local file not found: ' + $localPath) }
+    if ($null -eq $script:VdfConn) { Die 'AddFile needs the VDF connection; Connect-Vault did not keep it' }
+    $wsFolder = $mgr.DocumentService.GetFolderByPath($folderPath)
+    $folder = New-Object Autodesk.DataManagement.Client.Framework.Vault.Currency.Entities.Folder($script:VdfConn, $wsFolder)
+    $assocs = @()
+    foreach ($id in $attachIds) {
+        $a = New-Object Autodesk.Connectivity.WebServices.FileAssocParam
+        $a.CldFileId = [int64]$id
+        $a.Typ = [Autodesk.Connectivity.WebServices.AssociationType]::Attachment
+        $a.RefId = $null
+        $a.Source = $null
+        $a.ExpectedVaultPath = $null
+        $assocs += $a
+    }
+    $stream = [System.IO.File]::OpenRead($localPath)
+    try {
+        $fi = $script:VdfConn.FileManager.AddFile(
+            $folder, $fileName, $comment, (Get-Item $localPath).LastWriteTime,
+            [Autodesk.Connectivity.WebServices.FileAssocParam[]]$assocs, $null,
+            [Autodesk.Connectivity.WebServices.FileClassification]::None, $false, $stream)
+    } finally { $stream.Dispose() }
+    $f = $mgr.DocumentService.GetLatestFileByMasterId([int64]$fi.EntityMasterId)
+    return Get-FileOut $f
+}
+
+function Invoke-UpdateFileCategories($mgr) {
+    $masters = Get-Arg 'masterIds'
+    $catId   = Get-Arg 'categoryId'
+    $comment = [string](Get-Arg 'comment' '')
+    if (-not $masters -or $masters.Count -eq 0) { Die 'UpdateFileCategories requires masterIds' }
+    if ($null -eq $catId) { Die 'UpdateFileCategories requires categoryId' }
+    $longMasters = [int64[]]($masters | ForEach-Object { [int64]$_ })
+    $longCats = [int64[]]($longMasters | ForEach-Object { [int64]$catId })
+    $files = $mgr.DocumentServiceExtensions.UpdateFileCategories($longMasters, $longCats, $comment)
+    return @{ updated = @($files | ForEach-Object { Get-FileOut $_ }) }
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
 # Operations that only read run on a read-only session (no license seat).
 $readOnlyOps = @('GetLifecycleStates','GetItemPropertyDefinitions','GetItemCategories',
-                 'LookupItem','LookupFile','GetCadBom')
+                 'LookupItem','LookupFile','GetCadBom',
+                 'GetFileCategories','GetNumberingSchemes','GetFolderByPath')
 
 try {
     $mgr = if ($readOnlyOps -contains $Operation) { Connect-Vault -ReadOnly } else { Connect-Vault }
@@ -747,6 +832,13 @@ try {
         'CheckoutFile'               { Invoke-CheckoutFile               $mgr }
         'UndoCheckoutFile'           { Invoke-UndoCheckoutFile           $mgr }
         'UpdateFileProperties'       { Invoke-UpdateFileProperties       $mgr }
+        'GetFileCategories'          { Invoke-GetFileCategories          $mgr }
+        'GetNumberingSchemes'        { Invoke-GetNumberingSchemes        $mgr }
+        'GetFolderByPath'            { Invoke-GetFolderByPath            $mgr }
+        'GenerateFileNumber'         { Invoke-GenerateFileNumber         $mgr }
+        'AddFolder'                  { Invoke-AddFolder                  $mgr }
+        'AddFile'                    { Invoke-AddFile                    $mgr }
+        'UpdateFileCategories'       { Invoke-UpdateFileCategories       $mgr }
         default { Die ('Unknown -Operation: ' + $Operation) }
     }
 } catch {
