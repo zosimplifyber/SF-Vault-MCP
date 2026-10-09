@@ -36,6 +36,7 @@ class Doc:
         self.PropertySets = types.SimpleNamespace(Item=lambda n: self.sets[n])
         self.saved_as = None
         self.closed = None
+        self.File = types.SimpleNamespace(ReferencedFileDescriptors=types.SimpleNamespace(Count=0))
 
     def SaveAs(self, path, copy):
         self.saved_as = (path, copy)
@@ -53,7 +54,12 @@ def inventor(monkeypatch):
         Open=lambda path, visible: opened.append((path, visible)) or doc))
     com = types.SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
     monkeypatch.setattr(ia, "_import_win32", lambda: (com, None))
-    monkeypatch.setattr(ia, "get_inventor_app", lambda visible=True: app)
+    monkeypatch.setattr(ia, "get_running_inventor_app", lambda: app)
+
+    def no_launch(visible=True):
+        raise AssertionError("import must attach, never launch")
+
+    monkeypatch.setattr(ia, "get_inventor_app", no_launch)
     return doc, opened
 
 
@@ -100,3 +106,49 @@ def test_assembly_step_is_rejected_and_closed(tmp_path, inventor):
         ia.import_step_as_part(step, tmp_path / "x.ipt", IPROPS)
     assert doc.closed is True
     assert not (tmp_path / "x.ipt").exists()
+
+
+def test_reference_model_import_is_rejected_and_closed(tmp_path, inventor):
+    doc, _ = inventor
+    doc.File.ReferencedFileDescriptors.Count = 1
+    step = tmp_path / "a.step"
+    step.write_bytes(b"s")
+    with pytest.raises(ia.InventorAutomationError, match="Convert Model"):
+        ia.import_step_as_part(step, tmp_path / "x.ipt", IPROPS)
+    assert doc.closed is True
+    assert not (tmp_path / "x.ipt").exists()
+
+
+class _ComError(Exception):
+    pass
+
+
+def _com(monkeypatch, get_active):
+    com = types.SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None, com_error=_ComError)
+    client = types.SimpleNamespace(
+        GetActiveObject=get_active,
+        Dispatch=lambda name: (_ for _ in ()).throw(AssertionError("must not launch")))
+    monkeypatch.setattr(ia, "_import_win32", lambda: (com, client))
+
+
+def test_get_running_inventor_app_raises_when_not_running(monkeypatch):
+    def nope(name):
+        raise _ComError("not running")
+
+    _com(monkeypatch, nope)
+    with pytest.raises(ia.InventorAutomationError, match="Inventor is not running"):
+        ia.get_running_inventor_app()
+
+
+def test_get_running_inventor_app_attaches(monkeypatch):
+    sentinel = object()
+    _com(monkeypatch, lambda name: sentinel)
+    assert ia.get_running_inventor_app() is sentinel
+
+
+def test_check_inventor_running_attaches_and_releases(monkeypatch):
+    _com(monkeypatch, lambda name: object())
+    ia.check_inventor_running()
+    _com(monkeypatch, lambda name: (_ for _ in ()).throw(_ComError("x")))
+    with pytest.raises(ia.InventorAutomationError):
+        ia.check_inventor_running()

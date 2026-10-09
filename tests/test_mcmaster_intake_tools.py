@@ -89,8 +89,15 @@ class FakeSDK(types.ModuleType):
 
 
 class FakeInventor:
-    def __init__(self):
+    def __init__(self, not_running=None):
         self.calls = []
+        self.not_running = not_running
+        self.checks = 0
+
+    def check_inventor_running(self):
+        self.checks += 1
+        if self.not_running:
+            raise RuntimeError(self.not_running)
 
     def import_step_as_part(self, step, out, iprops):
         self.calls.append((Path(step).name, Path(out), iprops))
@@ -338,3 +345,18 @@ def test_licence_note_original_when_nothing_written(env):
     env.sdk.get_numbering_schemes = lambda: (_ for _ in ()).throw(RuntimeError("Failed to acquire a license"))
     out = commit(env, token)
     assert "Nothing was changed" in out["license"]
+
+
+def test_inventor_check_failure_stops_before_number(env):
+    token = preview(env)["token"]
+    env.inv.not_running = "Inventor is not running. Start Inventor"
+    out = commit(env, token)
+    assert out["applied"] is False and out["failed_step"] == "inventor check"
+    assert "not running" in out["error"]
+    assert not any(c[0] in ("generate_file_number", "add_file", "add_folder") for c in env.sdk.calls)
+    assert env.inv.checks == 1 and env.inv.calls == []
+
+
+def test_inventor_check_is_first_step(env):
+    out = commit(env, preview(env)["token"])
+    assert [s["step"] for s in out["steps"]][:3] == ["inventor check", "recheck", "number"]

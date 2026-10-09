@@ -114,6 +114,32 @@ def get_inventor_app(*, visible: bool = True):
     return app
 
 
+def get_running_inventor_app():
+    """Attach to an already-running Inventor; never launch one.
+
+    A launched Inventor would sign in to Vault on its own and hold the single
+    client licence seat the intake commit needs.
+    """
+    pythoncom, win32com_client = _import_win32()
+    try:
+        return win32com_client.GetActiveObject("Inventor.Application")
+    except pythoncom.com_error as exc:
+        raise InventorAutomationError(
+            "Inventor is not running. Start Inventor, sign out of its Vault add-in, then retry."
+        ) from exc
+
+
+def check_inventor_running() -> None:
+    """Raise InventorAutomationError unless Inventor is running. Safe on a worker thread."""
+    pythoncom, _ = _import_win32()
+    pythoncom.CoInitialize()
+    try:
+        app = get_running_inventor_app()
+        del app
+    finally:
+        pythoncom.CoUninitialize()
+
+
 # ---------------------------------------------------------------------------
 # Assembly operations
 # ---------------------------------------------------------------------------
@@ -204,10 +230,8 @@ def import_step_as_part(step_path: str | Path, out_ipt: str | Path, iproperties:
     """Open a STEP in Inventor as a part, set iProperties, save as out_ipt.
 
     Safe on a worker thread (initialises COM itself). Refuses to overwrite an
-    existing .ipt and rejects STEPs that open as assemblies.
-
-    ``visible=True`` on purpose: ``get_inventor_app`` sets ``app.Visible``, and
-    the running Inventor must not disappear.
+    existing .ipt, rejects STEPs that open as assemblies, and rejects STEPs
+    that open as reference models. Inventor must already be running.
     """
     step, out = Path(step_path), Path(out_ipt)
     if not step.is_file():
@@ -217,12 +241,15 @@ def import_step_as_part(step_path: str | Path, out_ipt: str | Path, iproperties:
     pythoncom, _ = _import_win32()
     pythoncom.CoInitialize()
     try:
-        app = get_inventor_app(visible=True)
+        app = get_running_inventor_app()
         doc = app.Documents.Open(str(step), False)
         try:
             if doc.DocumentType != PART_DOCUMENT:
                 raise InventorAutomationError(
                     f"{step.name} opened as an assembly, not a single part. Import it by hand.")
+            if doc.File.ReferencedFileDescriptors.Count > 0:
+                raise InventorAutomationError(
+                    "The STEP opened as a reference model. Set Inventor's STEP import to Convert Model, then retry.")
             set_iproperties(doc, iproperties.get("design", {}), iproperties.get("custom", {}))
             out.parent.mkdir(parents=True, exist_ok=True)
             doc.SaveAs(str(out), False)

@@ -319,7 +319,8 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
     @mcp.tool()
     async def vault_mcmaster_intake_commit(token: str, vault_id_param: str = "") -> str:
         """Add the previewed McMaster part to Vault. Only after Zak said yes
-        to the preview. Close Vault Explorer first (SDK license seat).
+        to the preview. Close Vault Explorer first (SDK license seat), and have
+        Inventor running and signed out of its Vault add-in.
 
         Args:
             token: The token from vault_mcmaster_intake_preview.
@@ -355,6 +356,12 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             result = await asyncio.to_thread(fn, *a, **kw)
             state["uncertain"] = []
             return result
+
+        try:
+            await run(_inventor().check_inventor_running)
+        except Exception as exc:
+            return failed("inventor check", exc)
+        steps.append({"step": "inventor check", "ok": True})
 
         # recheck: downloads unchanged and still not a duplicate
         try:
