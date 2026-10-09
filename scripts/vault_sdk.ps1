@@ -14,6 +14,9 @@
 #   UpdateItemLifeCycleStates       -> promote items to a state
 #   UpdateItemCategories            -> change items' Category
 #   UpdateFileLifeCycleStates       -> promote files to a state
+#   CheckoutFile                    -> reserve a file (no download)
+#   UndoCheckoutFile                -> release a file's checkout
+#   UpdateFileProperties            -> set Vault properties on files
 #
 # Examples:
 #   pwsh -File vault_sdk.ps1 -Operation GetLifecycleStates
@@ -35,8 +38,15 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # ---------------------------------------------------------------------------
 # SDK location (override via $env:VAULT_SDK_BIN)
 # ---------------------------------------------------------------------------
+# The SDK must match the server's major version: the 2025 SDK against the
+# 2026 server (31.x) fails sign-in with "The license obtained is incompatible
+# with the server". The Vault Client 2026 install ships the same assemblies,
+# built for .NET 8, so this script must run under PowerShell 7 (vault_sdk.py
+# prefers pwsh); Windows PowerShell 5.1 cannot load them.
 $SdkBin = if ($env:VAULT_SDK_BIN) {
     $env:VAULT_SDK_BIN
+} elseif (Test-Path 'C:\Program Files\Autodesk\Vault Client 2026\Explorer\Autodesk.Connectivity.WebServices.dll') {
+    'C:\Program Files\Autodesk\Vault Client 2026\Explorer'
 } else {
     'C:\Program Files\Autodesk\Autodesk Vault 2025 SDK\bin\x64'
 }
@@ -47,7 +57,7 @@ $SdkBin = if ($env:VAULT_SDK_BIN) {
 # Without this, every writable LicensingAgent / AuthenticationFlags combo
 # fails with "Failed to acquire a license" or VaultLicenseException, even
 # when the user actually has a seat available. Confirmed via test_license.ps1.
-$licDllNames = @('AdskLicensingSDK_8.dll','AdskLicensingSDK_2.dll')
+$licDllNames = @('AdskLicensingSDK_9.dll','AdskLicensingSDK_8.dll','AdskLicensingSDK_2.dll')
 $licSearchDirs = @(
     $SdkBin,
     'C:\Program Files\Autodesk\Vault Client 2025\Explorer',
@@ -546,6 +556,83 @@ function Invoke-UpdateFileLifeCycleStates($mgr) {
     return @{ updated = if ($updated) { $updated.Count } else { 0 } }
 }
 
+function Get-FileOut($f) {
+    return [ordered]@{
+        id         = [int64]$f.Id
+        masterId   = [int64]$f.MasterId
+        name       = [string]$f.Name
+        checkedOut = [bool]$f.CheckedOut
+        ckOutUserId = if ($f.CheckedOut) { [int64]$f.CkOutUserId } else { $null }
+    }
+}
+
+function Invoke-CheckoutFile($mgr) {
+    # Reserves the latest version in Vault without downloading it; the
+    # checkout is recorded against this machine with no local path.
+    $masterId = Get-Arg 'masterId'
+    $comment  = Get-Arg 'comment' ''
+    if ($null -eq $masterId) { Die 'CheckoutFile requires masterId' }
+    $file = $mgr.DocumentService.GetLatestFileByMasterId([int64]$masterId)
+    $ticket = $null
+    $out = $mgr.DocumentService.CheckoutFile(
+        [int64]$file.Id,
+        [Autodesk.Connectivity.WebServices.CheckoutFileOptions]::Master,
+        [string]$env:COMPUTERNAME,
+        '',
+        [string]$comment,
+        [ref]$ticket
+    )
+    return Get-FileOut $out
+}
+
+function Invoke-UndoCheckoutFile($mgr) {
+    $masterId = Get-Arg 'masterId'
+    if ($null -eq $masterId) { Die 'UndoCheckoutFile requires masterId' }
+    $ticket = $null
+    $out = $mgr.DocumentService.UndoCheckoutFile([int64]$masterId, [ref]$ticket)
+    return Get-FileOut $out
+}
+
+function Invoke-UpdateFileProperties($mgr) {
+    # Writes Vault property values on the latest version of each file and
+    # creates a new property-only version. CAD-mapped properties reach the
+    # file itself only after an Autodesk.Vault.SyncProperties job runs.
+    $masters = Get-Arg 'masterIds'
+    $propMap = Get-Arg 'properties'    # { name: value, ... } same for every file
+    if (-not $masters -or $masters.Count -eq 0) { Die 'UpdateFileProperties requires masterIds' }
+    if (-not $propMap) { Die 'UpdateFileProperties requires properties' }
+
+    $propDefs = $mgr.PropertyService.GetPropertyDefinitionInfosByEntityClassId('FILE', $null)
+    $byName = @{}
+    foreach ($p in $propDefs) {
+        $pdef = if ($p.PropDef) { $p.PropDef } else { $p }
+        $byName[[string]$pdef.SysName] = $pdef
+        $byName[[string]$pdef.DispName] = $pdef
+    }
+    $params = @()
+    foreach ($key in $propMap.PSObject.Properties.Name) {
+        $def = $byName[$key]
+        if ($null -eq $def) { Die ('Unknown file property: ' + $key) }
+        if ($def.IsSys) { Die ('System property cannot be written: ' + $key) }
+        $param = New-Object Autodesk.Connectivity.WebServices.PropInstParam
+        $param.PropDefId = [int64]$def.Id
+        $param.Val       = $propMap.$key
+        $params += $param
+    }
+    $perFile = New-Object Autodesk.Connectivity.WebServices.PropInstParamArray
+    $perFile.Items = [Autodesk.Connectivity.WebServices.PropInstParam[]]$params
+
+    $longMasters = [int64[]]($masters | ForEach-Object { [int64]$_ })
+    $arrays = @()
+    for ($i = 0; $i -lt $longMasters.Count; $i++) { $arrays += $perFile }
+    $files = $mgr.DocumentServiceExtensions.UpdateFileProperties(
+        $longMasters, [Autodesk.Connectivity.WebServices.PropInstParamArray[]]$arrays
+    )
+    $out = @()
+    foreach ($f in $files) { $out += Get-FileOut $f }
+    return @{ updated = $out.Count; files = $out }
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -562,6 +649,9 @@ try {
         'UpdateItemLifeCycleStates'  { Invoke-UpdateItemLifeCycleStates  $mgr }
         'UpdateItemCategories'       { Invoke-UpdateItemCategories       $mgr }
         'UpdateFileLifeCycleStates'  { Invoke-UpdateFileLifeCycleStates  $mgr }
+        'CheckoutFile'               { Invoke-CheckoutFile               $mgr }
+        'UndoCheckoutFile'           { Invoke-UndoCheckoutFile           $mgr }
+        'UpdateFileProperties'       { Invoke-UpdateFileProperties       $mgr }
         default { Die ('Unknown -Operation: ' + $Operation) }
     }
 } catch {

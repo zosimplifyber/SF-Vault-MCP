@@ -63,13 +63,24 @@ class VaultSDKError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def _powershell_exe() -> str:
-    """Return the PowerShell executable path. Prefer pwsh (PowerShell 7+)
-    if available, else fall back to powershell.exe (5.1, always present
-    on Windows)."""
-    for name in ("pwsh", "powershell"):
-        exe = shutil.which(name)
-        if exe:
-            return exe
+    """Return the PowerShell executable path. Prefer pwsh (PowerShell 7+),
+    which the Vault 2026 SDK assemblies need, else fall back to
+    powershell.exe (5.1, always present on Windows)."""
+    exe = shutil.which("pwsh")
+    if exe:
+        return exe
+    # A server started before PowerShell 7 was installed has a stale PATH;
+    # look in the default install folders before falling back to 5.1, which
+    # cannot load the .NET 8 Vault 2026 assemblies.
+    for candidate in (
+        Path(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+        Path.home() / "AppData/Local/Microsoft/WindowsApps/pwsh.exe",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    exe = shutil.which("powershell")
+    if exe:
+        return exe
     # Last resort — Windows always has this absolute path
     return r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
@@ -356,6 +367,39 @@ def update_item_categories(
     })
 
 
+def checkout_file(master_id: int | str, *, comment: str = "") -> dict[str, Any]:
+    """Check out the latest version of a file (by master ID) without
+    downloading it. Returns the file's id, masterId, name and checkout flag."""
+    return _call_ps("CheckoutFile", {"masterId": int(master_id), "comment": comment})
+
+
+def undo_checkout_file(master_id: int | str) -> dict[str, Any]:
+    """Undo the checkout on a file (by master ID). Undoing another user's
+    checkout needs Vault admin rights and discards their pending check-in."""
+    return _call_ps("UndoCheckoutFile", {"masterId": int(master_id)})
+
+
+def update_file_properties(
+    master_ids: Iterable[int | str],
+    properties: dict[str, Any],
+) -> dict[str, Any]:
+    """Set Vault properties on the latest version of each file (by master ID).
+
+    Creates a new property-only version. CAD-mapped properties reach the
+    file itself only after an ``Autodesk.Vault.SyncProperties`` job runs.
+    Returns ``{"updated": <count>, "files": [{id, masterId, name, ...}]}``.
+    """
+    ids = [int(i) for i in master_ids]
+    if not ids:
+        raise ValueError("master_ids must not be empty")
+    if not properties:
+        raise ValueError("properties must not be empty")
+    return _call_ps("UpdateFileProperties", {
+        "masterIds": ids,
+        "properties": properties,
+    })
+
+
 __all__ = [
     "VaultSDKError",
     "get_lifecycle_states",
@@ -371,4 +415,7 @@ __all__ = [
     "update_item_lifecycle_states",
     "update_file_lifecycle_states",
     "update_item_categories",
+    "checkout_file",
+    "undo_checkout_file",
+    "update_file_properties",
 ]

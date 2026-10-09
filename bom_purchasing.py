@@ -180,6 +180,16 @@ VAULT_FIELD_MAP: dict[str, str] = {
     "BOM Structure": "Source",
     "BomStructure": "Source",
     "ItemSource": "Source",
+    # Lower-case keys of the compact BOM rows the MCP tools return
+    # (vault_slim.item_bom).
+    "number": "Number",
+    "title": "Title",
+    "row": "Row Order",
+    "qty": "Item Qty",
+    "units": "Units",
+    "revision": "Revision",
+    "state": "State",
+    "description": "Description (Item,CO)",
 }
 
 
