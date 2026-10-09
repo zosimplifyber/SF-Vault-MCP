@@ -41,10 +41,11 @@ def normalize_pn(pn: str) -> str:
 
 
 def find_downloads(pn: str, downloads_dir: Path) -> dict[str, Path]:
-    """Newest STEP and PDF directly in downloads_dir whose name contains pn."""
+    """Newest STEP and PDF directly in downloads_dir whose name contains pn on a boundary."""
     found: dict[str, list[Path]] = {"step": [], "pdf": []}
+    pattern = re.compile(r"(?<![0-9A-Z])" + re.escape(pn) + r"(?![0-9A-Z])")
     for p in Path(downloads_dir).iterdir():
-        if not p.is_file() or pn not in p.name.upper():
+        if not p.is_file() or not pattern.search(p.name.upper()):
             continue
         suffix = p.suffix.lower()
         if suffix in STEP_SUFFIXES:

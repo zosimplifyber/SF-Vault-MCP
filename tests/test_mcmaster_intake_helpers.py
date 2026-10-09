@@ -86,3 +86,13 @@ def test_preview_store_take_once_and_expiry():
     now[0] = 11
     assert store.take(t2) is None
     assert store.take("nonsense") is None
+
+
+def test_find_downloads_matches_pn_on_boundaries_only(tmp_path):
+    _touch(tmp_path / "6100K112.STEP", 5000)
+    _touch(tmp_path / "6100K112.pdf", 5000)
+    with pytest.raises(mi.IntakeError):
+        mi.find_downloads("6100K11", tmp_path)
+    step = _touch(tmp_path / "6100K11_Thing.STEP", 1000)
+    pdf = _touch(tmp_path / "x-6100K11.pdf", 1000)
+    assert mi.find_downloads("6100K11", tmp_path) == {"step": step, "pdf": pdf}
