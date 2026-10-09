@@ -7,7 +7,7 @@ folder in Vault Explorer afterwards.
 
     python scripts/probes/probe_intake_sdk.py
     python scripts/probes/probe_intake_sdk.py --write
-    python scripts/probes/probe_intake_sdk.py --write --ipt C:\path\probe-part.ipt
+    python scripts/probes/probe_intake_sdk.py --write --ipt probe-part.ipt
 
 --ipt adds an existing .ipt to the probe folder, sets it to Part - Purchased,
 waits 10 s, then runs the Vendor Number search the intake uses and prints
