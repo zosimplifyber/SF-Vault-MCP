@@ -2130,6 +2130,10 @@ def create_mcp_server(api: VaultRestAPI, vault_id: str) -> FastMCP:
             "single-SOAP-call write."
         )
 
+    # Lifecycle, category, file-property and check-out writes (SOAP bridge).
+    import vault_write_tools
+    vault_write_tools.register(mcp, api, _resolved_vault, _resolve_item)
+
     # McMaster -> Microsoft List price updates (additive; safe no-op if absent).
     try:
         import supplier_pricing.mcp_tools as _supplier_pricing_tools

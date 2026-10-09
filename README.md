@@ -10,6 +10,7 @@ An MCP (Model Context Protocol) server that exposes Autodesk Vault REST API oper
 - Autodesk Vault Job Processor 2025+ on a reachable machine if you plan to submit publish/sync jobs
 - **Autodesk Vault Client (with an activated license) installed on any machine running the SDK / SOAP scripts** — `scripts/vault_sdk.ps1`, the diagnostic probes under `scripts/probes/` (e.g. `probe_edit_items.ps1`, `probe_vault_sdk.ps1`), and any GUI mode that performs writes. These scripts request a `Client` (per-machine) Vault license seat at sign-in and will fail with `VaultLicenseException` if no Vault Client is installed, no seat is available, or the same user is already signed in to Vault Explorer. The core REST server (`app.py` in `sse` / `stdio` mode) does not require this.
 - **`AdskLicensingSDK_8.dll` reachable from PowerShell's DLL search path.** The Vault SDK assemblies P/Invoke into this native library to acquire a license seat; without it on `$env:PATH`, every writable login flow fails with `"Failed to acquire a license"` even though a seat is available. The SDK scripts now prepend `C:\Program Files\Autodesk\Autodesk Vault 2025 SDK\bin\x64` (and the matching Vault Client `Explorer\` folder) to `$env:PATH` automatically — but if you set `$env:VAULT_SDK_BIN` to a non-default location, make sure that folder contains `AdskLicensingSDK_8.dll`. (For Vault 2020-era installs the file is named `AdskLicensingSDK_2.dll`; the scripts probe both names.)
+- **SDK assemblies that match the server's Vault version, and PowerShell 7.** Against the Vault 2026 server the 2025 SDK signs in but is refused with "The license obtained is incompatible with the server". `vault_sdk.ps1` therefore uses the Vault Client 2026 `Explorer\` assemblies when present (licensing DLL `AdskLicensingSDK_9.dll`). Those are built for .NET 8, which Windows PowerShell 5.1 cannot load, so install PowerShell 7 (`winget install Microsoft.PowerShell`); `vault_sdk.py` prefers `pwsh` automatically.
 - **A Vault user account with the Item Editor role assigned** if you intend to use SDK writes (`update_item_properties`, `update_item_lifecycle_states`, etc.). Read-only operations are unaffected. Have a Vault admin assign the role in **ADMS Console → Users → Roles**.
 
 ## Installation
@@ -269,6 +270,13 @@ about 120,000 raw.
 | `vault_generate_purchasing_sheet_from_file` | Build a sheet from a manually-exported BOM file (.xls/.xlsx/.csv) |
 | `vault_lookup_purchased_part` | Look up vendor / cost / lead-time for one part number |
 | `vault_get_purchased_items_reference_status` | Check the SharePoint reference file is reachable |
+| **Writes (SOAP SDK; preview first, `confirm=true` applies)** | |
+| `vault_change_item_state` | Move items between lifecycle states (WIP, In Review, Released) |
+| `vault_change_file_state` | Move files between lifecycle states; skips checked-out files |
+| `vault_change_item_category` | Change item category (items must be in Work in Progress) |
+| `vault_update_file_properties` | Set Vault properties on files, then queue SyncProperties for CAD files |
+| `vault_check_out_file` | Reserve a file without downloading it |
+| `vault_undo_check_out_file` | Free a file someone left checked out |
 | **Jobs** | |
 | `vault_get_job_queue_enabled` | Check whether the Vault job queue is enabled |
 | `vault_submit_job` | Submit a job to the Vault job queue (see caveats below) |

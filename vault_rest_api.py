@@ -933,6 +933,16 @@ class VaultRestAPI:
             "GET", f"/vaults/{resolved}/lifecycle-definitions", params={"limit": limit}
         )
 
+    async def get_lifecycle_definition(self, vault_id: str, definition_id: str) -> Dict[str, Any]:
+        """GET /vaults/{vaultId}/lifecycle-definitions/{id} — includes its states.
+
+        Not in the published OpenAPI spec, but Vault 2026 serves it.
+        """
+        resolved = vault_id or self._vault_id or ""
+        return await self._request(
+            "GET", f"/vaults/{resolved}/lifecycle-definitions/{definition_id}"
+        )
+
     # ------------------------------------------------------------------
     # Jobs
     # ------------------------------------------------------------------
