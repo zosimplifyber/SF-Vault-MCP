@@ -345,14 +345,24 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             return failed("category", exc)
         steps.append({"step": "category", "ok": True})
 
-        problems = await _verify(api, p["vault"], names["ipt"], sleep)
+        try:
+            problems = await _verify(api, p["vault"], names["ipt"], sleep)
+        except Exception as exc:
+            problems = [f"verify failed: {exc}"]
         steps.append({"step": "verify", "ok": not problems})
 
-        done = Path(cfg["downloads_dir"]) / DONE_FOLDER
-        done.mkdir(exist_ok=True)
-        for path in p["files"].values():
-            shutil.move(path, done / Path(path).name)
-        steps.append({"step": "tidy", "ok": True})
+        try:
+            done = Path(cfg["downloads_dir"]) / DONE_FOLDER
+            done.mkdir(exist_ok=True)
+            for path in p["files"].values():
+                try:
+                    shutil.move(path, done / Path(path).name)
+                except Exception as exc:
+                    raise IntakeError(f"could not move {Path(path).name}: {exc}") from exc
+            steps.append({"step": "tidy", "ok": True})
+        except Exception as exc:
+            problems.append(f"tidy failed, move the downloads by hand: {exc}")
+            steps.append({"step": "tidy", "ok": False, "error": str(exc)})
 
         return _dump({"applied": True, "verified": not problems, "cd_number": cd,
                       "vault_path": f"{folder_path}/{names['ipt']}", "problems": problems, "steps": steps})

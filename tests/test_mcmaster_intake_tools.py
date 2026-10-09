@@ -240,3 +240,27 @@ def test_commit_rejects_bad_generated_number(env, monkeypatch):
     monkeypatch.setattr(env.sdk, "generate_file_number", lambda sid: {"number": "PART-12"})
     out = commit(env, preview(env)["token"])
     assert out["applied"] is False and out["failed_step"] == "number"
+
+
+def test_commit_verify_exception_becomes_problem(env, monkeypatch):
+    import check_file_properties
+
+    async def boom(api, vault_id, file_name):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(check_file_properties, "fetch_file", boom)
+    out = commit(env, preview(env)["token"])
+    assert out["applied"] is True and out["verified"] is False
+    assert out["cd_number"] == "CD-001900" and out["vault_path"].endswith("CD-001900.ipt")
+    assert any("verify failed" in p and "network down" in p for p in out["problems"])
+
+
+def test_commit_tidy_exception_still_applied(env, monkeypatch):
+    def boom(src, dst):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr(mi.shutil, "move", boom)
+    out = commit(env, preview(env)["token"])
+    assert out["applied"] is True and out["cd_number"] == "CD-001900"
+    assert any("tidy failed" in p and "file in use" in p for p in out["problems"])
+    assert {"step": "tidy", "ok": False} .items() <= next(s for s in out["steps"] if s["step"] == "tidy").items()
