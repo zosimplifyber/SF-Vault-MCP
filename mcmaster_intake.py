@@ -140,6 +140,23 @@ async def find_by_vendor_number(api, vault: str, pn: str) -> Optional[dict[str, 
             "folder": (h.get("parentFolder") or {}).get("fullName")}
 
 
+LICENSE_AFTER_WRITE = (
+    "Vault refused the SDK licence seat. Close Vault Explorer and sign out of the Vault "
+    "add-in in Inventor, then check the files listed in already_in_vault before retrying.")
+
+
+async def _files_named(api, vault: str, cd: str) -> list[str]:
+    """Names of Vault files that are cd itself or start with 'cd.' or 'cd '."""
+    import vault_slim as slim
+    res = await api.search_files(vault_id=vault, query=cd, latest_only=True, limit=20)
+    if res.get("error"):
+        raise IntakeError(f"Could not check Vault for {cd}: {res.get('data')}")
+    low = cd.lower()
+    names = [str(r.get("name", "")) for r in slim._records(res.get("data"))]
+    return [n for n in names
+            if n.lower() == low or n.lower().startswith(low + ".") or n.lower().startswith(low + " ")]
+
+
 def _intake_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
     if config is None:
         cfg_path = Path(__file__).resolve().parent / "config.json"
@@ -312,20 +329,31 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             return err("Preview token is unknown, already used, or expired. Run the preview again.")
         steps: list[dict[str, Any]] = []
         written: list[dict[str, Any]] = []
+        state: dict[str, Any] = {"cd": None, "uncertain": []}
         sdk = _sdk()
 
         def failed(step: str, exc: Exception) -> str:
             out = {"applied": False, "failed_step": step, "error": str(exc), "steps": steps,
-                   "already_in_vault": written}
+                   "already_in_vault": written, "uncertain": list(state["uncertain"])}
+            if state["cd"]:
+                out["cd_number"] = state["cd"]
             if written:
                 out["remediation"] = "Delete or fix the files listed in already_in_vault in Vault Explorer."
             sdk_err = _sdk_error(exc)
             if "remediation" in sdk_err:
-                out["license"] = sdk_err["remediation"]
+                out["license"] = LICENSE_AFTER_WRITE if written else sdk_err["remediation"]
             return _dump(out)
 
         async def run(fn, *a, **kw):
             return await asyncio.to_thread(fn, *a, **kw)
+
+        async def write(names: list[str], fn, *a, **kw):
+            """A Vault write. If the reply is lost the write may still have
+            happened, so the names stay in state['uncertain'] until it returns."""
+            state["uncertain"] = list(names)
+            result = await asyncio.to_thread(fn, *a, **kw)
+            state["uncertain"] = []
+            return result
 
         # recheck: downloads unchanged and still not a duplicate
         try:
@@ -349,6 +377,12 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             cd = str((await run(sdk.generate_file_number, scheme["id"])).get("number") or "")
             if not re.match(r"^CD-\d{6}$", cd):
                 raise IntakeError(f"Vault generated {cd!r}, which is not a CD-###### number")
+            state["cd"] = cd
+            clash = await _files_named(api, p["vault"], cd)
+            if clash:
+                raise IntakeError(
+                    f"Vault generated {cd}, but Vault already has {', '.join(clash)}. "
+                    "The numbering scheme counter is behind. Nothing was written.")
         except Exception as exc:
             return failed("number", exc)
         steps.append({"step": "number", "ok": True, "cd_number": cd})
@@ -357,7 +391,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         if not p["folder_exists"]:
             try:
                 parent, name = folder_path.rsplit("/", 1)
-                await run(sdk.add_folder, parent, name)
+                await write([folder_path], sdk.add_folder, parent, name)
                 written.append({"name": folder_path, "kind": "folder"})
             except Exception as exc:
                 return failed("folder", exc)
@@ -380,16 +414,16 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             card["source"] = dict(card["source"], pdf=names["pdf"], read_on=card["source"].get("read_on") or date.today().isoformat())
             specs_local = local / names["specs"]
             specs_local.write_text(json.dumps(card, indent=2), encoding="utf-8")
-            pdf = await run(sdk.add_file, folder_path, str(pdf_local), names["pdf"], comment=f"McMaster {p['pn']} drawing")
+            pdf = await write([names["pdf"]], sdk.add_file, folder_path, str(pdf_local), names["pdf"], comment=f"McMaster {p['pn']} drawing")
             written.append(pdf)
-            specs = await run(sdk.add_file, folder_path, str(specs_local), names["specs"], comment=f"McMaster {p['pn']} spec card")
+            specs = await write([names["specs"]], sdk.add_file, folder_path, str(specs_local), names["specs"], comment=f"McMaster {p['pn']} spec card")
             written.append(specs)
         except Exception as exc:
             return failed("documents", exc)
         steps.append({"step": "documents", "ok": True})
 
         try:
-            part = await run(sdk.add_file, folder_path, str(ipt), names["ipt"],
+            part = await write([names["ipt"]], sdk.add_file, folder_path, str(ipt), names["ipt"],
                              attachment_file_ids=[pdf["id"], specs["id"]], comment=f"McMaster {p['pn']} intake")
             written.append(part)
         except Exception as exc:
@@ -401,8 +435,8 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
             for needed in (PART_CATEGORY, DOC_CATEGORY):
                 if needed not in cats:
                     raise IntakeError(f"Vault has no file category {needed!r}")
-            await run(sdk.update_file_categories, [part["masterId"]], cats[PART_CATEGORY], comment="McMaster intake")
-            await run(sdk.update_file_categories, [pdf["masterId"], specs["masterId"]], cats[DOC_CATEGORY], comment="McMaster intake")
+            await write([names["ipt"]], sdk.update_file_categories, [part["masterId"]], cats[PART_CATEGORY], comment="McMaster intake")
+            await write([names["pdf"], names["specs"]], sdk.update_file_categories, [pdf["masterId"], specs["masterId"]], cats[DOC_CATEGORY], comment="McMaster intake")
         except Exception as exc:
             return failed("category", exc)
         steps.append({"step": "category", "ok": True})

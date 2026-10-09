@@ -31,6 +31,12 @@ class FakeAPI:
         self.existing = existing or []
         self.props = props
         self.searches = []
+        self.file_hits = []
+        self.file_queries = []
+
+    async def search_files(self, vault_id, query, **kw):
+        self.file_queries.append((query, kw))
+        return {"error": False, "data": {"results": list(self.file_hits)}}
 
     async def get_property_definitions(self, vault_id, limit=200, cursor_state=None):
         return {"error": False, "data": {"results": [{"id": 77, "displayName": "Vendor Number", "systemName": "VendorNumber"}]}}
@@ -264,3 +270,71 @@ def test_commit_tidy_exception_still_applied(env, monkeypatch):
     assert out["applied"] is True and out["cd_number"] == "CD-001900"
     assert any("tidy failed" in p and "file in use" in p for p in out["problems"])
     assert {"step": "tidy", "ok": False} .items() <= next(s for s in out["steps"] if s["step"] == "tidy").items()
+
+
+def test_commit_fails_when_generated_cd_already_in_vault(env):
+    token = preview(env)["token"]
+    env.api.file_hits = [{"name": "CD-001900.iam", "id": 9}, {"name": "CD-0019001.ipt", "id": 10}]
+    out = commit(env, token)
+    assert out["applied"] is False and out["failed_step"] == "number"
+    assert "CD-001900.iam" in out["error"] and "behind" in out["error"]
+    assert "CD-0019001.ipt" not in out["error"]
+    assert env.api.file_queries[0][0] == "CD-001900"
+    assert env.api.file_queries[0][1] == {"latest_only": True, "limit": 20}
+    assert not any(c[0] in ("add_file", "add_folder") for c in env.sdk.calls)
+
+
+def test_commit_ignores_search_noise_for_cd(env):
+    env.api.file_hits = [{"name": "CD-0019001.ipt", "id": 10}]
+    out = commit(env, preview(env)["token"])
+    assert out["applied"] is True
+
+
+def test_failed_part_add_reports_uncertain_and_cd(env):
+    token = preview(env)["token"]
+    orig = env.sdk.add_file
+
+    def flaky(folder, local, name, **kw):
+        if name == "CD-001900.ipt":
+            raise TimeoutError("reply lost")
+        return orig(folder, local, name, **kw)
+
+    env.sdk.add_file = flaky
+    out = commit(env, token)
+    assert out["failed_step"] == "part"
+    assert out["cd_number"] == "CD-001900"
+    assert out["uncertain"] == ["CD-001900.ipt"]
+
+
+def test_failed_category_reports_uncertain_names(env):
+    token = preview(env)["token"]
+    env.sdk.fail_on = "update_file_categories"
+    out = commit(env, token)
+    assert out["uncertain"] == ["CD-001900.ipt"]
+
+
+def test_failed_before_number_has_no_cd_or_uncertain(env):
+    token = preview(env)["token"]
+    (env.dl / "90510A313.pdf").write_bytes(b"changed")
+    out = commit(env, token)
+    assert "cd_number" not in out and out["uncertain"] == []
+
+
+def test_licence_note_after_partial_write_does_not_claim_nothing_changed(env):
+    token = preview(env)["token"]
+    orig = env.sdk.update_file_categories
+
+    def lic(ids, cat, *, comment=""):
+        raise RuntimeError("Failed to acquire a license")
+
+    env.sdk.update_file_categories = lic
+    out = commit(env, token)
+    assert "Nothing was changed" not in out["license"]
+    assert "already_in_vault" in out["license"]
+
+
+def test_licence_note_original_when_nothing_written(env):
+    token = preview(env)["token"]
+    env.sdk.get_numbering_schemes = lambda: (_ for _ in ()).throw(RuntimeError("Failed to acquire a license"))
+    out = commit(env, token)
+    assert "Nothing was changed" in out["license"]
