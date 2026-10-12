@@ -64,7 +64,7 @@ Vault.
 ```
 Ribbon button (add-in, UI thread)
   ├─ BomReader      Inventor API  -> BomRow list -> tab-delimited .txt (temp)
-  ├─ PurchasingTool runs SFPurchasing.exe --bom <txt> --assembly <name> --out <dir> --json
+  ├─ PurchasingTool runs SFVaultTools.exe purchasing --bom <txt> --assembly <name> --out <dir> --json
   │                 (existing bom_purchasing engine, packaged as today's exe)
   └─ VaultPublisher VDF session    -> add or new version, category Documents
 ```
@@ -78,9 +78,9 @@ Ribbon button (add-in, UI thread)
 | `BomReader` | Add-in | Walk `AssemblyComponentDefinition.BOM` structured view into `BomRow`s. |
 | `VaultPublisher` | Add-in | Map the assembly's local path to its Vault folder through the connection's working folder; add or check out / check in the workbook; set category. |
 | `PurchasingButton` | Add-in | Ribbon button, busy cursor, result message. |
-| `purchasing_standalone.py --bom ... --json` | Python | Headless mode: no window; prints `{"ok", "workbook", "lines", "unmatched": [...], "error"}`. The GUI stays the default. |
+| `purchasing_standalone.py purchasing --bom ... --json` (packaged as SFVaultTools.exe) | Python | Headless mode: no window; prints `{"ok", "workbook", "lines", "unmatched": [...], "error"}`. The GUI stays the default. |
 
-The tool's path: `SFPurchasing.exe` installed next to the add-in by
+The tool's path: `SFVaultTools.exe` installed next to the add-in by
 `Install-VaultBridge.ps1` (built from `purchasing_standalone.py` with the
 existing PyInstaller spec). Engineers need no Python.
 
