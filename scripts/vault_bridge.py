@@ -7,6 +7,7 @@ before. Spec: docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -62,11 +63,15 @@ def _call(op: str, body: dict[str, Any] | None = None, *, timeout: float = DEFAU
     except (TimeoutError, socket.timeout):
         raise BridgeError("timeout", f"The bridge did not answer {op} within {timeout:g} s. It may still have finished; check Vault.") from None
     except urllib.error.URLError as exc:
+        # Raised before any response: nothing was done.
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise BridgeError("timeout", f"The bridge did not answer {op} within {timeout:g} s. It may still have finished; check Vault.") from None
         raise BridgeUnavailable(NOT_RUNNING) from exc
-    except ConnectionError as exc:
+    except ConnectionRefusedError as exc:
         raise BridgeUnavailable(NOT_RUNNING) from exc
+    except (ConnectionError, http.client.HTTPException):
+        # Dropped after the request was sent: the write may have completed.
+        raise BridgeError("connection_lost", f"The bridge connection dropped during {op}. It may still have finished; check Vault.") from None
 
 
 def status() -> dict[str, Any]:

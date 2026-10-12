@@ -27,11 +27,31 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(type(self).delay)
         status, payload = type(self).replies.get(op, (200, {}))
         data = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except ConnectionError:
+            pass  # client already gave up (timeout test)
+
+    def log_message(self, *args):
+        pass
+
+
+class QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        pass
+
+
+class DroppingHandler(BaseHTTPRequestHandler):
+    """Reads the request, then closes the socket without replying."""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        self.close_connection = True
 
     def log_message(self, *args):
         pass
@@ -40,7 +60,7 @@ class Handler(BaseHTTPRequestHandler):
 @pytest.fixture
 def server(monkeypatch, tmp_path):
     Handler.replies, Handler.seen, Handler.delay = {}, [], 0.0
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = QuietServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     monkeypatch.setattr(vb, "BASE_URL", f"http://127.0.0.1:{httpd.server_port}")
     token_file = tmp_path / "token"
@@ -48,6 +68,24 @@ def server(monkeypatch, tmp_path):
     monkeypatch.setattr(vb, "token_path", lambda: token_file)
     yield Handler
     httpd.shutdown()
+    httpd.server_close()
+
+
+def test_dropped_connection_after_send_is_uncertain(monkeypatch, tmp_path):
+    httpd = QuietServer(("127.0.0.1", 0), DroppingHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setattr(vb, "BASE_URL", f"http://127.0.0.1:{httpd.server_port}")
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN, encoding="utf-8")
+    monkeypatch.setattr(vb, "token_path", lambda: token_file)
+    try:
+        with pytest.raises(vb.BridgeError) as info:
+            vb.add_file("$/X", r"C:\Vault Workspace\x.pdf", "x.pdf")
+        assert info.value.code == "connection_lost"
+        assert "check Vault" in str(info.value)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_sends_token_and_body(server):
