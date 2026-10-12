@@ -246,35 +246,61 @@ internal static class VaultFiles
                ?? throw new BridgeException("not_found", $"Vault has no file property {name}.");
     }
 
-    /// <summary>Latest file whose Vendor Number property matches and whose Vendor/Vendor Number give the same duplicate key as the plan.</summary>
+    /// <summary>
+    /// Latest file whose Vendor/Vendor Number give the same duplicate key as the plan. Fast pass: Vendor Number contains the longest token.
+    /// Complete pass: every latest file whose Vendor property contains the data-card vendor text, keys compared in code.
+    /// More than 5000 hits in either pass throws BridgeException("duplicate"): the check is inconclusive.
+    /// </summary>
     public static WsFile? FindByVendorNumber(string vendor, string vendorNumber)
     {
-        var ds = Conn.WebServiceManager.DocumentService;
         var numDef = FilePropDef("Vendor Number");
         var vendorDef = FilePropDef("Vendor");
         var wanted = ImportRules.DuplicateKey(vendor, vendorNumber);
-        // Contains on the longest whitespace-delimited token: stored numbers with internal spaces ("90510A 313") still contain it.
-        var needle = (vendorNumber ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).OrderByDescending(t => t.Length).FirstOrDefault() ?? "";
-        if (needle.Length == 0) return null;
-        const int MaxHits = 500;
-        var cond = new SrchCond { PropDefId = numDef.Id, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = needle, SrchRule = SearchRuleType.Must };
+        var token = (vendorNumber ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).OrderByDescending(t => t.Length).FirstOrDefault() ?? "";
+        if (token.Length > 0)
+        {
+            var fast = SearchByProperty(numDef.Id, token, $"Too many Vault files match {token}; check for an existing part by hand.");
+            var hit = FirstKeyMatch(fast, numDef.Id, vendorDef.Id, wanted);
+            if (hit is not null) return hit;
+        }
+        var vendorText = ImportRules.DataCardVendor((vendor ?? "").Trim());
+        if (vendorText.Length == 0) return null;
+        var all = SearchByProperty(vendorDef.Id, vendorText, $"Too many Vault files for vendor {vendor}; check for an existing part by hand.");
+        return FirstKeyMatch(all, numDef.Id, vendorDef.Id, wanted);
+    }
+
+    private const int MaxSearchHits = 5000;
+
+    private static List<WsFile> SearchByProperty(long propDefId, string text, string tooManyMessage)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        var cond = new SrchCond { PropDefId = propDefId, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = text, SrchRule = SearchRuleType.Must };
         var hits = new List<WsFile>();
         string bookmark = string.Empty;
-        SrchStatus? status = null;
         var root = ds.GetFolderRoot();
-        do
+        while (true)
         {
-            var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out status);
+            var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out var status);
             if (page is null || page.Length == 0) break;
             hits.AddRange(page);
-            if (hits.Count >= MaxHits && status is not null && hits.Count < status.TotalHits)
-                throw new BridgeException("duplicate", $"Too many Vault files match {needle}; check for an existing part by hand.");
-        } while (status is not null && hits.Count < status.TotalHits);
-        if (hits.Count == 0) return null;
-        var ids = hits.Select(f => f.Id).ToArray();
-        var props = Conn.WebServiceManager.PropertyService.GetProperties("FILE", ids, new[] { numDef.Id, vendorDef.Id }) ?? Array.Empty<PropInst>();
-        string Val(long fileId, long defId) => props.FirstOrDefault(p => p.EntityId == fileId && p.PropDefId == defId)?.Val?.ToString() ?? "";
-        return hits.FirstOrDefault(f => ImportRules.DuplicateKey(Val(f.Id, vendorDef.Id), Val(f.Id, numDef.Id)) == wanted);
+            if (hits.Count >= MaxSearchHits) throw new BridgeException("duplicate", tooManyMessage);
+            if (status is null || hits.Count >= status.TotalHits) break;
+        }
+        return hits;
+    }
+
+    private static WsFile? FirstKeyMatch(List<WsFile> hits, long numDefId, long vendorDefId, string wantedKey)
+    {
+        var ps = Conn.WebServiceManager.PropertyService;
+        for (var i = 0; i < hits.Count; i += 200)
+        {
+            var batch = hits.Skip(i).Take(200).ToList();
+            var props = ps.GetProperties("FILE", batch.Select(f => f.Id).ToArray(), new[] { numDefId, vendorDefId }) ?? Array.Empty<PropInst>();
+            string Val(long fileId, long defId) => props.FirstOrDefault(p => p.EntityId == fileId && p.PropDefId == defId)?.Val?.ToString() ?? "";
+            var hit = batch.FirstOrDefault(f => ImportRules.DuplicateKey(Val(f.Id, vendorDefId), Val(f.Id, numDefId)) == wantedKey);
+            if (hit is not null) return hit;
+        }
+        return null;
     }
 
     /// <summary>Vault folder path of a file's folder.</summary>
