@@ -172,7 +172,7 @@ def _intake_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-ATTACHMENT_ASSOC = "Attachment"   # REST fileAssocType for attachments; UNVERIFIED until scripts/probes/probe_intake_sdk.py --write is run live
+ATTACHMENT_ASSOC = "Attachment"   # REST fileAssocType for attachments; confirmed by the live bridge smoke test, not the SDK probe
 DEPENDENCY_ASSOC = "Dependency"
 MAX_PARTS = 500
 _BARE_CD = re.compile(r"^CD-\d{6}$", re.IGNORECASE)

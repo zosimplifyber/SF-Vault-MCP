@@ -128,9 +128,10 @@ folder; anything else returns `{"error": "path_not_allowed"}`.
 
 - `inventor-addin/` folder in the Vault-MCP repo: C# project, `.addin`
   manifest, `Install-VaultBridge.ps1`.
-- The install script copies the built DLL to
-  `%APPDATA%\Simplifyber\VaultBridge\` and the `.addin` file to
-  `%APPDATA%\Autodesk\Inventor 2026\Addins\`. No admin rights.
+- The install script copies the built DLLs and the `.addin` file to
+  `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge\` (a per-user
+  ApplicationPlugins folder, like Vault's own add-in). The token and log stay
+  in `%APPDATA%\Simplifyber\VaultBridge\`. No admin rights.
 - Build needs the .NET 8 SDK on the build PC only.
 
 ## Error handling

@@ -303,7 +303,9 @@ start Inventor and **sign in to Vault there**. All intake writes run on that ses
 so Vault Explorer can stay open and no extra licence seat is used. Set Inventor's
 STEP import option to Convert Model.
 
-Before first use, run `py -3.14 scripts/probes/probe_intake_sdk.py --write` once. To also test an Inventor part, save a scratch .ipt with custom iProperty "Vendor Number" = "PROBE-0000" and add `--ipt part.ipt`. The probe prints the numbering scheme name. Put that name in `config.json` under `intake.numbering_scheme`.
+Optional: to find the numbering scheme name, run `py -3.14 -c "import sys; sys.path.insert(0,'scripts'); import vault_bridge as b; print(b.get_numbering_schemes())"` and put the name in `config.json` under `intake.numbering_scheme`. If it is empty, the default scheme is used.
+
+A write that times out may still have completed, so check Vault before retrying. The bridge loads only in Inventor 2026.
 
 ## Known issues / caveats
 
