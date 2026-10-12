@@ -1,0 +1,80 @@
+using System.Text.RegularExpressions;
+
+namespace SFVaultBridge.Core;
+
+public sealed record Prefill(string? Vendor, string VendorNumber, string Description);
+
+/// <summary>Best-effort form prefill from vendor file names. Never throws.</summary>
+public static class VendorFileNames
+{
+    private static readonly Regex McMaster = new(@"^(?<pn>\d{3,5}[A-Z]\d{1,4})(?:_(?<desc>.+))?$", RegexOptions.IgnoreCase);
+
+    public static Prefill FromFiles(string stepPath, string? pdfPath)
+    {
+        var step = Parse(Path.GetFileNameWithoutExtension(stepPath ?? ""));
+        if (pdfPath is null || step.Description.Length > 0) return step;
+        var pdf = Parse(Path.GetFileNameWithoutExtension(pdfPath));
+        return step with { Description = pdf.Description, VendorNumber = step.VendorNumber.Length > 0 ? step.VendorNumber : pdf.VendorNumber };
+    }
+
+    private static Prefill Parse(string stem)
+    {
+        stem = (stem ?? "").Trim();
+        var m = McMaster.Match(stem);
+        if (m.Success) return new Prefill("McMaster-Carr", m.Groups["pn"].Value.ToUpperInvariant(), m.Groups["desc"].Value.Trim());
+        var i = stem.IndexOf('_');
+        return i > 0 ? new Prefill(null, stem[..i].Trim(), stem[(i + 1)..].Trim()) : new Prefill(null, "", stem);
+    }
+}
+
+public sealed record SelectionResult(string? Step, string? Pdf, string? Error);
+
+public static class SelectionCheck
+{
+    public static SelectionResult Check(IEnumerable<string> paths)
+    {
+        var list = (paths ?? Array.Empty<string>()).ToList();
+        var steps = list.Where(p => p.EndsWith(".stp", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".step", StringComparison.OrdinalIgnoreCase)).ToList();
+        var pdfs = list.Where(p => p.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (steps.Count == 1 && pdfs.Count == 1) return new SelectionResult(steps[0], pdfs[0], null);
+        if (steps.Count > 1 || pdfs.Count > 1) return new SelectionResult(null, null, "Select exactly one STEP file and one PDF.");
+        if (steps.Count == 0 && pdfs.Count == 0) return new SelectionResult(null, null, "Select the vendor's STEP file and its PDF.");
+        return new SelectionResult(null, null, steps.Count == 0 ? "Also select the STEP file." : "Also select the PDF.");
+    }
+}
+
+public sealed record ImportPlan(string Vendor, string Subfolder, string VendorNumber, string Description, string Material, string MaterialFinish, string Designer);
+
+public static class ImportRules
+{
+    public const string LibraryRoot = "$/DESIGNS/Simplifyber Library";
+    private static readonly char[] Bad = { '/', '\\', ':', '*', '?', '"', '<', '>', '|' };
+
+    public static bool IsValidName(string name) =>
+        !string.IsNullOrWhiteSpace(name) && name == name.Trim() && !name.EndsWith('.') && name.IndexOfAny(Bad) < 0;
+
+    public static IReadOnlyList<string> Validate(ImportPlan p)
+    {
+        var errors = new List<string>();
+        if (!IsValidName(p.Vendor ?? "")) errors.Add("Vendor: choose a vendor, or a new name without / \\ : * ? \" < > | and no trailing dot or space.");
+        var sub = p.Subfolder ?? "";
+        if (sub.Length > 0 && sub.Split('/').Any(s => !IsValidName(s))) errors.Add("Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space.");
+        if (string.IsNullOrWhiteSpace(p.VendorNumber)) errors.Add("Vendor Number is required.");
+        if (string.IsNullOrWhiteSpace(p.Description)) errors.Add("Description is required.");
+        return errors;
+    }
+
+    public static string VaultFolder(ImportPlan p) =>
+        string.IsNullOrEmpty(p.Subfolder) ? $"{LibraryRoot}/{p.Vendor}" : $"{LibraryRoot}/{p.Vendor}/{p.Subfolder.Trim('/')}";
+
+    public static string DataCardVendor(string vendorFolder) =>
+        string.Equals(vendorFolder, "McMaster-Carr", StringComparison.OrdinalIgnoreCase) ? "McMASTER-CARR" : vendorFolder;
+
+    public static string PartFileName(string cd) => cd + ".ipt";
+
+    public static string PdfFileName(string cd, ImportPlan p) => $"{cd} {p.Vendor} {p.VendorNumber.Trim()}.pdf";
+
+    public static string DuplicateKey(string vendor, string vendorNumber) =>
+        Regex.Replace(DataCardVendor((vendor ?? "").Trim()), @"\s+", "").ToUpperInvariant() + "|" +
+        Regex.Replace(vendorNumber ?? "", @"\s+", "").ToUpperInvariant();
+}
