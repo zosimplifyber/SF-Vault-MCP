@@ -52,7 +52,13 @@ def _call(op: str, body: dict[str, Any] | None = None, *, timeout: float = DEFAU
             return json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
         try:
-            payload = json.loads(exc.read() or b"{}")
+            error_body = exc.read()
+        except (TimeoutError, socket.timeout):
+            raise BridgeError("timeout", f"The bridge did not answer {op} within {timeout:g} s. It may still have finished; check Vault.") from None
+        except (ConnectionError, http.client.HTTPException):
+            raise BridgeError("connection_lost", f"The bridge connection dropped during {op}. It may still have finished; check Vault.") from None
+        try:
+            payload = json.loads(error_body or b"{}")
         except ValueError:
             payload = {}
         code = payload.get("error") or f"http_{exc.code}"

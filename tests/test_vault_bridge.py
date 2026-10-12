@@ -71,6 +71,39 @@ def server(monkeypatch, tmp_path):
     httpd.server_close()
 
 
+class TruncatedErrorHandler(BaseHTTPRequestHandler):
+    """Sends a 500 whose Content-Length promises 100 bytes, then closes after 5."""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "100")
+        self.end_headers()
+        self.wfile.write(b'{"err')
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+def test_truncated_error_body_is_uncertain(monkeypatch, tmp_path):
+    httpd = QuietServer(("127.0.0.1", 0), TruncatedErrorHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    monkeypatch.setattr(vb, "BASE_URL", f"http://127.0.0.1:{httpd.server_port}")
+    token_file = tmp_path / "token"
+    token_file.write_text(TOKEN, encoding="utf-8")
+    monkeypatch.setattr(vb, "token_path", lambda: token_file)
+    try:
+        with pytest.raises(vb.BridgeError) as info:
+            vb.add_file("$/X", r"C:\Vault Workspace\x.pdf", "x.pdf")
+        assert info.value.code == "connection_lost"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_dropped_connection_after_send_is_uncertain(monkeypatch, tmp_path):
     httpd = QuietServer(("127.0.0.1", 0), DroppingHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
