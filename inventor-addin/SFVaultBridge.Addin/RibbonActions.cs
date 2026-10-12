@@ -23,7 +23,8 @@ internal sealed class RibbonActions
     public void Create()
     {
         Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
-        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, Review);
+        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
+        Add("Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
         Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
     }
 
@@ -198,8 +199,9 @@ internal sealed class RibbonActions
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }
 
-    private void Review(Inv.AssemblyDocument asm)
+    private void BuildPackage(Inv.AssemblyDocument asm, PackageMode mode)
     {
+        var assemblyMode = mode == PackageMode.Assembly;
         var (folder, vaultFolder, stem) = Locate(asm);
         var lines = BomOrdering.Flatten(BomReader.Read(asm));
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
@@ -249,7 +251,7 @@ internal sealed class RibbonActions
                                 VaultFiles.AcquireLatest(new[] { file });
                             var pdf = System.IO.Path.Combine(temp, $"{pdfCount++:D3}.pdf");
                             DrawingExporter.Export(_app, local, pdf);
-                            drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf));
+                            drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf, assemblyMode ? VaultFiles.StateOf(file) : ""));
                         }
                         catch (Exception ex)
                         {
@@ -296,6 +298,11 @@ internal sealed class RibbonActions
                     category = f is null ? null : VaultFiles.CategoryName(f);
                 }
                 catch (Exception ex) { _log($"review category lookup for {n.PartNumber} failed: {ex.Message}"); }
+                if (assemblyMode)
+                {
+                    if (ReviewRules.IncludeInAssemblyPackage(n, category)) Collect(n.PartNumber, n.FullPath);
+                    continue;
+                }
                 switch (ReviewRules.Classify(n, category))
                 {
                     case PartKind.Make: Collect(n.PartNumber, n.FullPath); break;
@@ -311,15 +318,18 @@ internal sealed class RibbonActions
             System.IO.File.WriteAllText(manifest, ReviewManifest.ToJson(stem,
                 Convert.ToString(asm.PropertySets["Design Tracking Properties"]["Description"].Value) ?? "",
                 conn.UserName, asmFile?.FileLfCyc?.LfCycStateName ?? "", asmFile?.VerNum.ToString() ?? "",
-                DateTime.Now, drawings, missing, failed, purchased, noVendor));
+                DateTime.Now, drawings, missing, failed, purchased, noVendor, mode, assemblyMode ? VaultFiles.RevisionOf(asmFile) : ""));
 
-            var name = VaultPaths.ReviewName(asm.FullFileName);
+            var name = assemblyMode ? VaultPaths.AssemblyPackageName(asm.FullFileName) : VaultPaths.ReviewName(asm.FullFileName);
             var outPdf = System.IO.Path.Combine(temp, name);
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
-            if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The review tool failed.");
-            Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Design review for {stem}",
-                    $"{result.Count} pages, {drawings.Count} drawings, {purchased.Count} vendor PDFs, {missing.Count} missing, {noVendor.Count} without vendor drawing, {failed.Count} could not export.");
+            if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? (assemblyMode ? "The assembly package tool failed." : "The review tool failed."));
+            var summary = assemblyMode
+                ? $"{result.Count} pages, {drawings.Count} drawings, {result.Unreleased} not released, {missing.Count} missing, {failed.Count} could not export."
+                : $"{result.Count} pages, {drawings.Count} drawings, {purchased.Count} vendor PDFs, {missing.Count} missing, {noVendor.Count} without vendor drawing, {failed.Count} could not export.";
+            Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name,
+                    assemblyMode ? $"Assembly package for {stem}" : $"Design review for {stem}", summary);
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }

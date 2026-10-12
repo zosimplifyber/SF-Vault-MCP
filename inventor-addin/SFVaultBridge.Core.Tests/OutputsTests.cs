@@ -186,6 +186,9 @@ public class OutputsTests
         Assert.Null(ok.Note);
         var noted = ToolResults.Parse("{\"ok\": true, \"workbook\": \"a\", \"lines\": 1, \"reference_note\": \"Prices from the purchasing Microsoft List.\"}", "workbook", "lines");
         Assert.Equal("Prices from the purchasing Microsoft List.", noted.Note);
+        Assert.Equal(0, ok.Unreleased);
+        var pkg = ToolResults.Parse("{\"ok\": true, \"pdf\": \"a.pdf\", \"pages\": 9, \"mode\": \"assembly\", \"unreleased\": 2}", "pdf", "pages");
+        Assert.Equal(9, pkg.Count); Assert.Equal(2, pkg.Unreleased);
         Assert.False(ToolResults.Parse(null, "pdf", "pages").Ok);
         Assert.Contains("bridge.log", ToolResults.Parse("not json", "pdf", "pages").Error);
     }

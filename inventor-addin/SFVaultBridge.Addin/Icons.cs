@@ -145,4 +145,28 @@ internal static class Icons
         }
         return bmp;
     }
+
+    /// <summary>Clipboard: dark board, paper sheet, metal clip and a green check mark.</summary>
+    public static Bitmap ClipboardCheck(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var board = new RectangleF(S(5), S(4), S(22), S(26));
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillRectangle(b, board);
+            g.DrawRectangle(pen, board.X, board.Y, board.Width, board.Height);
+            var sheet = new RectangleF(S(8), S(8), S(16), S(19));
+            using (var b = new SolidBrush(Paper)) g.FillRectangle(b, sheet);
+            g.DrawRectangle(pen, sheet.X, sheet.Y, sheet.Width, sheet.Height);
+            var clip = new RectangleF(S(11), S(1.5f), S(10), S(5.5f));
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillRectangle(b, clip);
+            g.DrawRectangle(pen, clip.X, clip.Y, clip.Width, clip.Height);
+            using var tick = new Pen(Green, big ? 3f : 2f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLines(tick, new[] { new PointF(S(11.5f), S(18)), new PointF(S(15), S(22)), new PointF(S(21), S(13)) });
+        }
+        return bmp;
+    }
 }

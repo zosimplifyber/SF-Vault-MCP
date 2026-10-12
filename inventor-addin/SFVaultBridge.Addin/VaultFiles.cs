@@ -20,6 +20,18 @@ internal static class VaultFiles
 
     public static string? CategoryName(WsFile f) => f.Cat?.CatName;
 
+    /// <summary>Lifecycle state name of the file's latest version; re-reads the file when the search result did not carry it. Empty when unknown.</summary>
+    public static string StateOf(WsFile f)
+    {
+        var s = f.FileLfCyc?.LfCycStateName;
+        if (!string.IsNullOrEmpty(s)) return s;
+        try { return Conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(f.MasterId)?.FileLfCyc?.LfCycStateName ?? ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>Vault revision label of the file (for example A or 3); empty when none.</summary>
+    public static string RevisionOf(WsFile? f) => f?.FileRev?.Label ?? "";
+
     private static void ClearReadOnly(string path)
     {
         if (!System.IO.File.Exists(path)) return;
