@@ -14,6 +14,11 @@ internal sealed class StepImporter : IStepImporter
     public string InventorVersion => _app.SoftwareVersion.DisplayVersion;
 
     public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom)
+        => ImportStepAsPart(stepPath, outIpt, design, custom, null, null);
+
+    /// <summary>As above; when material is non-empty it is looked up in the active material library and applied. A missing or unappliable material adds a line to warnings and never fails the import.</summary>
+    public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom,
+                                   string? material, ICollection<string>? warnings)
     {
         if (!System.IO.File.Exists(stepPath)) throw new BridgeException("not_found", $"STEP file not found: {stepPath}");
         if (System.IO.File.Exists(outIpt)) throw new BridgeException("exists", $"Refusing to overwrite existing file {outIpt}");
@@ -39,6 +44,12 @@ internal sealed class StepImporter : IStepImporter
                 catch (Exception ex) when (ex is COMException or ArgumentException) { user.Add(value, name); }
             }
 
+            if (!string.IsNullOrWhiteSpace(material))
+            {
+                var warning = TryApplyMaterial((Inv.PartDocument)doc, material.Trim());
+                if (warning is not null) warnings?.Add(warning);
+            }
+
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outIpt)!);
             doc.SaveAs(outIpt, false);
             if (!System.IO.File.Exists(outIpt))
@@ -49,6 +60,30 @@ internal sealed class StepImporter : IStepImporter
         {
             try { doc?.Close(true); } catch (COMException) { }
             try { _app.SilentOperation = previousSilent; } catch (COMException) { }
+        }
+    }
+
+    private string? TryApplyMaterial(Inv.PartDocument part, string material)
+    {
+        try
+        {
+            Inv.Asset? found = null;
+            foreach (Inv.Asset a in part.MaterialAssets)
+                if (string.Equals(a.DisplayName, material, StringComparison.OrdinalIgnoreCase)) { found = a; break; }
+            if (found is null)
+            {
+                Inv.Asset? source = null;
+                foreach (Inv.Asset a in _app.ActiveMaterialLibrary.MaterialAssets)
+                    if (string.Equals(a.DisplayName, material, StringComparison.OrdinalIgnoreCase)) { source = a; break; }
+                if (source is null) return $"Material '{material}' is not in Inventor's active material library; the part keeps its default material.";
+                found = source.CopyTo((Inv.Document)part, true);
+            }
+            part.ActiveMaterial = found;
+            return null;
+        }
+        catch (Exception ex) when (ex is COMException or ArgumentException or InvalidCastException)
+        {
+            return $"Could not apply material '{material}': {ex.Message}";
         }
     }
 }

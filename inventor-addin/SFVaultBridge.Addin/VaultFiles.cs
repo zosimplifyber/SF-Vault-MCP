@@ -96,7 +96,7 @@ internal static class VaultFiles
         return (result, existing is not null, warning);
     }
 
-    private static void SetCategory(long masterId, string category, string comment)
+    internal static void SetCategory(long masterId, string category, string comment)
     {
         var cat = Conn.WebServiceManager.CategoryService.GetCategoriesByEntityClassId("FILE", true)
             .FirstOrDefault(c => c.Name == category) ?? throw new BridgeException("not_found", $"Vault has no file category {category}.");
@@ -198,6 +198,145 @@ internal static class VaultFiles
             settings.AddFileToAcquire(new VDF.Vault.Currency.Entities.FileIteration(conn, f), VDF.Vault.Settings.AcquireFilesSettings.AcquisitionOption.Download);
         var results = conn.FileManager.AcquireFiles(settings);
         return results.FileResults.Select(r => r.LocalPath.FullPath).ToList();
+    }
+
+    // ---- Import New Part support ----
+
+    private static Folder? FolderAt(string vaultPath)
+    {
+        var f = Conn.WebServiceManager.DocumentService.FindFoldersByPaths(new[] { vaultPath })?.FirstOrDefault();
+        return f is null || f.Id <= 0 ? null : f;
+    }
+
+    /// <summary>Immediate subfolder names of the Library root, sorted.</summary>
+    public static IReadOnlyList<string> LibraryVendors()
+    {
+        var root = FolderAt(ImportRules.LibraryRoot);
+        if (root is null) return Array.Empty<string>();
+        var kids = Conn.WebServiceManager.DocumentService.GetFoldersByParentId(root.Id, false) ?? Array.Empty<Folder>();
+        return kids.Select(k => k.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>Folders below the vendor folder as relative paths ("a", "a/b"), sorted, at most 3 levels deep.</summary>
+    public static IReadOnlyList<string> Subfolders(string vendor)
+    {
+        var start = FolderAt($"{ImportRules.LibraryRoot}/{vendor}");
+        var result = new List<string>();
+        if (start is null) return result;
+        var ds = Conn.WebServiceManager.DocumentService;
+        void Walk(long parentId, string prefix, int depth)
+        {
+            if (depth > 3) return;
+            foreach (var k in ds.GetFoldersByParentId(parentId, false) ?? Array.Empty<Folder>())
+            {
+                var rel = prefix.Length == 0 ? k.Name : prefix + "/" + k.Name;
+                result.Add(rel);
+                Walk(k.Id, rel, depth + 1);
+            }
+        }
+        Walk(start.Id, "", 1);
+        return result.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static PropDef FilePropDef(string name)
+    {
+        var defs = Conn.WebServiceManager.PropertyService.GetPropertyDefinitionsByEntityClassId("FILE") ?? Array.Empty<PropDef>();
+        return defs.FirstOrDefault(d => string.Equals(d.DispName, name, StringComparison.OrdinalIgnoreCase))
+               ?? defs.FirstOrDefault(d => string.Equals(d.SysName, name, StringComparison.OrdinalIgnoreCase))
+               ?? throw new BridgeException("not_found", $"Vault has no file property {name}.");
+    }
+
+    /// <summary>Latest file whose Vendor Number property matches and whose Vendor/Vendor Number give the same duplicate key as the plan.</summary>
+    public static WsFile? FindByVendorNumber(string vendor, string vendorNumber)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        var numDef = FilePropDef("Vendor Number");
+        var vendorDef = FilePropDef("Vendor");
+        var wanted = ImportRules.DuplicateKey(vendor, vendorNumber);
+        // Contains on the whitespace-free number: a superset of equality, so stored case/spacing variants still turn up.
+        var needle = System.Text.RegularExpressions.Regex.Replace(vendorNumber ?? "", @"\s+", "");
+        if (needle.Length == 0) return null;
+        var cond = new SrchCond { PropDefId = numDef.Id, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = needle, SrchRule = SearchRuleType.Must };
+        var hits = new List<WsFile>();
+        string bookmark = string.Empty;
+        SrchStatus? status = null;
+        var root = ds.GetFolderRoot();
+        do
+        {
+            var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out status);
+            if (page is null || page.Length == 0) break;
+            hits.AddRange(page);
+        } while (status is not null && hits.Count < status.TotalHits);
+        if (hits.Count == 0) return null;
+        var ids = hits.Select(f => f.Id).ToArray();
+        var props = Conn.WebServiceManager.PropertyService.GetProperties("FILE", ids, new[] { numDef.Id, vendorDef.Id }) ?? Array.Empty<PropInst>();
+        string Val(long fileId, long defId) => props.FirstOrDefault(p => p.EntityId == fileId && p.PropDefId == defId)?.Val?.ToString() ?? "";
+        return hits.FirstOrDefault(f => ImportRules.DuplicateKey(Val(f.Id, vendorDef.Id), Val(f.Id, numDef.Id)) == wanted);
+    }
+
+    /// <summary>Vault folder path of a file's folder.</summary>
+    public static string FolderPathOf(WsFile f) => Conn.WebServiceManager.DocumentService.GetFolderById(f.FolderId).FullName;
+
+    /// <summary>Next CD number from the default FILE numbering scheme; throws BridgeException("number") when it is unusable or taken.</summary>
+    public static string NextPartNumber()
+    {
+        var ws = Conn.WebServiceManager;
+        var schemes = ws.NumberingService.GetNumberingSchemes("FILE", NumSchmType.Activated) ?? Array.Empty<NumSchm>();
+        var scheme = schemes.FirstOrDefault(s => s.IsDflt) ?? throw new BridgeException("number", "Vault has no default file numbering scheme.");
+        var cd = ws.DocumentService.GenerateFileNumber(scheme.SchmID, Array.Empty<string>()) ?? "";
+        if (!System.Text.RegularExpressions.Regex.IsMatch(cd, @"^CD-\d{6}$"))
+            throw new BridgeException("number", $"Vault generated '{cd}', which is not a CD-###### number.");
+        var clash = FindByNameContaining(cd).Where(f => f.Name.StartsWith(cd + ".", StringComparison.OrdinalIgnoreCase)).Select(f => f.Name).ToList();
+        if (clash.Count > 0)
+            throw new BridgeException("number", $"Vault generated {cd}, but Vault already has {string.Join(", ", clash)}. The numbering counter is behind. Nothing was written.");
+        return cd;
+    }
+
+    /// <summary>Creates every missing level of vaultPath under the Library root; returns the folder paths it created.</summary>
+    public static IReadOnlyList<string> EnsureFolder(string vaultPath)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        if (!vaultPath.StartsWith(ImportRules.LibraryRoot, StringComparison.Ordinal))
+            throw new BridgeException("folder", $"{vaultPath} is not under {ImportRules.LibraryRoot}.");
+        var created = new List<string>();
+        var parent = FolderAt(ImportRules.LibraryRoot) ?? throw new BridgeException("not_found", $"Vault folder {ImportRules.LibraryRoot} does not exist.");
+        var current = ImportRules.LibraryRoot;
+        foreach (var level in vaultPath[ImportRules.LibraryRoot.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            current += "/" + level;
+            var existing = FolderAt(current);
+            if (existing is null)
+            {
+                existing = ds.AddFolder(level, parent.Id, parent.IsLib);
+                created.Add(current);
+            }
+            parent = existing;
+        }
+        return created;
+    }
+
+    /// <summary>Adds a new file with optional attachments and sets its category. The file is in Vault even when CategoryError is set.</summary>
+    public static (WsFile File, string? CategoryError) AddNew(string localPath, string vaultFolder, string fileName, long[] attachmentFileIds, string category, string comment)
+    {
+        var conn = Conn;
+        var ds = conn.WebServiceManager.DocumentService;
+        var wsFolder = FolderAt(vaultFolder) ?? throw new BridgeException("not_found", $"Vault folder {vaultFolder} does not exist.");
+        var folder = new VDF.Vault.Currency.Entities.Folder(conn, wsFolder);
+        var assocs = (attachmentFileIds ?? Array.Empty<long>()).Select(id => new FileAssocParam
+        {
+            CldFileId = id, Typ = AssociationType.Attachment, RefId = null, Source = null, ExpectedVaultPath = null,
+        }).ToArray();
+        VDF.Vault.Currency.Entities.FileIteration added;
+        using (var stream = System.IO.File.OpenRead(localPath))
+            added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(localPath), assocs, null, FileClassification.None, false, stream);
+        var file = ds.GetLatestFileByMasterId(added.EntityMasterId);
+        if (CategoryName(file) == category) return (file, null);
+        try
+        {
+            SetCategory(file.MasterId, category, comment);
+            return (ds.GetLatestFileByMasterId(file.MasterId), null);
+        }
+        catch (Exception ex) { return (file, ex.Message); }
     }
 
     public static string LocalPathOf(WsFile f) =>
