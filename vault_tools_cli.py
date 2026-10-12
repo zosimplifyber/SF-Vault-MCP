@@ -22,6 +22,18 @@ def write_result(path: str, result: dict[str, Any]) -> None:
     Path(path).write_text(json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8")
 
 
+def reference_note(source: str, signin_needed: bool) -> str:
+    """One plain sentence on where the sheet's prices came from."""
+    if source == "mslist":
+        return "Prices from the purchasing Microsoft List."
+    if source == "excel":
+        if signin_needed:
+            return ("Not signed in to the purchasing Microsoft List; used purchased items.xlsx. "
+                    "Sign in once with the BOM Purchasing tool's Sign in button.")
+        return "Prices from purchased items.xlsx."
+    return "No purchasing list found; vendor and cost columns are blank."
+
+
 def run_purchasing(bom: str, assembly: str, out_dir: str, name: str) -> dict[str, Any]:
     res = bp.generate_from_file(bom, assembly, out_dir)
     if res.get("error"):
@@ -30,8 +42,13 @@ def run_purchasing(bom: str, assembly: str, out_dir: str, name: str) -> dict[str
     dst = Path(out_dir) / name
     if src.resolve() != dst.resolve():
         os.replace(src, dst)
+    source = str(res.get("reference_source") or "none")
+    if source not in ("mslist", "excel"):
+        source = "none"
     return {
         "ok": True,
+        "reference": source,
+        "reference_note": reference_note(source, bool(res.get("reference_signin_needed"))),
         "workbook": str(dst),
         "lines": int(len(bp.read_bom_file(bom))),
         "matched": int(res.get("matched_parts") or 0),

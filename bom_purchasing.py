@@ -1013,11 +1013,22 @@ def _build_assembly_costs_tab(
 # High-level orchestrators used by the MCP tools
 # ---------------------------------------------------------------------------
 
-def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[pd.DataFrame, int, int, list[str], list[str]]:
+def _enrich_with_reference(
+    df: pd.DataFrame,
+    reference_path: str = "",
+    info: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, int, int, list[str], list[str]]:
     """Try to fill purchasing columns from the reference file.
 
-    Returns (df, matched, total, unmatched_part_numbers, warnings).
+    Returns (df, matched, total, unmatched_part_numbers, warnings). When ``info``
+    is given it is filled with what was actually used: ``source`` ("mslist",
+    "excel" or "none") and ``signin_needed`` (True when the Microsoft List is
+    configured, could not be used, and no sign-in has ever been completed).
     """
+    if info is None:
+        info = {}
+    info["source"] = "none"
+    info["signin_needed"] = False
     warnings: list[str] = []
     matched = total = 0
     unmatched: list[str] = []
@@ -1028,6 +1039,8 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
         ref_df = load_reference_file(reference_path)
         if ref_df is None:
             warnings.append(f"Found reference file at {reference_path} but could not read it.")
+        else:
+            info["source"] = "excel"
     else:
         # Wrapped so reference resolution can NEVER break sheet generation — any
         # failure just leaves the purchasing columns blank with a warning.
@@ -1038,9 +1051,11 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
                 try:
                     ref_df = purchasing_reference.load_mslist_dataframe(
                         cfg["mslist"], cfg.get("column_map"))
+                    info["source"] = "mslist"
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(f"Microsoft List reference unavailable ({exc}).")
                     ref_df = None
+                    info["signin_needed"] = not purchasing_reference.has_cached_login()
             # 3) Excel auto-discovery (unless the source is pinned to 'mslist').
             if ref_df is None and cfg.get("source") != "mslist":
                 path = find_purchased_items_file()
@@ -1048,11 +1063,15 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
                     ref_df = load_reference_file(path)
                     if ref_df is None:
                         warnings.append(f"Found reference file at {path} but could not read it.")
+                    else:
+                        info["source"] = "excel"
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not resolve a purchasing reference ({exc}); columns left blank.")
             ref_df = None
+            info["source"] = "none"
 
     if ref_df is None:
+        info["source"] = "none"
         warnings.append(
             "No purchasing reference available — sign in to the Microsoft List "
             "(the Sign in button, or `python -m purchasing_reference --login`); "
@@ -1259,7 +1278,8 @@ def read_bom_file(bom_file_path: str) -> pd.DataFrame:
     an unsupported extension.
     """
     str_cols = {c: str for c in
-                ("Item", "Row Order", "Part Number", "Number")}
+                ("Item", "Row Order", "Part Number", "Number",
+                 "Vendor", "Vendor Number")}
     ext = os.path.splitext(bom_file_path)[1].lower()
     if ext == ".csv":
         return pd.read_csv(bom_file_path, dtype=str_cols)
@@ -1317,9 +1337,23 @@ def generate_from_dataframe(
     # Material precedence: the export's Material wins where non-blank; the
     # reference file only fills blanks.
     export_material = df["Material"].copy()
-    df, matched, total, unmatched, warnings = _enrich_with_reference(df, reference_path=reference_path)
+    # Vendor / Vendor Number the BOM file itself carries (the ribbon export reads
+    # them from the part iProperties). They only fill what the purchasing
+    # reference leaves blank; the reference always wins where it has a value.
+    export_vendor = {c: df[c].copy() for c in ("Vendor", "Vendor Number") if c in df.columns}
+    ref_info: dict[str, Any] = {}
+    df, matched, total, unmatched, warnings = _enrich_with_reference(
+        df, reference_path=reference_path, info=ref_info)
     keep = export_material.notna() & (export_material.astype(str).str.strip() != "")
     df.loc[keep, "Material"] = export_material[keep]
+    for col, own in export_vendor.items():
+        if col not in df.columns:
+            df[col] = None
+        have = own.notna() & (own.astype(str).str.strip() != "")
+        blank = df[col].isna() | (df[col].astype(str).str.strip() == "")
+        fill = have & blank
+        df[col] = df[col].astype(object)
+        df.loc[fill, col] = own[fill]
     warnings.extend(_fill_state_from_vault(df))
 
     if not output_dir:
@@ -1335,6 +1369,8 @@ def generate_from_dataframe(
         "total_purchased_parts": total,
         "unmatched_parts": unmatched,
         "warnings": warnings,
+        "reference_source": ref_info.get("source", "none"),
+        "reference_signin_needed": bool(ref_info.get("signin_needed")),
     }
 
 

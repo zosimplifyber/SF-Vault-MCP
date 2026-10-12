@@ -206,7 +206,7 @@ class TestGeneratorWiring:
     def test_generated_sheet_carries_the_vault_state(self, tmp_path, monkeypatch):
         import openpyxl
         monkeypatch.setattr(bp, "_enrich_with_reference",
-                            lambda df, reference_path="": (df, 0, 0, [], []))
+                            lambda df, reference_path="", info=None: (df, 0, 0, [], []))
         monkeypatch.setattr(bp.vault_state, "lookup_file_states",
                             lambda nums, **k: ({"SF-000067": "Released"}, []))
         res = bp.generate_from_file(str(self._bom(tmp_path)), "TEST-1",
@@ -217,7 +217,7 @@ class TestGeneratorWiring:
 
     def test_vault_warnings_reach_the_caller(self, tmp_path, monkeypatch):
         monkeypatch.setattr(bp, "_enrich_with_reference",
-                            lambda df, reference_path="": (df, 0, 0, [], []))
+                            lambda df, reference_path="", info=None: (df, 0, 0, [], []))
         monkeypatch.setattr(bp.vault_state, "lookup_file_states",
                             lambda nums, **k: ({}, ["No Vault connection configured"]))
         res = bp.generate_from_file(str(self._bom(tmp_path)), "TEST-1",
