@@ -20,44 +20,71 @@ internal static class VaultFiles
 
     public static string? CategoryName(WsFile f) => f.Cat?.CatName;
 
-    /// <summary>Add the file, or check out and check in a new version. Sets category Documents.</summary>
-    public static (WsFile File, bool NewVersion) Publish(string localPath, string vaultFolder, string fileName, string comment)
+    private static void ClearReadOnly(string path)
+    {
+        if (!System.IO.File.Exists(path)) return;
+        var attrs = System.IO.File.GetAttributes(path);
+        if ((attrs & System.IO.FileAttributes.ReadOnly) != 0)
+            System.IO.File.SetAttributes(path, attrs & ~System.IO.FileAttributes.ReadOnly);
+    }
+
+    /// <summary>
+    /// Adds the file, or checks out and checks in a new version. tempOutput is the finished tool output; destLocal is where
+    /// the file lives in the workspace. Nothing touches the workspace until the Vault checks pass. Sets category Documents
+    /// (a failure there is returned as Warning, not thrown).
+    /// </summary>
+    public static (WsFile File, bool NewVersion, string? Warning) Publish(string tempOutput, string destLocal, string vaultFolder, string fileName, string comment)
     {
         var conn = Conn;
+        var ds = conn.WebServiceManager.DocumentService;
         var vaultPath = vaultFolder.TrimEnd('/') + "/" + fileName;
         var existing = FindLatest(vaultPath);
         WsFile result;
         if (existing is null)
         {
-            var wsFolder = conn.WebServiceManager.DocumentService.FindFoldersByPaths(new[] { vaultFolder })?.FirstOrDefault();
+            var wsFolder = ds.FindFoldersByPaths(new[] { vaultFolder })?.FirstOrDefault();
             if (wsFolder is null || wsFolder.Id <= 0) throw new BridgeException("not_found", $"Vault folder {vaultFolder} does not exist.");
             var folder = new VDF.Vault.Currency.Entities.Folder(conn, wsFolder);
-            using var stream = System.IO.File.OpenRead(localPath);
-            var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(localPath),
+            ClearReadOnly(destLocal);
+            System.IO.File.Copy(tempOutput, destLocal, true);
+            using var stream = System.IO.File.OpenRead(destLocal);
+            var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(destLocal),
                                                  Array.Empty<FileAssocParam>(), null, FileClassification.None, false, stream);
-            result = conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(added.EntityMasterId);
+            result = ds.GetLatestFileByMasterId(added.EntityMasterId);
         }
         else
         {
-            if (existing.CheckedOut && existing.CkOutUserId != conn.UserID)
+            if (existing.CheckedOut)
             {
-                var who = conn.WebServiceManager.AdminService.GetUserByUserId(existing.CkOutUserId)?.Name ?? "someone else";
-                throw new BridgeException("checked_out_by_other", $"{who} has {fileName} checked out.");
+                var mine = existing.CkOutUserId == conn.UserID;
+                var who = mine ? "You have" : (conn.WebServiceManager.AdminService.GetUserByUserId(existing.CkOutUserId)?.Name ?? "Someone else") + " has";
+                throw new BridgeException("checked_out", $"{who} {fileName} checked out. Check it in or undo the checkout, then try again.");
             }
-            var iteration = new VDF.Vault.Currency.Entities.FileIteration(conn, existing);
-            if (!existing.CheckedOut)
+            ds.CheckoutFile(existing.Id, CheckoutFileOptions.Master, Environment.MachineName, destLocal, comment, out _);
+            try
             {
-                conn.WebServiceManager.DocumentService.CheckoutFile(existing.Id, CheckoutFileOptions.Master,
-                    Environment.MachineName, localPath, comment, out _);
-                iteration = new VDF.Vault.Currency.Entities.FileIteration(conn,
-                    conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(existing.MasterId));
+                var iteration = new VDF.Vault.Currency.Entities.FileIteration(conn, ds.GetLatestFileByMasterId(existing.MasterId));
+                ClearReadOnly(destLocal);
+                System.IO.File.Copy(tempOutput, destLocal, true);
+                var checkedIn = conn.FileManager.CheckinFile(iteration, comment, false, null, null, false, null,
+                    FileClassification.None, false, new VDF.Currency.FilePathAbsolute(destLocal));
+                result = ds.GetLatestFileByMasterId(checkedIn.EntityMasterId);
             }
-            var checkedIn = conn.FileManager.CheckinFile(iteration, comment, false, null, null, false, null,
-                FileClassification.None, false, new VDF.Currency.FilePathAbsolute(localPath));
-            result = conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(checkedIn.EntityMasterId);
+            catch (Exception ex)
+            {
+                string undone;
+                try { ds.UndoCheckoutFile(existing.Id, out _); undone = "the checkout was undone"; }
+                catch { undone = "the checkout could not be undone; undo it in Vault"; }
+                throw new BridgeException("checkin_failed", $"Check-in failed; {undone}: {ex.Message}");
+            }
         }
-        SetCategory(result.MasterId, "Documents", comment);
-        return (conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(result.MasterId), existing is not null);
+        string? warning = null;
+        if (CategoryName(result) != "Documents")
+        {
+            try { SetCategory(result.MasterId, "Documents", comment); result = ds.GetLatestFileByMasterId(result.MasterId); }
+            catch (Exception ex) { warning = $"Could not set the Documents category: {ex.Message}"; }
+        }
+        return (result, existing is not null, warning);
     }
 
     private static void SetCategory(long masterId, string category, string comment)
@@ -71,22 +98,24 @@ internal static class VaultFiles
     public static IReadOnlyList<WsFile> WhereUsedDrawings(WsFile model)
     {
         var ds = Conn.WebServiceManager.DocumentService;
-        var assocs = ds.GetFileAssociationLitesByIds(new[] { model.Id }, FileAssocAlg.LatestTip,
+        var modelIds = (ds.GetFilesByMasterId(model.MasterId) ?? Array.Empty<WsFile>()).Select(f => f.Id).Append(model.Id).Distinct().ToArray();
+        var assocs = ds.GetFileAssociationLitesByIds(modelIds, FileAssocAlg.LatestTip,
             FileAssociationTypeEnum.Dependency, false, FileAssociationTypeEnum.None, false, false, false, false) ?? Array.Empty<FileAssocLite>();
-        var parentIds = assocs.Where(a => a.CldFileId == model.Id).Select(a => a.ParFileId).Distinct().ToArray();
+        var idSet = new HashSet<long>(modelIds);
+        var parentIds = assocs.Where(a => idSet.Contains(a.CldFileId)).Select(a => a.ParFileId).Distinct().ToArray();
         if (parentIds.Length == 0) return Array.Empty<WsFile>();
         return ds.GetFilesByIds(parentIds)
             .Where(f => f.Name.EndsWith(".idw", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase))
             .GroupBy(f => f.MasterId).Select(g => ds.GetLatestFileByMasterId(g.Key)).ToList();
     }
 
-    /// <summary>Download the latest version of each drawing and its references; never over files checked out to the user.</summary>
+    /// <summary>Download the latest version of each drawing only (never its references, which may be open in Inventor); never over existing files.</summary>
     public static IReadOnlyList<string> AcquireLatest(IEnumerable<WsFile> files)
     {
         var conn = Conn;
         var settings = new VDF.Vault.Settings.AcquireFilesSettings(conn, false);
-        settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = true;
-        settings.OptionsRelationshipGathering.FileRelationshipSettings.RecurseChildren = true;
+        settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = false;
+        settings.OptionsRelationshipGathering.FileRelationshipSettings.RecurseChildren = false;
         settings.OptionsRelationshipGathering.FileRelationshipSettings.VersionGatheringOption = VDF.Vault.Currency.VersionGatheringOption.Latest;
         settings.OptionsResolution.OverwriteOption = VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.NoOverwrite;
         foreach (var f in files)

@@ -57,10 +57,28 @@ internal sealed class RibbonActions
         _buttons.Clear();
     }
 
+    private sealed class Owner : IWin32Window
+    {
+        public Owner(IntPtr h) { Handle = h; }
+        public IntPtr Handle { get; }
+    }
+
+    private IWin32Window? OwnerWindow()
+    {
+        try { var h = _app.MainFrameHWND; return h == 0 ? null : new Owner(new IntPtr(h)); }
+        catch { return null; }
+    }
+
+    private DialogResult Msg(string text, string caption, MessageBoxButtons buttons = MessageBoxButtons.OK)
+    {
+        var owner = OwnerWindow();
+        return owner is null ? System.Windows.Forms.MessageBox.Show(text, caption, buttons) : System.Windows.Forms.MessageBox.Show(owner, text, caption, buttons);
+    }
+
     private void Click(string label, Action<Inv.AssemblyDocument> work)
     {
-        if (_running) { MessageBox.Show("Already running.", label); return; }
-        if (_app.ActiveDocument is not Inv.AssemblyDocument asm) { MessageBox.Show("Open an assembly first.", label); return; }
+        if (_running) { Msg("Already running.", label); return; }
+        if (_app.ActiveDocument is not Inv.AssemblyDocument asm) { Msg("Open an assembly first.", label); return; }
         _running = true;
         var cursor = Cursor.Current;
         try
@@ -68,8 +86,8 @@ internal sealed class RibbonActions
             Cursor.Current = Cursors.WaitCursor;
             work(asm);
         }
-        catch (BridgeException ex) { _log($"{label}: {ex.Code} {ex.Message}"); MessageBox.Show(ex.Message, label); }
-        catch (Exception ex) { _log($"{label} failed: {ex}"); MessageBox.Show($"{label} failed: {ex.Message}\nDetails are in bridge.log.", label); }
+        catch (BridgeException ex) { _log($"{label}: {ex.Code} {ex.Message}"); Msg(ex.Message, label); }
+        catch (Exception ex) { _log($"{label} failed: {ex}"); Msg($"{label} failed: {ex.Message}\nDetails are in bridge.log.", label); }
         finally { Cursor.Current = cursor; _running = false; }
     }
 
@@ -78,6 +96,8 @@ internal sealed class RibbonActions
         var file = asm.FullFileName;
         if (string.IsNullOrWhiteSpace(file)) throw new BridgeException("not_in_vault", "Save the assembly and check it in to Vault first.");
         var vaultFolder = VaultPaths.ToVaultFolder(file, VaultFiles.WorkingFolderRoot());
+        if (VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(file)) is null)
+            throw new BridgeException("not_in_vault", "Check the assembly in to Vault first.");
         return (System.IO.Path.GetDirectoryName(file)!, vaultFolder, System.IO.Path.GetFileNameWithoutExtension(file));
     }
 
@@ -94,9 +114,9 @@ internal sealed class RibbonActions
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             BomFile.Write(bom, lines);
             var name = VaultPaths.PurchasingName(asm.FullFileName);
-            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, folder, name, resultPath), resultPath, ToolTimeout), "workbook", "lines");
+            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath), resultPath, ToolTimeout), "workbook", "lines");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The purchasing tool failed.");
-            Publish(result.Output!, vaultFolder, name, $"Purchasing sheet for {stem}",
+            Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Purchasing sheet for {stem}",
                     $"{result.Count} BOM lines." + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
@@ -104,7 +124,7 @@ internal sealed class RibbonActions
 
     private void Review(Inv.AssemblyDocument asm)
     {
-        var (_, vaultFolder, stem) = Locate(asm);
+        var (folder, vaultFolder, stem) = Locate(asm);
         var lines = BomOrdering.Flatten(BomReader.Read(asm));
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(temp);
@@ -180,29 +200,37 @@ internal sealed class RibbonActions
                 DateTime.Now, drawings, missing, failed));
 
             var name = VaultPaths.ReviewName(asm.FullFileName);
-            var outPdf = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(asm.FullFileName)!, name);
+            var outPdf = System.IO.Path.Combine(temp, name);
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The review tool failed.");
-            Publish(result.Output!, vaultFolder, name, $"Design review for {stem}",
+            Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Design review for {stem}",
                     $"{result.Count} pages, {drawings.Count} drawings, {missing.Count} missing, {failed.Count} could not export.");
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }
 
-    private void Publish(string localPath, string vaultFolder, string name, string comment, string summary)
+    private void Publish(string tempOutput, string destLocal, string vaultFolder, string name, string comment, string summary)
     {
+        (Autodesk.Connectivity.WebServices.File File, bool NewVersion, string? Warning) r;
+        try { r = VaultFiles.Publish(tempOutput, destLocal, vaultFolder, name, comment); }
+        catch (BridgeException) { throw; }
+        catch (Exception ex)
+        {
+            throw new BridgeException("vault_failed", $"{name} was not checked in to Vault: {ex.Message}");
+        }
+        _log($"published {vaultFolder}/{name} version {r.File.VerNum}");
+        var text = $"{(r.NewVersion ? "Updated" : "Added")} {vaultFolder}/{name} (version {r.File.VerNum}).\n{summary}"
+                   + (r.Warning is null ? "" : $"\n{r.Warning}") + "\n\nOpen it now?";
         try
         {
-            var (file, newVersion) = VaultFiles.Publish(localPath, vaultFolder, name, comment);
-            _log($"published {vaultFolder}/{name} version {file.VerNum}");
-            var answer = MessageBox.Show($"{(newVersion ? "Updated" : "Added")} {vaultFolder}/{name} (version {file.VerNum}).\n{summary}\n\nOpen it now?",
-                                         "SF Vault Bridge", MessageBoxButtons.YesNo);
-            if (answer == DialogResult.Yes) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(localPath) { UseShellExecute = true });
+            if (Msg(text, "SF Vault Bridge", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(destLocal) { UseShellExecute = true });
         }
-        catch (Exception ex) when (ex is not BridgeException)
+        catch (Exception ex)
         {
-            throw new BridgeException("vault_failed", $"Saved locally at {localPath} but not checked in to Vault: {ex.Message}");
+            _log($"open {destLocal} failed: {ex}");
+            Msg($"Could not open {name}.", "SF Vault Bridge");
         }
     }
 }
