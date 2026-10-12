@@ -4,7 +4,8 @@ using System.Text;
 namespace SFVaultBridge.Core;
 
 public sealed record BomNode(string PartNumber, string Description, double Quantity, string UnitQuantity, string BomStructure,
-                             string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children);
+                             string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children,
+                             string Vendor = "", string VendorNumber = "");
 
 public sealed record BomLine(string Item, BomNode Node, int Depth);
 

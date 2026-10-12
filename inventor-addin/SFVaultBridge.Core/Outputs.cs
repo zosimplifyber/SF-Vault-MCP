@@ -18,17 +18,44 @@ public static class VaultPaths
     }
 
     public static string PurchasingName(string assemblyFile) => Path.GetFileNameWithoutExtension(assemblyFile) + " Purchasing.xlsx";
+    /// <summary>name, or "stem (n).ext" with the first n from 1 that is not taken.</summary>
+    public static string UniqueName(string name, Func<string, bool> exists)
+    {
+        if (!exists(name)) return name;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var n = 1; ; n++)
+        {
+            var candidate = $"{stem} ({n}){ext}";
+            if (!exists(candidate)) return candidate;
+        }
+    }
+
     public static string ReviewName(string assemblyFile) => Path.GetFileNameWithoutExtension(assemblyFile) + " Design Review.pdf";
 }
 
 public static class ReviewRules
 {
-    public static bool Skip(BomNode node, string? vaultCategory) =>
-        string.Equals(node.BomStructure, "Purchased", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(node.BomStructure, "Phantom", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(node.BomStructure, "Reference", StringComparison.OrdinalIgnoreCase)
-        || vaultCategory is "Part - Purchased" or "Part - Content Center"
-        || node.FullPath.Contains(@"\Content Center Files\", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Phantom, Reference and Content Center rows are ignored; Purchased structure or category Part - Purchased is purchased; the rest is made in house.</summary>
+    public static PartKind Classify(BomNode node, string? vaultCategory)
+    {
+        static bool Is(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        if (Is(node.BomStructure, "Phantom") || Is(node.BomStructure, "Reference")
+            || vaultCategory == "Part - Content Center"
+            || (node.FullPath ?? "").Contains(@"\Content Center Files\", StringComparison.OrdinalIgnoreCase)) return PartKind.Ignored;
+        return Is(node.BomStructure, "Purchased") || vaultCategory == "Part - Purchased" ? PartKind.Purchased : PartKind.Make;
+    }
+
+    private static bool IsPdf(string n) => n.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>First .pdf in the list (an attachment of the purchased part), or null.</summary>
+    public static string? FirstPdf(IEnumerable<string> names) => names.FirstOrDefault(IsPdf);
+
+    /// <summary>First .pdf whose name starts with the part's file stem or contains its vendor number, or null.</summary>
+    public static string? MatchVendorPdf(string fileStem, string vendorNumber, IEnumerable<string> names) =>
+        names.FirstOrDefault(n => IsPdf(n)
+            && ((fileStem.Length > 0 && n.StartsWith(fileStem, StringComparison.OrdinalIgnoreCase))
+                || (vendorNumber.Trim().Length > 0 && n.Contains(vendorNumber.Trim(), StringComparison.OrdinalIgnoreCase))));
 
     public static IReadOnlyList<BomLine> UniqueComponents(IReadOnlyList<BomLine> lines)
     {
@@ -49,13 +76,17 @@ public static class ReviewRules
     public static string Bookmark(string partNumber, string drawingFileName) => $"{partNumber} - {drawingFileName}";
 }
 
+public enum PartKind { Ignored, Purchased, Make }
+
+public sealed record ReviewPurchased(string PartNumber, string Vendor, string VendorNumber, string Pdf);
 public sealed record ReviewDrawing(string PartNumber, string Drawing, string Pdf);
 public sealed record ReviewFailure(string Drawing, string Reason);
 
 public static class ReviewManifest
 {
     public static string ToJson(string assembly, string description, string user, string state, string version, DateTime created,
-                                IEnumerable<ReviewDrawing> drawings, IEnumerable<string> missing, IEnumerable<ReviewFailure> failed) =>
+                                IEnumerable<ReviewDrawing> drawings, IEnumerable<string> missing, IEnumerable<ReviewFailure> failed,
+                                IEnumerable<ReviewPurchased> purchased, IEnumerable<string> noVendorDrawing) =>
         new JsonObject
         {
             ["assembly"] = assembly, ["description"] = description, ["user"] = user, ["state"] = state, ["version"] = version,
@@ -63,6 +94,8 @@ public static class ReviewManifest
             ["drawings"] = new JsonArray(drawings.Select(d => (JsonNode?)new JsonObject { ["part_number"] = d.PartNumber, ["drawing"] = d.Drawing, ["pdf"] = d.Pdf }).ToArray()),
             ["missing"] = new JsonArray(missing.Select(m => (JsonNode?)JsonValue.Create(m)).ToArray()),
             ["failed"] = new JsonArray(failed.Select(f => (JsonNode?)new JsonObject { ["drawing"] = f.Drawing, ["reason"] = f.Reason }).ToArray()),
+            ["purchased"] = new JsonArray(purchased.Select(p => (JsonNode?)new JsonObject { ["part_number"] = p.PartNumber, ["vendor"] = p.Vendor, ["vendor_number"] = p.VendorNumber, ["pdf"] = p.Pdf }).ToArray()),
+            ["no_vendor_drawing"] = new JsonArray(noVendorDrawing.Select(m => (JsonNode?)JsonValue.Create(m)).ToArray()),
         }.ToJsonString();
 }
 

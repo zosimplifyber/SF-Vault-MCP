@@ -95,3 +95,43 @@ def test_cover_escapes_markup_characters(tmp_path):
     assert 'Plate <1/4"' in cover and "& gusset" in cover
     assert "CD-<9>" in cover
     assert "bad <x> & y" in cover
+
+
+def test_purchased_section_bookmarks_and_no_vendor_list(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "ASSEMBLY")
+    p1 = _drawing(tmp_path / "p1.pdf", "BOLTSHEET")
+    p2 = _drawing(tmp_path / "p2.pdf", "WIDGETSHEET")
+    p3 = _drawing(tmp_path / "p3.pdf", "BARESHEET")
+    manifest = _manifest(tmp_path, [{"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1)}])
+    m = json.loads(manifest.read_text(encoding="utf-8"))
+    m["purchased"] = [
+        {"part_number": "CD-7", "vendor": "MCMaster-Carr", "vendor_number": "91251A", "pdf": str(p1)},
+        {"part_number": "CD-8", "vendor": "Acme <Co>", "vendor_number": "W-1", "pdf": str(p2)},
+        {"part_number": "CD-9", "vendor": "", "vendor_number": "", "pdf": str(p3)},
+        {"part_number": "CD-10", "vendor": "", "vendor_number": "", "pdf": str(tmp_path / "nope.pdf")},
+    ]
+    m["no_vendor_drawing"] = ["CD-11", "CD-<12>"]
+    manifest.write_text(json.dumps(m), encoding="utf-8")
+    out = tmp_path / "r.pdf"
+    res = rp.run_review(str(_bom(tmp_path / "bom.txt", 1)), str(manifest), str(out))
+    assert res["ok"] is True, res
+    reader = PdfReader(str(out))
+    titles = [o.title for o in reader.outline]
+    assert titles == ["Cover", "BOM", "CD-1 - CD-1.idw",
+                      "Purchased: CD-7 (McMaster 91251A)", "Purchased: CD-8 (Acme <Co> W-1)", "Purchased: CD-9"]
+    texts = [p.extract_text() or "" for p in reader.pages]
+    assert all("DRAFT" in t for t in texts)
+    cover = texts[0]
+    assert "No vendor drawing" in cover and "CD-11" in cover and "CD-<12>" in cover
+    assert "CD-10" in cover and "PDF unreadable" in cover
+    assert res["failed"] == 1 and res["purchased"] == 3 and res["no_vendor_drawing"] == 2
+    order = [next(i for i, t in enumerate(texts) if k in t) for k in ("ASSEMBLY", "BOLTSHEET", "WIDGETSHEET", "BARESHEET")]
+    assert order == sorted(order)
+
+
+def test_cover_shows_none_for_empty_no_vendor_list(tmp_path):
+    out = tmp_path / "r.pdf"
+    res = rp.run_review(str(_bom(tmp_path / "bom.txt", 1)), str(_manifest(tmp_path, [])), str(out))
+    assert res["ok"] is True
+    cover = PdfReader(str(out)).pages[0].extract_text() or ""
+    assert "No vendor drawing" in cover

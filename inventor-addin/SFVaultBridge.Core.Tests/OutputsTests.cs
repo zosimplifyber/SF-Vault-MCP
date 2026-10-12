@@ -5,8 +5,8 @@ namespace SFVaultBridge.Core.Tests;
 
 public class OutputsTests
 {
-    private static BomNode N(string pn, string structure = "Normal", string path = "") =>
-        new(pn, "d", 1, "Each", structure, "", "", pn + ".ipt", path == "" ? @"C:\Vault Workspace\DESIGNS\" + pn + ".ipt" : path, Array.Empty<BomNode>());
+    private static BomNode N(string pn, string structure = "Normal", string path = "", string vendor = "", string vendorNumber = "") =>
+        new(pn, "d", 1, "Each", structure, "", "", pn + ".ipt", path == "" ? @"C:\Vault Workspace\DESIGNS\" + pn + ".ipt" : path, Array.Empty<BomNode>(), vendor, vendorNumber);
 
     [Fact]
     public void Maps_local_file_to_vault_folder()
@@ -33,21 +33,37 @@ public class OutputsTests
     }
 
     [Fact]
-    public void Skip_rules()
+    public void Saved_copy_name_gets_a_counter_when_taken()
     {
-        Assert.True(ReviewRules.Skip(N("A", "Purchased"), null));
-        Assert.True(ReviewRules.Skip(N("A"), "Part - Purchased"));
-        Assert.True(ReviewRules.Skip(N("A"), "Part - Content Center"));
-        Assert.True(ReviewRules.Skip(N("A", path: @"C:\Vault Workspace\Content Center Files\en-US\x.ipt"), null));
-        Assert.False(ReviewRules.Skip(N("A"), "Part - Engineering"));
+        Assert.Equal("a b.pdf", VaultPaths.UniqueName("a b.pdf", _ => false));
+        var taken = new HashSet<string> { "a b.pdf", "a b (1).pdf" };
+        Assert.Equal("a b (2).pdf", VaultPaths.UniqueName("a b.pdf", taken.Contains));
     }
 
     [Fact]
-    public void Skip_phantom_and_reference_rows()
+    public void Classify_ignored_purchased_and_make()
     {
-        Assert.True(ReviewRules.Skip(N("A", "Phantom"), null));
-        Assert.True(ReviewRules.Skip(N("A", "Reference"), "Part - Engineering"));
-        Assert.False(ReviewRules.Skip(N("A", "Inseparable"), null));
+        Assert.Equal(PartKind.Ignored, ReviewRules.Classify(N("A", "Phantom"), null));
+        Assert.Equal(PartKind.Ignored, ReviewRules.Classify(N("A", "Reference"), "Part - Purchased"));
+        Assert.Equal(PartKind.Ignored, ReviewRules.Classify(N("A", "Purchased"), "Part - Content Center"));
+        Assert.Equal(PartKind.Ignored, ReviewRules.Classify(N("A"), "Part - Content Center"));
+        Assert.Equal(PartKind.Ignored, ReviewRules.Classify(N("A", "Purchased", path: @"C:\Vault Workspace\Content Center Files\en-US\x.ipt"), null));
+        Assert.Equal(PartKind.Purchased, ReviewRules.Classify(N("A", "Purchased"), null));
+        Assert.Equal(PartKind.Purchased, ReviewRules.Classify(N("A"), "Part - Purchased"));
+        Assert.Equal(PartKind.Make, ReviewRules.Classify(N("A"), "Part - Engineering"));
+        Assert.Equal(PartKind.Make, ReviewRules.Classify(N("A", "Inseparable"), null));
+    }
+
+    [Fact]
+    public void Vendor_pdf_rules()
+    {
+        Assert.Equal("a.pdf", ReviewRules.FirstPdf(new[] { "n.txt", "a.pdf", "b.PDF" }));
+        Assert.Null(ReviewRules.FirstPdf(new[] { "n.txt", "CD-9.idw" }));
+        var names = new[] { "notes.txt", "other.pdf", "CD-5 McMaster 91251A.pdf", "CD-5 datasheet.pdf" };
+        Assert.Equal("CD-5 McMaster 91251A.pdf", ReviewRules.MatchVendorPdf("CD-5", "", names));
+        Assert.Equal("x 91251A y.PDF", ReviewRules.MatchVendorPdf("CD-9", "91251A", new[] { "a.pdf", "x 91251A y.PDF" }));
+        Assert.Null(ReviewRules.MatchVendorPdf("CD-9", "", new[] { "CD-9.idw", "zz.pdf" }));
+        Assert.Null(ReviewRules.MatchVendorPdf("", "", new[] { "zz.pdf" }));
     }
 
     [Fact]
@@ -72,7 +88,8 @@ public class OutputsTests
     public void Manifest_json_matches_python_contract()
     {
         var json = ReviewManifest.ToJson("CD-001887", "desc", "zak", "Work in Progress", "5", new DateTime(2026, 10, 12, 17, 30, 0),
-            new[] { new ReviewDrawing("CD-1", "CD-1.idw", @"C:\t\1.pdf") }, new[] { "CD-2" }, new[] { new ReviewFailure("CD-3.idw", "could not open") });
+            new[] { new ReviewDrawing("CD-1", "CD-1.idw", @"C:\t\1.pdf") }, new[] { "CD-2" }, new[] { new ReviewFailure("CD-3.idw", "could not open") },
+            new[] { new ReviewPurchased("CD-5", "MCMASTER-CARR", "91251A", @"C:	\p.pdf") }, new[] { "CD-6" });
         var o = (JsonObject)JsonNode.Parse(json)!;
         Assert.Equal("2026-10-12 17:30", o["created"]!.GetValue<string>());
         Assert.Equal("CD-1.idw", o["drawings"]![0]!["drawing"]!.GetValue<string>());
@@ -80,6 +97,11 @@ public class OutputsTests
         Assert.Equal("CD-1", o["drawings"]![0]!["part_number"]!.GetValue<string>());
         Assert.Equal("CD-2", o["missing"]![0]!.GetValue<string>());
         Assert.Equal("could not open", o["failed"]![0]!["reason"]!.GetValue<string>());
+        Assert.Equal("CD-5", o["purchased"]![0]!["part_number"]!.GetValue<string>());
+        Assert.Equal("MCMASTER-CARR", o["purchased"]![0]!["vendor"]!.GetValue<string>());
+        Assert.Equal("91251A", o["purchased"]![0]!["vendor_number"]!.GetValue<string>());
+        Assert.Equal(@"C:	\p.pdf", o["purchased"]![0]!["pdf"]!.GetValue<string>());
+        Assert.Equal("CD-6", o["no_vendor_drawing"]![0]!.GetValue<string>());
     }
 
     [Fact]

@@ -52,7 +52,17 @@ def _cover(m: dict[str, Any], drawings: int, failed: list[dict[str, str]]) -> by
     story += [Spacer(1, 12), _para("Could not export", st["Heading3"])]
     story += [_para(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed] \
         or [_para("None", st["Normal"])]
+    story += [Spacer(1, 12), _para("No vendor drawing", st["Heading3"])]
+    story += [_para(x, st["Normal"]) for x in (m.get("no_vendor_drawing") or [])] or [_para("None", st["Normal"])]
     return _doc(story)
+
+
+def _purchased_title(p: dict[str, Any]) -> str:
+    vendor = str(p.get("vendor") or "").strip()
+    number = str(p.get("vendor_number") or "").strip()
+    short = "McMaster" if "MCMASTER" in vendor.upper() else vendor
+    detail = " ".join(x for x in (short, number) if x)
+    return f"Purchased: {p.get('part_number', '')}" + (f" ({detail})" if detail else "")
 
 
 def _bom_table(bom: str) -> bytes:
@@ -79,6 +89,13 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
         except Exception as exc:
             failed.append({"drawing": d.get("drawing", ""), "reason": f"PDF unreadable: {exc}"})
 
+    purchased = []
+    for p in m.get("purchased") or []:
+        try:
+            purchased.append((p, PdfReader(str(p["pdf"]))))
+        except Exception as exc:
+            failed.append({"drawing": f"Purchased: {p.get('part_number', '')}", "reason": f"PDF unreadable: {exc}"})
+
     writer = PdfWriter()
     marks: list[tuple[str, int]] = []
 
@@ -91,6 +108,8 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
     add("BOM", PdfReader(BytesIO(_bom_table(bom))))
     for d, reader in usable:
         add(f"{d.get('part_number', '')} - {d.get('drawing', '')}", reader)
+    for p, reader in purchased:
+        add(_purchased_title(p), reader)
 
     merged = BytesIO()
     writer.write(merged)
@@ -103,4 +122,5 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
     with open(out_pdf, "wb") as fh:
         final.write(fh)
     return {"ok": True, "pdf": str(out_pdf), "pages": len(final.pages), "drawings": len(usable),
+            "purchased": len(purchased), "no_vendor_drawing": len(m.get("no_vendor_drawing") or []),
             "missing": len(m.get("missing") or []), "failed": len(failed)}
