@@ -27,7 +27,8 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
         {
             _app = addInSiteObject.Application;
             _ui = new System.Windows.Forms.Control();
-            _ui.CreateControl();
+            _ = _ui.Handle;
+            if (!_ui.IsHandleCreated) throw new InvalidOperationException("UI marshalling handle could not be created.");
             var token = TokenStore.LoadOrCreate(System.IO.Path.Combine(dataDir, "token"));
             var router = new Router(token);
             BridgeOps.RegisterAll(router, new VaultSession(), new StepImporter(_app), new PathGuard(AllowedRoots(_app)), Version, RunOnUi);
@@ -64,6 +65,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
     private JsonNode? RunOnUi(Func<JsonNode?> work)
     {
         var ui = _ui ?? throw new BridgeException("stopped", "The bridge is shutting down.");
+        if (!ui.IsHandleCreated) throw new BridgeException("stopped", "The bridge is not ready. Restart Inventor.");
         if (!ui.InvokeRequired) return work();
         JsonNode? result = null;
         ExceptionDispatchInfo? error = null;

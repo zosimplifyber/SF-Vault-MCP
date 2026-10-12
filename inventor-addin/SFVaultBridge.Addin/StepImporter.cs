@@ -32,7 +32,7 @@ internal sealed class StepImporter : IStepImporter
             foreach (var (name, value) in custom)
             {
                 try { user[name].Value = value; }
-                catch (COMException) { user.Add(value, name); }
+                catch (Exception ex) when (ex is COMException or ArgumentException) { user.Add(value, name); }
             }
 
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outIpt)!);
