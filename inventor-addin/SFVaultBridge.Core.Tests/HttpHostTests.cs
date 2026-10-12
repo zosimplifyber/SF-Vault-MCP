@@ -59,6 +59,21 @@ public class HttpHostTests
     }
 
     [Fact]
+    public async Task Throwing_log_does_not_kill_the_listener()
+    {
+        var port = FreePort();
+        using var host = new HttpHost($"http://localhost:{port}/", EchoRouter(), _ => throw new InvalidOperationException("log sink down"));
+        host.Start();
+        using var client = new HttpClient();
+
+        var first = await client.PostAsync($"http://localhost:{port}/op/echo", new StringContent("{}"));
+        Assert.Equal(HttpStatusCode.Unauthorized, first.StatusCode);
+
+        var second = await client.PostAsync($"http://localhost:{port}/op/echo", new StringContent("{}"));
+        Assert.Equal(HttpStatusCode.Unauthorized, second.StatusCode);
+    }
+
+    [Fact]
     public void Dispose_before_start_is_safe()
     {
         var host = new HttpHost($"http://localhost:{FreePort()}/", EchoRouter(), _ => { });

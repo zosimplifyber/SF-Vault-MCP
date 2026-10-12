@@ -27,34 +27,53 @@ public sealed class HttpHost : IDisposable
         _thread.Start();
     }
 
+    // A throwing log sink must never escape the background thread: an unhandled exception there terminates Inventor.
+    private void SafeLog(string message)
+    {
+        try { _log(message); } catch { }
+    }
+
     private void Loop()
     {
-        while (_listener.IsListening)
+        try
         {
-            HttpListenerContext ctx;
-            try { ctx = _listener.GetContext(); }
-            catch (Exception) when (!_listener.IsListening) { return; }
-            catch (Exception ex) { _log("accept failed: " + ex.Message); continue; }
+            while (_listener.IsListening)
+            {
+                HttpListenerContext ctx;
+                try { ctx = _listener.GetContext(); }
+                catch (Exception) when (!_listener.IsListening) { return; }
+                catch (Exception ex)
+                {
+                    SafeLog("accept failed: " + ex.Message);
+                    Thread.Sleep(200);
+                    continue;
+                }
 
-            try
-            {
-                string body;
-                using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
-                var path = ctx.Request.Url?.AbsolutePath ?? "/";
-                var (status, json) = _router.Handle(ctx.Request.HttpMethod, path, ctx.Request.Headers[TokenHeader], body);
-                var bytes = Encoding.UTF8.GetBytes(json);
-                ctx.Response.StatusCode = status;
-                ctx.Response.ContentType = "application/json";
-                ctx.Response.ContentLength64 = bytes.Length;
-                ctx.Response.OutputStream.Write(bytes);
-                ctx.Response.Close();
-                if (status >= 400) _log($"{path} -> {status} {json}");
+                try
+                {
+                    string body;
+                    using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
+                    var path = ctx.Request.Url?.AbsolutePath ?? "/";
+                    var (status, json) = _router.Handle(ctx.Request.HttpMethod, path, ctx.Request.Headers[TokenHeader], body);
+                    var bytes = Encoding.UTF8.GetBytes(json);
+                    ctx.Response.StatusCode = status;
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.ContentLength64 = bytes.Length;
+                    ctx.Response.OutputStream.Write(bytes);
+                    ctx.Response.Close();
+                    if (status >= 400) SafeLog($"{path} -> {status} {json}");
+                }
+                catch (Exception ex)
+                {
+                    SafeLog("request failed: " + ex);
+                    try { ctx.Response.Abort(); } catch { }
+                }
             }
-            catch (Exception ex)
-            {
-                _log("request failed: " + ex);
-                try { ctx.Response.Abort(); } catch { }
-            }
+        }
+        catch (Exception ex)
+        {
+            // Last resort: nothing may escape the background thread.
+            SafeLog("listener loop stopped: " + ex.Message);
         }
     }
 
