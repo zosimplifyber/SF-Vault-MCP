@@ -8,6 +8,18 @@ internal static class DrawingExporter
 {
     private const string PdfTranslatorId = "{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}";
 
+    /// <summary>The document Inventor already has open at this path, or null.</summary>
+    public static Inv.Document? FindOpen(Inv.Application app, string path)
+    {
+        foreach (Inv.Document d in app.Documents)
+        {
+            try { if (string.Equals(d.FullFileName, path, StringComparison.OrdinalIgnoreCase)) return d; }
+            catch { }
+        }
+        return null;
+    }
+
+    /// <summary>Reuses a drawing the user has open (never closed); closes only a document this call opened.</summary>
     public static void Export(Inv.Application app, string drawingPath, string outPdf)
     {
         var translator = app.ApplicationAddIns.ItemById[PdfTranslatorId] as Inv.TranslatorAddIn
@@ -16,9 +28,11 @@ internal static class DrawingExporter
         var silent = app.SilentOperation;
         app.SilentOperation = true;
         Inv.Document? doc = null;
+        Inv.Document? opened = null;
         try
         {
-            doc = app.Documents.Open(drawingPath, false);
+            doc = FindOpen(app, drawingPath);
+            if (doc is null) doc = opened = app.Documents.Open(drawingPath, false);
             var ctx = app.TransientObjects.CreateTranslationContext();
             ctx.Type = Inv.IOMechanismEnum.kFileBrowseIOMechanism;
             var options = app.TransientObjects.CreateNameValueMap();
@@ -36,7 +50,7 @@ internal static class DrawingExporter
         }
         finally
         {
-            try { doc?.Close(true); } catch { }
+            try { opened?.Close(true); } catch { }
             try { app.SilentOperation = silent; } catch { }
         }
     }

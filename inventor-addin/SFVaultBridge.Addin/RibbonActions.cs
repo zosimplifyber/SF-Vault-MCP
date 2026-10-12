@@ -114,6 +114,7 @@ internal sealed class RibbonActions
             var missing = new List<string>();
             var failed = new List<ReviewFailure>();
             var root = VaultFiles.WorkingFolderRoot();
+            var seen = new HashSet<long>();
 
             void Collect(string partNumber, string localModel)
             {
@@ -128,10 +129,12 @@ internal sealed class RibbonActions
                     foreach (var name in picked)
                     {
                         var file = candidates.First(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                        if (!seen.Add(file.MasterId)) continue;
                         try
                         {
-                            VaultFiles.AcquireLatest(new[] { file });
                             var local = VaultFiles.LocalPathOf(file);
+                            if (DrawingExporter.FindOpen(_app, local) is null)
+                                VaultFiles.AcquireLatest(new[] { file });
                             var pdf = System.IO.Path.Combine(temp, $"{drawings.Count + failed.Count:D3}.pdf");
                             DrawingExporter.Export(_app, local, pdf);
                             drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf));
