@@ -43,6 +43,14 @@ public class OutputsTests
     }
 
     [Fact]
+    public void Skip_phantom_and_reference_rows()
+    {
+        Assert.True(ReviewRules.Skip(N("A", "Phantom"), null));
+        Assert.True(ReviewRules.Skip(N("A", "Reference"), "Part - Engineering"));
+        Assert.False(ReviewRules.Skip(N("A", "Inseparable"), null));
+    }
+
+    [Fact]
     public void Unique_components_keep_first_occurrence()
     {
         var a = N("A"); var b = N("B");

@@ -25,6 +25,8 @@ public static class ReviewRules
 {
     public static bool Skip(BomNode node, string? vaultCategory) =>
         string.Equals(node.BomStructure, "Purchased", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(node.BomStructure, "Phantom", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(node.BomStructure, "Reference", StringComparison.OrdinalIgnoreCase)
         || vaultCategory is "Part - Purchased" or "Part - Content Center"
         || node.FullPath.Contains(@"\Content Center Files\", StringComparison.OrdinalIgnoreCase);
 
