@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 using SFVaultBridge.Core;
@@ -14,12 +13,6 @@ internal sealed class RibbonStatus
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
     private const string DefName = "SFVaultBridge.Status";
     private static readonly string[] Ribbons = { "ZeroDoc", "Part", "Assembly", "Drawing" };
-
-    private sealed class PictureConverter : AxHost
-    {
-        private PictureConverter() : base("") { }
-        public static stdole.IPictureDisp ToPicture(Image image) => (stdole.IPictureDisp)GetIPictureDispFromPicture(image);
-    }
 
     private readonly Inv.Application _app;
     private readonly Func<HttpHost?> _host;
@@ -149,21 +142,8 @@ internal sealed class RibbonStatus
             BridgeState.SignInNeeded => ColorTranslator.FromHtml("#E0A100"),
             _ => ColorTranslator.FromHtml("#C62828"),
         };
-        var pair = (PictureConverter.ToPicture(Dot(16, color)), PictureConverter.ToPicture(Dot(32, color)));
+        var pair = Icons.Pair(size => Icons.Dot(size, color));
         _icons[state] = pair;
         return pair;
-    }
-
-    private static Bitmap Dot(int size, Color fill)
-    {
-        var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
-        var rect = new RectangleF(1.5f, 1.5f, size - 3f, size - 3f);
-        using (var b = new SolidBrush(fill)) g.FillEllipse(b, rect);
-        using var pen = new Pen(Color.FromArgb(fill.R * 6 / 10, fill.G * 6 / 10, fill.B * 6 / 10), size >= 32 ? 1.5f : 1f);
-        g.DrawEllipse(pen, rect);
-        return bmp;
     }
 }
