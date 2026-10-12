@@ -748,7 +748,7 @@ function Invoke-GetFolderByPath($mgr) {
     $p = [string](Get-Arg 'path')
     try { $f = $mgr.DocumentService.GetFolderByPath($p) } catch { return @{ found = $false } }
     if ($null -eq $f) { return @{ found = $false } }
-    return [ordered]@{ found = $true; id = [int64]$f.Id; fullName = [string]$f.FullName; isLibrary = [bool]$f.IsLibrary }
+    return [ordered]@{ found = $true; id = [int64]$f.Id; fullName = [string]$f.FullName; isLibrary = [bool]$f.IsLib }
 }
 
 function Invoke-GenerateFileNumber($mgr) {
@@ -760,7 +760,7 @@ function Invoke-GenerateFileNumber($mgr) {
 
 function Invoke-AddFolder($mgr) {
     $parent = $mgr.DocumentService.GetFolderByPath([string](Get-Arg 'parentPath'))
-    $f = $mgr.DocumentService.AddFolder([string](Get-Arg 'name'), [int64]$parent.Id, [bool]$parent.IsLibrary)
+    $f = $mgr.DocumentService.AddFolder([string](Get-Arg 'name'), [int64]$parent.Id, [bool]$parent.IsLib)
     return [ordered]@{ id = [int64]$f.Id; fullName = [string]$f.FullName }
 }
 
