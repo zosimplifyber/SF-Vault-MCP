@@ -9,6 +9,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors
@@ -32,20 +33,25 @@ def _doc(story) -> bytes:
     return buf.getvalue()
 
 
+def _para(text: Any, style) -> Paragraph:
+    # Paragraph parses markup, so every interpolated value must be escaped.
+    return Paragraph(escape(str(text)), style)
+
+
 def _cover(m: dict[str, Any], drawings: int, failed: list[dict[str, str]]) -> bytes:
     st = getSampleStyleSheet()
-    story = [Paragraph(f"Design review: {m.get('assembly', '')}", st["Title"]),
-             Paragraph(str(m.get("description") or ""), st["Heading2"]),
-             Paragraph(f"Created {m.get('created', '')} by {m.get('user', '')}", st["Normal"]),
-             Paragraph(f"Vault state {m.get('state', '')}, version {m.get('version', '')}", st["Normal"]),
-             Paragraph(f"Drawings included: {drawings}", st["Normal"]),
+    story = [_para(f"Design review: {m.get('assembly', '')}", st["Title"]),
+             _para(m.get("description") or "", st["Heading2"]),
+             _para(f"Created {m.get('created', '')} by {m.get('user', '')}", st["Normal"]),
+             _para(f"Vault state {m.get('state', '')}, version {m.get('version', '')}", st["Normal"]),
+             _para(f"Drawings included: {drawings}", st["Normal"]),
              Spacer(1, 12),
-             Paragraph("Missing drawings", st["Heading3"])]
+             _para("Missing drawings", st["Heading3"])]
     missing = m.get("missing") or []
-    story += [Paragraph(str(x), st["Normal"]) for x in missing] or [Paragraph("None", st["Normal"])]
-    story += [Spacer(1, 12), Paragraph("Could not export", st["Heading3"])]
-    story += [Paragraph(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed] \
-        or [Paragraph("None", st["Normal"])]
+    story += [_para(x, st["Normal"]) for x in missing] or [_para("None", st["Normal"])]
+    story += [Spacer(1, 12), _para("Could not export", st["Heading3"])]
+    story += [_para(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed] \
+        or [_para("None", st["Normal"])]
     return _doc(story)
 
 

@@ -80,3 +80,18 @@ def test_missing_drawing_pdf_is_counted_as_failed(tmp_path):
     res = rp.run_review(str(_bom(tmp_path / "bom.txt", 1)), str(manifest), str(out))
     assert res["ok"] is True and res["drawings"] == 0 and res["failed"] == 1
     assert "CD-1.idw" in (PdfReader(str(out)).pages[0].extract_text() or "")
+
+
+def test_cover_escapes_markup_characters(tmp_path):
+    out = tmp_path / "r.pdf"
+    m = {"assembly": "CD-1", "description": 'Plate <1/4" & gusset', "user": "zak@simplifyber.com",
+         "state": "Work in Progress", "version": "1", "created": "2026-10-12 17:30",
+         "drawings": [], "missing": ["CD-<9>"], "failed": [{"drawing": "CD-2.idw", "reason": "bad <x> & y"}]}
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(m), encoding="utf-8")
+    res = rp.run_review(str(_bom(tmp_path / "bom.txt", 1)), str(manifest), str(out))
+    assert res["ok"] is True, res
+    cover = PdfReader(str(out)).pages[0].extract_text() or ""
+    assert 'Plate <1/4"' in cover and "& gusset" in cover
+    assert "CD-<9>" in cover
+    assert "bad <x> & y" in cover
