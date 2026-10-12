@@ -23,6 +23,7 @@ internal sealed class RibbonActions
     public void Create()
     {
         Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Purchasing);
+        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Review);
     }
 
     private void Add(string label, string internalName, string tip, Action<Inv.AssemblyDocument> work)
@@ -97,6 +98,91 @@ internal sealed class RibbonActions
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The purchasing tool failed.");
             Publish(result.Output!, vaultFolder, name, $"Purchasing sheet for {stem}",
                     $"{result.Count} BOM lines." + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
+        }
+        finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
+    }
+
+    private void Review(Inv.AssemblyDocument asm)
+    {
+        var (_, vaultFolder, stem) = Locate(asm);
+        var lines = BomOrdering.Flatten(BomReader.Read(asm));
+        var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(temp);
+        try
+        {
+            var drawings = new List<ReviewDrawing>();
+            var missing = new List<string>();
+            var failed = new List<ReviewFailure>();
+            var root = VaultFiles.WorkingFolderRoot();
+
+            void Collect(string partNumber, string localModel)
+            {
+                try
+                {
+                    var vaultModel = VaultPaths.ToVaultFolder(localModel, root) + "/" + System.IO.Path.GetFileName(localModel);
+                    var model = VaultFiles.FindLatest(vaultModel);
+                    if (model is null) { missing.Add($"{partNumber} (not in Vault)"); return; }
+                    var candidates = VaultFiles.WhereUsedDrawings(model);
+                    var picked = ReviewRules.PickDrawings(model.Name, candidates.Select(c => c.Name));
+                    if (picked.Count == 0) { missing.Add(partNumber); return; }
+                    foreach (var name in picked)
+                    {
+                        var file = candidates.First(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                        try
+                        {
+                            VaultFiles.AcquireLatest(new[] { file });
+                            var local = VaultFiles.LocalPathOf(file);
+                            var pdf = System.IO.Path.Combine(temp, $"{drawings.Count + failed.Count:D3}.pdf");
+                            DrawingExporter.Export(_app, local, pdf);
+                            drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf));
+                        }
+                        catch (Exception ex)
+                        {
+                            _log($"review export {file.Name} failed: {ex}");
+                            failed.Add(new ReviewFailure(file.Name, ex.Message));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log($"review lookup for {partNumber} failed: {ex}");
+                    failed.Add(new ReviewFailure(partNumber, ex.Message));
+                }
+            }
+
+            Collect(stem, asm.FullFileName);
+            foreach (var line in ReviewRules.UniqueComponents(lines))
+            {
+                var n = line.Node;
+                if (string.IsNullOrWhiteSpace(n.FullPath)) continue;
+                string? category = null;
+                try
+                {
+                    var f = VaultFiles.FindLatest(VaultPaths.ToVaultFolder(n.FullPath, root) + "/" + n.FileName);
+                    category = f is null ? null : VaultFiles.CategoryName(f);
+                }
+                catch (Exception ex) { _log($"review category lookup for {n.PartNumber} failed: {ex.Message}"); }
+                if (ReviewRules.Skip(n, category)) continue;
+                Collect(n.PartNumber, n.FullPath);
+            }
+
+            var bom = System.IO.Path.Combine(temp, "bom.txt");
+            BomFile.Write(bom, lines);
+            var asmFile = VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(asm.FullFileName));
+            var conn = VaultSession.Connection;
+            var manifest = System.IO.Path.Combine(temp, "manifest.json");
+            System.IO.File.WriteAllText(manifest, ReviewManifest.ToJson(stem,
+                Convert.ToString(asm.PropertySets["Design Tracking Properties"]["Description"].Value) ?? "",
+                conn.UserName, asmFile?.FileLfCyc?.LfCycStateName ?? "", asmFile?.VerNum.ToString() ?? "",
+                DateTime.Now, drawings, missing, failed));
+
+            var name = VaultPaths.ReviewName(asm.FullFileName);
+            var outPdf = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(asm.FullFileName)!, name);
+            var resultPath = System.IO.Path.Combine(temp, "result.json");
+            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
+            if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The review tool failed.");
+            Publish(result.Output!, vaultFolder, name, $"Design review for {stem}",
+                    $"{result.Count} pages, {drawings.Count} drawings, {missing.Count} missing, {failed.Count} could not export.");
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }

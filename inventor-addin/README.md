@@ -18,6 +18,13 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
   Green = Ready (listening, Vault signed in). Amber = Sign in to Vault (listening, not signed in). Red = Stopped (not listening; see bridge.log).
   Hover for details; click for a dialog with an option to open bridge.log.
 
+## Buttons
+
+Both buttons sit on the SF Vault Bridge panel. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes.
+
+- **Purchasing Sheet**: reads the assembly's BOM and writes the purchasing workbook next to the assembly. It is checked into Vault in the Documents category. Running it again adds a new version of the same file.
+- **Design Review**: builds a PDF watermarked DRAFT with a cover that lists the assembly, the missing drawings and any drawings that failed to export. It then adds the latest Vault drawing of the assembly and of each component (purchased and standard parts are skipped). The PDF is saved next to the assembly and checked into the same Vault folder. A drawing that fails is listed on the cover and never stops the package.
+
 ## Uninstall
 
 Close Inventor, then delete `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge` (DLLs and manifest) and
