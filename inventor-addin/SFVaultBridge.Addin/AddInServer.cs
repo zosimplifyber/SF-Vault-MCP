@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
@@ -18,6 +20,29 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
     private System.Windows.Forms.Control? _ui;
     private HttpHost? _host;
     private FileLog? _log;
+    private ResolveEventHandler? _resolver;
+
+    // Vault DLLs are Private=false: they must come from Inventor's own load of the Vault add-in. Hand back an
+    // already-loaded assembly of the same simple name so we never load a second copy into another context.
+    private static Assembly? ResolveLoaded(object? sender, ResolveEventArgs args)
+    {
+        var name = new AssemblyName(args.Name).Name;
+        return AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => string.Equals(a.GetName().Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static string VaultAssemblyLocation() =>
+        typeof(Connectivity.Application.VaultBase.ConnectionManager).Assembly.Location;
+
+    private static string DescribeVaultAssembly()
+    {
+        try { return VaultAssemblyLocation(); }
+        catch (Exception ex) { return "unavailable: " + ex.Message; }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static IVaultSession NewVaultSession() => new VaultSession();
 
     public void Activate(Inv.ApplicationAddInSite addInSiteObject, bool firstTime)
     {
@@ -25,22 +50,26 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
         _log = new FileLog(System.IO.Path.Combine(dataDir, "bridge.log"));
         try
         {
+            _resolver = ResolveLoaded;
+            AppDomain.CurrentDomain.AssemblyResolve += _resolver;
             _app = addInSiteObject.Application;
             _ui = new System.Windows.Forms.Control();
             _ = _ui.Handle;
             if (!_ui.IsHandleCreated) throw new InvalidOperationException("UI marshalling handle could not be created.");
             var token = TokenStore.LoadOrCreate(System.IO.Path.Combine(dataDir, "token"));
             var router = new Router(token);
-            BridgeOps.RegisterAll(router, new VaultSession(), new StepImporter(_app), new PathGuard(AllowedRoots(_app)), Version, RunOnUi);
+            var roots = AllowedRoots(_app).ToList();
+            BridgeOps.RegisterAll(router, NewVaultSession(), new StepImporter(_app), new PathGuard(roots), Version, RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write);
             _host.Start();
-            _log.Write($"started {Version} on {Prefix}");
+            _log.Write($"started {Version} on {Prefix}; vault assembly: {DescribeVaultAssembly()}; roots: {string.Join(" | ", roots)}");
         }
         catch (Exception ex)
         {
             _log.Write("start failed, bridge stopped: " + ex);
             _host?.Dispose();
             _host = null;
+            DropResolver();
         }
     }
 
@@ -49,6 +78,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
         try
         {
             _host?.Dispose();
+            DropResolver();
             _ui?.Dispose();
             _log?.Write("stopped");
         }
@@ -56,6 +86,13 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
         _host = null;
         _ui = null;
         _app = null;
+    }
+
+    private void DropResolver()
+    {
+        if (_resolver is null) return;
+        AppDomain.CurrentDomain.AssemblyResolve -= _resolver;
+        _resolver = null;
     }
 
     public void ExecuteCommand(int commandID) { }
@@ -82,7 +119,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
     {
         yield return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
         string? workspace = null;
-        try { workspace = app.DesignProjectManager.ActiveDesignProject.WorkspacePath; } catch (COMException) { }
-        yield return string.IsNullOrWhiteSpace(workspace) ? @"C:\Vault Workspace" : workspace;
+        try { workspace = app.DesignProjectManager.ActiveDesignProject.WorkspacePath; } catch (Exception) { }
+        yield return !string.IsNullOrWhiteSpace(workspace) && System.IO.Path.IsPathRooted(workspace) ? workspace : @"C:\Vault Workspace";
     }
 }

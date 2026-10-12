@@ -17,4 +17,5 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Uninstall
 
-Delete `%APPDATA%\Autodesk\Inventor 2026\Addins\SFVaultBridge.addin` and `%APPDATA%\Simplifyber\VaultBridge`.
+Close Inventor, then delete `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge` (DLLs and manifest) and
+`%APPDATA%\Simplifyber\VaultBridge` (token and log). The bridge loads only in Inventor 2026.

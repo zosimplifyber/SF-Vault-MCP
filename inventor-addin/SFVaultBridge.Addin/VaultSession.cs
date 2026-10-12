@@ -58,7 +58,7 @@ internal sealed class VaultSession : IVaultSession
         using var stream = System.IO.File.OpenRead(localPath);
         var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(localPath),
                                              assocs, null, FileClassification.None, false, stream);
-        return ToFile(conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(added.EntityMasterId));
+        return new VaultFile(added.EntityIterationId, added.EntityMasterId, added.EntityName, added.IsCheckedOut);
     }
 
     public IReadOnlyList<VaultFile> UpdateFileCategories(long[] masterIds, long categoryId, string comment) =>

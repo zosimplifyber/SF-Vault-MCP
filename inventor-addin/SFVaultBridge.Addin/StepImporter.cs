@@ -18,9 +18,13 @@ internal sealed class StepImporter : IStepImporter
         if (!System.IO.File.Exists(stepPath)) throw new BridgeException("not_found", $"STEP file not found: {stepPath}");
         if (System.IO.File.Exists(outIpt)) throw new BridgeException("exists", $"Refusing to overwrite existing file {outIpt}");
 
-        var doc = _app.Documents.Open(stepPath, false);
+        // Suppress modal dialogs (STEP import options, Vault Data Standard) for the whole open-to-save span.
+        var previousSilent = _app.SilentOperation;
+        _app.SilentOperation = true;
+        Inv.Document? doc = null;
         try
         {
+            doc = _app.Documents.Open(stepPath, false);
             if (doc.DocumentType != Inv.DocumentTypeEnum.kPartDocumentObject)
                 throw new BridgeException("not_a_part", $"{System.IO.Path.GetFileName(stepPath)} did not open as a single part. Import it by hand.");
             if (doc.File.ReferencedFileDescriptors.Count > 0)
@@ -37,11 +41,14 @@ internal sealed class StepImporter : IStepImporter
 
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outIpt)!);
             doc.SaveAs(outIpt, false);
+            if (!System.IO.File.Exists(outIpt))
+                throw new BridgeException("save_failed", $"Inventor did not save {outIpt}. Check for a Vault Data Standard or save dialog.");
             return outIpt;
         }
         finally
         {
-            try { doc.Close(true); } catch (COMException) { }
+            try { doc?.Close(true); } catch (COMException) { }
+            try { _app.SilentOperation = previousSilent; } catch (COMException) { }
         }
     }
 }
