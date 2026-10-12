@@ -259,32 +259,43 @@ internal static class VaultFiles
         var token = (vendorNumber ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).OrderByDescending(t => t.Length).FirstOrDefault() ?? "";
         if (token.Length > 0)
         {
-            var fast = SearchByProperty(numDef.Id, token, $"Too many Vault files match {token}; check for an existing part by hand.");
-            var hit = FirstKeyMatch(fast, numDef.Id, vendorDef.Id, wanted);
-            if (hit is not null) return hit;
+            // Fast pass: an inconclusive search (cap, no status) just means "no fast hit"; the vendor scan decides.
+            var fast = SearchByProperty(numDef.Id, token, null);
+            if (fast is not null)
+            {
+                var hit = FirstKeyMatch(fast, numDef.Id, vendorDef.Id, wanted);
+                if (hit is not null) return hit;
+            }
         }
         var vendorText = ImportRules.DataCardVendor((vendor ?? "").Trim());
         if (vendorText.Length == 0) return null;
-        var all = SearchByProperty(vendorDef.Id, vendorText, $"Too many Vault files for vendor {vendor}; check for an existing part by hand.");
+        var all = SearchByProperty(vendorDef.Id, vendorText, $"Too many Vault files for vendor {vendor}; check for an existing part by hand.")!;
         return FirstKeyMatch(all, numDef.Id, vendorDef.Id, wanted);
     }
 
     private const int MaxSearchHits = 5000;
 
-    private static List<WsFile> SearchByProperty(long propDefId, string text, string tooManyMessage)
+    /// <summary>
+    /// All latest files whose property contains the text. Inconclusive (more than MaxSearchHits, or Vault gave no status):
+    /// returns null when tooManyMessage is null, else throws BridgeException("duplicate").
+    /// </summary>
+    private static List<WsFile>? SearchByProperty(long propDefId, string text, string? tooManyMessage)
     {
         var ds = Conn.WebServiceManager.DocumentService;
         var cond = new SrchCond { PropDefId = propDefId, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = text, SrchRule = SearchRuleType.Must };
         var hits = new List<WsFile>();
         string bookmark = string.Empty;
         var root = ds.GetFolderRoot();
+        List<WsFile>? Inconclusive(string message) =>
+            tooManyMessage is null ? null : throw new BridgeException("duplicate", message);
         while (true)
         {
             var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out var status);
             if (page is null || page.Length == 0) break;
             hits.AddRange(page);
-            if (hits.Count >= MaxSearchHits) throw new BridgeException("duplicate", tooManyMessage);
-            if (status is null || hits.Count >= status.TotalHits) break;
+            if (status is null) return Inconclusive("Vault did not report how many files match; check for an existing part by hand.");
+            if (hits.Count >= status.TotalHits) break;
+            if (hits.Count >= MaxSearchHits) return Inconclusive(tooManyMessage ?? "");
         }
         return hits;
     }
