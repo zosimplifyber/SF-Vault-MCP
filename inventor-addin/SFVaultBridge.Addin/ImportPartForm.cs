@@ -181,14 +181,14 @@ internal sealed class ImportPartForm : Form
         {
             var name = InputDialog.Ask(this, "New subfolder", "Subfolder name (use / for nesting, e.g. screws/shoulder screws):");
             _loading = true;
-            if (name is not null && name.Split('/').All(ImportRules.IsValidName))
+            if (name is not null && name.Split('/').All(s => ImportRules.IsValidName(s) && !string.Equals(s, VendorFolder, StringComparison.OrdinalIgnoreCase)))
             {
                 if (!_sub.Items.Contains(name)) _sub.Items.Insert(_sub.Items.Count - 1, name);
                 _sub.SelectedItem = name; _subSel = name; _error.Text = "";
             }
             else
             {
-                if (name is not null) _error.Text = "Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space.";
+                if (name is not null) _error.Text = "Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space, and not \"(vendor folder)\".";
                 _sub.SelectedItem = _subSel.Length == 0 ? VendorFolder : _subSel;
             }
             _loading = false;

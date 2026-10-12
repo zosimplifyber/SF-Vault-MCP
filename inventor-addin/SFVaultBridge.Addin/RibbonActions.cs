@@ -143,7 +143,7 @@ internal sealed class RibbonActions
         try
         {
             Cursor.Current = Cursors.WaitCursor;
-            result = ImportPartRunner.Run(_app, plan, step, pdf);
+            result = ImportPartRunner.Run(_app, plan, step, pdf, _log);
         }
         finally { Cursor.Current = cursor; }
 
@@ -157,7 +157,7 @@ internal sealed class RibbonActions
             return;
         }
         _log($"import ok: {result.Cd} at {result.VaultPath}");
-        var msg = $"{result.Cd} added to {result.VaultPath}. PDF attached.";
+        var msg = $"{result.Cd} added to {result.VaultPath}. PDF attached." + (string.IsNullOrEmpty(result.State) ? "" : $"\nState:{result.State}");
         if (result.Warnings.Count > 0) msg += "\n\n" + string.Join("\n", result.Warnings);
         msg += "\n\nOpen the part now?";
         if (Msg(msg, title, MessageBoxButtons.YesNo) == DialogResult.Yes && result.LocalIpt is not null)

@@ -249,9 +249,11 @@ internal static class VaultFiles
     /// <summary>
     /// Latest file whose Vendor/Vendor Number give the same duplicate key as the plan. Fast pass: Vendor Number contains the longest token.
     /// Complete pass: every latest file whose Vendor property contains the data-card vendor text, keys compared in code.
-    /// More than 5000 hits in either pass throws BridgeException("duplicate"): the check is inconclusive.
+    /// Fast-pass hits use ImportRules.IsDuplicate (also catches blank-Vendor and other-spelling legacy files under the vendor's folder).
+    /// The complete pass throws BridgeException("duplicate") when inconclusive: more than 5000 hits, no status, or fewer files than Vault reported.
+    /// The fast pass never throws for those; it just yields no hit.
     /// </summary>
-    public static WsFile? FindByVendorNumber(string vendor, string vendorNumber)
+    public static WsFile? FindByVendorNumber(string vendor, string vendorNumber, Action<string>? log = null)
     {
         var numDef = FilePropDef("Vendor Number");
         var vendorDef = FilePropDef("Vendor");
@@ -260,17 +262,20 @@ internal static class VaultFiles
         if (token.Length > 0)
         {
             // Fast pass: an inconclusive search (cap, no status) just means "no fast hit"; the vendor scan decides.
-            var fast = SearchByProperty(numDef.Id, token, null);
+            var fast = SearchByProperty(numDef.Id, token, null, null);
             if (fast is not null)
             {
-                var hit = FirstKeyMatch(fast, numDef.Id, vendorDef.Id, wanted);
+                var folderCache = new Dictionary<long, string>();
+                string FolderOf(WsFile f) => folderCache.TryGetValue(f.FolderId, out var p) ? p : folderCache[f.FolderId] = FolderPathOf(f);
+                var hit = FirstMatch(fast, numDef.Id, vendorDef.Id,
+                    (f, fv, fn) => ImportRules.NumberKey(fn) == ImportRules.NumberKey(vendorNumber) && ImportRules.IsDuplicate(vendor ?? "", vendorNumber ?? "", fv, fn, FolderOf(f)));
                 if (hit is not null) return hit;
             }
         }
         var vendorText = ImportRules.DataCardVendor((vendor ?? "").Trim());
         if (vendorText.Length == 0) return null;
-        var all = SearchByProperty(vendorDef.Id, vendorText, $"Too many Vault files for vendor {vendor}; check for an existing part by hand.")!;
-        return FirstKeyMatch(all, numDef.Id, vendorDef.Id, wanted);
+        var all = SearchByProperty(vendorDef.Id, vendorText, $"Too many Vault files for vendor {vendor}; check for an existing part by hand.", log, vendor)!;
+        return FirstMatch(all, numDef.Id, vendorDef.Id, (f, fv, fn) => ImportRules.DuplicateKey(fv, fn) == wanted);
     }
 
     private const int MaxSearchHits = 5000;
@@ -279,11 +284,12 @@ internal static class VaultFiles
     /// All latest files whose property contains the text. Inconclusive (more than MaxSearchHits, or Vault gave no status):
     /// returns null when tooManyMessage is null, else throws BridgeException("duplicate").
     /// </summary>
-    private static List<WsFile>? SearchByProperty(long propDefId, string text, string? tooManyMessage)
+    private static List<WsFile>? SearchByProperty(long propDefId, string text, string? tooManyMessage, Action<string>? log, string? label = null)
     {
         var ds = Conn.WebServiceManager.DocumentService;
         var cond = new SrchCond { PropDefId = propDefId, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = text, SrchRule = SearchRuleType.Must };
         var hits = new List<WsFile>();
+        long reported = -1;
         string bookmark = string.Empty;
         var root = ds.GetFolderRoot();
         List<WsFile>? Inconclusive(string message) =>
@@ -294,13 +300,20 @@ internal static class VaultFiles
             if (page is null || page.Length == 0) break;
             hits.AddRange(page);
             if (status is null) return Inconclusive("Vault did not report how many files match; check for an existing part by hand.");
+            reported = status.TotalHits;
             if (hits.Count >= status.TotalHits) break;
             if (hits.Count >= MaxSearchHits) return Inconclusive(tooManyMessage ?? "");
+        }
+        if (tooManyMessage is not null)
+        {
+            log?.Invoke($"duplicate scan {label}: {hits.Count} of {(reported < 0 ? "?" : reported.ToString())}");
+            if (hits.Count < reported)
+                throw new BridgeException("duplicate", "Vault returned fewer files than it reported; check for an existing part by hand.");
         }
         return hits;
     }
 
-    private static WsFile? FirstKeyMatch(List<WsFile> hits, long numDefId, long vendorDefId, string wantedKey)
+    private static WsFile? FirstMatch(List<WsFile> hits, long numDefId, long vendorDefId, Func<WsFile, string, string, bool> isDup)
     {
         var ps = Conn.WebServiceManager.PropertyService;
         for (var i = 0; i < hits.Count; i += 200)
@@ -308,7 +321,7 @@ internal static class VaultFiles
             var batch = hits.Skip(i).Take(200).ToList();
             var props = ps.GetProperties("FILE", batch.Select(f => f.Id).ToArray(), new[] { numDefId, vendorDefId }) ?? Array.Empty<PropInst>();
             string Val(long fileId, long defId) => props.FirstOrDefault(p => p.EntityId == fileId && p.PropDefId == defId)?.Val?.ToString() ?? "";
-            var hit = batch.FirstOrDefault(f => ImportRules.DuplicateKey(Val(f.Id, vendorDefId), Val(f.Id, numDefId)) == wantedKey);
+            var hit = batch.FirstOrDefault(f => isDup(f, Val(f.Id, vendorDefId), Val(f.Id, numDefId)));
             if (hit is not null) return hit;
         }
         return null;
@@ -326,7 +339,7 @@ internal static class VaultFiles
         var cd = ws.DocumentService.GenerateFileNumber(scheme.SchmID, Array.Empty<string>()) ?? "";
         if (!System.Text.RegularExpressions.Regex.IsMatch(cd, @"^CD-\d{6}$"))
             throw new BridgeException("number", $"Vault generated '{cd}', which is not a CD-###### number.");
-        var clash = FindByNameContaining(cd).Where(f => f.Name.StartsWith(cd + ".", StringComparison.OrdinalIgnoreCase)).Select(f => f.Name).ToList();
+        var clash = FindByNameContaining(cd).Where(f => ImportRules.IsNumberClash(f.Name, cd)).Select(f => f.Name).ToList();
         if (clash.Count > 0)
             throw new BridgeException("number", $"Vault generated {cd}, but Vault already has {string.Join(", ", clash)}. The numbering counter is behind. Nothing was written.");
         return cd;
@@ -369,7 +382,14 @@ internal static class VaultFiles
         VDF.Vault.Currency.Entities.FileIteration added;
         using (var stream = System.IO.File.OpenRead(localPath))
             added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(localPath), assocs, null, FileClassification.None, false, stream);
-        var file = ds.GetLatestFileByMasterId(added.EntityMasterId);
+        WsFile file;
+        try { file = ds.GetLatestFileByMasterId(added.EntityMasterId); }
+        catch (Exception ex)
+        {
+            // The file is in Vault; do not report a failed add. Return a stub built from the add result and say the category was not checked.
+            var stub = new WsFile { Id = added.EntityIterationId, MasterId = added.EntityMasterId, Name = fileName, FolderId = wsFolder.Id };
+            return (stub, $"Vault added the file but reading it back failed ({ex.Message}); category not checked");
+        }
         if (CategoryName(file) == category) return (file, null);
         try
         {

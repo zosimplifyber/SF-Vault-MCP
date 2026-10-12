@@ -27,7 +27,7 @@ The Purchasing Sheet and Design Review buttons sit on the SF Vault Bridge panel.
 
 ### Import New Part
 
-The third large button files a vendor STEP and its PDF into Vault as a numbered Part - Purchased. Unlike the other two it works with or without a document open; it still needs a Vault sign-in, and a run blocks Inventor until it finishes.
+The fourth large button files a vendor STEP and its PDF into Vault as a numbered Part - Purchased. Unlike the other two it works with or without a document open; it still needs a Vault sign-in, and a run blocks Inventor until it finishes.
 
 1. Click it and pick the STEP and the PDF in the file dialog (opens in Downloads). Select exactly one of each, or a message says what is missing and the dialog reopens.
 2. Fill the form. Vendor lists the folders under `$/DESIGNS/Simplifyber Library` (or New vendor...). Subfolder is optional (New subfolder... accepts `a/b` for nesting). Vendor Number and Description are prefilled from the file names and both are required. Material (from Inventor's active material library) and Material Finish may stay empty. Designer is your Inventor user name; Engr Approved By is always `NOT REVIEWED`. The "Will create" line shows `CD-<next>`; the real number is taken only when you press Import.

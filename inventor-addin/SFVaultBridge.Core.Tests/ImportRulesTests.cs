@@ -118,4 +118,58 @@ public class ImportRulesTests
     [InlineData("a*b", false)]
     [InlineData("a\tb", false)]
     public void Name_rule(string name, bool ok) => Assert.Equal(ok, ImportRules.IsValidName(name));
+
+    [Fact]
+    public void Validate_refuses_the_vendor_folder_label_as_a_subfolder()
+    {
+        Assert.Contains(ImportRules.Validate(Plan(sub: "(Vendor Folder)")), e => e.Contains("Subfolder"));
+        Assert.Contains(ImportRules.Validate(Plan(sub: "nuts/(vendor folder)")), e => e.Contains("Subfolder"));
+    }
+
+    [Fact]
+    public void CleanText_strips_control_characters_and_trims()
+    {
+        Assert.Equal("Hex Screw", ImportRules.CleanText("  Hex\u0001 Screw\t\n "));
+        Assert.Equal("", ImportRules.CleanText(null));
+    }
+
+    [Theory]
+    [InlineData("CD-000123.ipt", true)]
+    [InlineData("cd-000123 McMaster-Carr 90510A313.pdf", true)]
+    [InlineData("CD-0001234.ipt", false)]
+    [InlineData("CD-000124 x.pdf", false)]
+    public void Number_clash_covers_own_files_and_pdf_names(string name, bool clash) =>
+        Assert.Equal(clash, ImportRules.IsNumberClash(name, "CD-000123"));
+
+    private const string McMasterFolder = "$/DESIGNS/Simplifyber Library/McMaster-Carr/nuts";
+
+    [Fact]
+    public void IsDuplicate_vendor_key_match()
+    {
+        Assert.True(ImportRules.IsDuplicate("McMaster-Carr", "90510 A313", "McMASTER-CARR", "90510a313", "$/Elsewhere"));
+        Assert.True(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "mcmaster-carr", "90510A313", null));
+    }
+
+    [Fact]
+    public void IsDuplicate_blank_file_vendor()
+    {
+        Assert.True(ImportRules.IsDuplicate("Fastenal", "SFJ10", "", "SFJ10", "$/Elsewhere"));
+        Assert.True(ImportRules.IsDuplicate("Fastenal", "SFJ10", "  ", "SFJ10", null));
+    }
+
+    [Fact]
+    public void IsDuplicate_folder_under_chosen_vendor_even_when_vendor_spelled_differently()
+    {
+        Assert.True(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "McMaster Carr Supply", "90510A313", McMasterFolder));
+        Assert.True(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "Other", "90510A313", "$/DESIGNS/Simplifyber Library/McMaster-Carr"));
+    }
+
+    [Fact]
+    public void IsDuplicate_is_false_for_same_number_other_vendor_and_other_folder()
+    {
+        Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "Festo", "90510A313", "$/DESIGNS/Simplifyber Library/Festo"));
+        Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "Festo", "90510A313", "$/DESIGNS/Simplifyber Library/McMaster-Carrot"));
+        Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "", "90510A314", McMasterFolder));
+        Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "", "", "", McMasterFolder));
+    }
 }

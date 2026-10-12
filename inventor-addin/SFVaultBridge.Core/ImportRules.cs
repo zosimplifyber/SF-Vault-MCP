@@ -53,13 +53,37 @@ public static class ImportRules
     public static bool IsValidName(string name) =>
         !string.IsNullOrWhiteSpace(name) && name == name.Trim() && !name.EndsWith('.') && name.IndexOfAny(Bad) < 0 && !name.Any(char.IsControl);
 
+    public const string VendorFolderLabel = "(vendor folder)";
+
+    /// <summary>Trims and removes control characters (data-card text).</summary>
+    public static string CleanText(string? s) => new string((s ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+
+    /// <summary>True when a latest file name is the CD number's own file ("CD-000123.ipt") or starts with "CD-000123 " (its PDF).</summary>
+    public static bool IsNumberClash(string fileName, string cd) =>
+        (fileName ?? "").StartsWith(cd + ".", StringComparison.OrdinalIgnoreCase) || (fileName ?? "").StartsWith(cd + " ", StringComparison.OrdinalIgnoreCase);
+
+    public static string NumberKey(string? vendorNumber) => Regex.Replace(vendorNumber ?? "", @"\s+", "").ToUpperInvariant();
+
+    /// <summary>
+    /// Duplicate rule: Vendor Number keys match AND (vendor keys match, or the file's Vendor is blank, or the file sits under the chosen vendor's Library folder).
+    /// </summary>
+    public static bool IsDuplicate(string planVendor, string planNumber, string? fileVendor, string? fileNumber, string? fileFolderPath)
+    {
+        if (NumberKey(fileNumber) != NumberKey(planNumber) || NumberKey(planNumber).Length == 0) return false;
+        if (string.IsNullOrWhiteSpace(fileVendor)) return true;
+        if (DuplicateKey(fileVendor!, "") == DuplicateKey(planVendor, "")) return true;
+        var root = $"{LibraryRoot}/{(planVendor ?? "").Trim()}";
+        var path = (fileFolderPath ?? "").TrimEnd('/');
+        return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static IReadOnlyList<string> Validate(ImportPlan p)
     {
         var errors = new List<string>();
         if (!IsValidName(p.Vendor ?? "")) errors.Add("Vendor: choose a vendor, or a new name without / \\ : * ? \" < > | and no trailing dot or space.");
         var sub = p.Subfolder ?? "";
-        if (sub.Length > 0 && sub.Split('/').Any(s => !IsValidName(s))) errors.Add("Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space.");
-        var vn = new string((p.VendorNumber ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (sub.Length > 0 && sub.Split('/').Any(s => !IsValidName(s) || string.Equals(s, VendorFolderLabel, StringComparison.OrdinalIgnoreCase))) errors.Add("Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space, and cannot be \"(vendor folder)\".");
+        var vn = CleanText(p.VendorNumber);
         if (vn.Length == 0) errors.Add("Vendor Number is required.");
         else if (!SafeFilePart(vn).Any(char.IsLetterOrDigit)) errors.Add("Vendor Number must contain at least one letter or digit.");
         if (string.IsNullOrWhiteSpace(p.Description)) errors.Add("Description is required.");
