@@ -23,6 +23,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
     private ResolveEventHandler? _resolver;
     private IVaultSession? _vault;
     private RibbonStatus? _ribbon;
+    private RibbonActions? _actions;
 
     // Vault DLLs are Private=false: they must come from Inventor's own load of the Vault add-in. Hand back an
     // already-loaded assembly of the same simple name so we never load a second copy into another context.
@@ -86,6 +87,8 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             _ribbon = new RibbonStatus(_app, () => _host, SafeVaultStatus, Prefix,
                 System.IO.Path.Combine(dataDir, "bridge.log"), _log.Write);
             _ribbon.Create();
+            _actions = new RibbonActions(_app, _ribbon.Panels, _log.Write);
+            _actions.Create();
         }
         catch (Exception ex) { _log?.Write("ribbon setup failed: " + ex); }
     }
@@ -98,6 +101,9 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
 
     public void Deactivate()
     {
+        try { _actions?.Destroy(); }
+        catch (Exception ex) { _log?.Write("actions destroy failed: " + ex); }
+        _actions = null;
         try { _ribbon?.Destroy(); }
         catch (Exception ex) { _log?.Write("ribbon stop failed: " + ex); }
         _ribbon = null;

@@ -35,6 +35,8 @@ internal sealed class RibbonStatus
     private Timer? _timer;
     private BridgeStatusView? _last;
 
+    public IReadOnlyList<Inv.RibbonPanel> Panels => _panels;
+
     public RibbonStatus(Inv.Application app, Func<HttpHost?> host, Func<StatusInfo?> vaultStatus, string prefix, string logPath, Action<string> log)
     {
         _app = app; _host = host; _vaultStatus = vaultStatus; _prefix = prefix; _logPath = logPath; _log = log;

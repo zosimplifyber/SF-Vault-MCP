@@ -15,6 +15,8 @@ internal sealed class VaultSession : IVaultSession
     private static VDF.Vault.Currency.Connections.Connection Conn =>
         Current ?? throw new BridgeException("not_signed_in", BridgeOps.NotSignedInMessage);
 
+    internal static VDF.Vault.Currency.Connections.Connection Connection => Conn;
+
     public StatusInfo Status()
     {
         var c = Current;
