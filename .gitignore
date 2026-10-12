@@ -60,3 +60,5 @@ build_purchasing_log.txt
 Thumbs.db
 inventor-addin/**/bin/
 inventor-addin/**/obj/
+inventor-addin/tools/
+build/sfvaulttools/

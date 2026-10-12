@@ -17,9 +17,15 @@ $oldManifest = Join-Path $env:APPDATA 'Autodesk\Inventor 2026\Addins\SFVaultBrid
 dotnet build (Join-Path $root 'SFVaultBridge.Addin\SFVaultBridge.Addin.csproj') -c $Configuration --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
+$tool = Join-Path $root 'tools\SFVaultTools.exe'
+if (-not (Test-Path $tool)) {
+    & cmd /c (Join-Path (Split-Path $root -Parent) 'build_vault_tools_exe.bat')
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tool)) { throw 'Building SFVaultTools.exe failed.' }
+}
 $out = Join-Path $root "SFVaultBridge.Addin\bin\$Configuration\net8.0-windows"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item (Join-Path $out 'SFVaultBridge.*') $dest -Force
+Copy-Item $tool $dest -Force
 
 $assembly = Join-Path $dest 'SFVaultBridge.Addin.dll'
 $manifest = (Get-Content (Join-Path $root 'manifest\SFVaultBridge.addin') -Raw).Replace('{{ASSEMBLY}}', $assembly)
