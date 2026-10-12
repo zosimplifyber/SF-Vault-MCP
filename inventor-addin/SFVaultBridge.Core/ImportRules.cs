@@ -51,7 +51,7 @@ public static class ImportRules
     private static readonly char[] Bad = { '/', '\\', ':', '*', '?', '"', '<', '>', '|' };
 
     public static bool IsValidName(string name) =>
-        !string.IsNullOrWhiteSpace(name) && name == name.Trim() && !name.EndsWith('.') && name.IndexOfAny(Bad) < 0;
+        !string.IsNullOrWhiteSpace(name) && name == name.Trim() && !name.EndsWith('.') && name.IndexOfAny(Bad) < 0 && !name.Any(char.IsControl);
 
     public static IReadOnlyList<string> Validate(ImportPlan p)
     {
@@ -59,7 +59,8 @@ public static class ImportRules
         if (!IsValidName(p.Vendor ?? "")) errors.Add("Vendor: choose a vendor, or a new name without / \\ : * ? \" < > | and no trailing dot or space.");
         var sub = p.Subfolder ?? "";
         if (sub.Length > 0 && sub.Split('/').Any(s => !IsValidName(s))) errors.Add("Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space.");
-        if (string.IsNullOrWhiteSpace(p.VendorNumber)) errors.Add("Vendor Number is required.");
+        var vn = new string((p.VendorNumber ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (vn.Length == 0) errors.Add("Vendor Number is required.");
         if (string.IsNullOrWhiteSpace(p.Description)) errors.Add("Description is required.");
         return errors;
     }
@@ -72,7 +73,13 @@ public static class ImportRules
 
     public static string PartFileName(string cd) => cd + ".ipt";
 
-    public static string PdfFileName(string cd, ImportPlan p) => $"{cd} {p.Vendor} {p.VendorNumber.Trim()}.pdf";
+    public static string PdfFileName(string cd, ImportPlan p) => $"{cd} {p.Vendor} {SafeFilePart(p.VendorNumber.Trim())}.pdf";
+
+    private static readonly Regex UnsafeFileChars = new(@"[/\\:*?""<>|\p{Cc}]+");
+
+    /// <summary>Makes a file-name fragment safe: each run of unsafe characters becomes one '-', and spaces/dots are trimmed at the ends.</summary>
+    public static string SafeFilePart(string s) =>
+        UnsafeFileChars.Replace(s ?? "", "-").Trim(' ', '.');
 
     public static string DuplicateKey(string vendor, string vendorNumber) =>
         Regex.Replace(DataCardVendor((vendor ?? "").Trim()), @"\s+", "").ToUpperInvariant() + "|" +

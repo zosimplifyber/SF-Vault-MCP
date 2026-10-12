@@ -44,7 +44,7 @@ public class ImportRulesTests
         Assert.Empty(ImportRules.Validate(Plan()));
         Assert.Contains(ImportRules.Validate(Plan(vn: " ")), e => e.Contains("Vendor Number"));
         Assert.Contains(ImportRules.Validate(Plan(desc: "")), e => e.Contains("Description"));
-        Assert.Contains(ImportRules.Validate(Plan(vendor: "Bad/Vendor")), e => e.Contains("Vendor"));
+        Assert.Contains(ImportRules.Validate(Plan(vendor: "Bad/Vendor")), e => e.StartsWith("Vendor:"));
         Assert.Contains(ImportRules.Validate(Plan(sub: "a:b")), e => e.Contains("Subfolder"));
         Assert.Contains(ImportRules.Validate(Plan(sub: "nuts.")), e => e.Contains("Subfolder"));
         Assert.Empty(ImportRules.Validate(Plan(sub: "screws/shoulder screws")));
@@ -70,6 +70,28 @@ public class ImportRulesTests
         Assert.NotEqual(ImportRules.DuplicateKey("MiSUMi", "90510A313"), ImportRules.DuplicateKey("McMaster-Carr", "90510A313"));
     }
 
+    [Fact]
+    public void Pdf_name_sanitizes_vendor_number_without_rejecting_it()
+    {
+        Assert.Empty(ImportRules.Validate(Plan(vn: "SFJ10/100")));
+        Assert.Equal("CD-001901 MiSUMi SFJ10-100.pdf", ImportRules.PdfFileName("CD-001901", Plan(vendor: "MiSUMi", vn: "SFJ10/100")));
+        Assert.Equal("CD-001901 MiSUMi A-B.pdf", ImportRules.PdfFileName("CD-001901", Plan(vendor: "MiSUMi", vn: "A:B")));
+        Assert.Equal("CD-001901 MiSUMi A-B.pdf", ImportRules.PdfFileName("CD-001901", Plan(vendor: "MiSUMi", vn: "A:/B")));
+        Assert.Equal("CD-001901 MiSUMi A-B.pdf", ImportRules.PdfFileName("CD-001901", Plan(vendor: "MiSUMi", vn: "A\u0001B")));
+    }
+
+    [Fact]
+    public void Safe_file_part_trims_edges()
+    {
+        Assert.Equal("A-B", ImportRules.SafeFilePart(" .A:B. "));
+    }
+
+    [Fact]
+    public void Control_only_vendor_number_is_rejected()
+    {
+        Assert.Contains(ImportRules.Validate(Plan(vn: "\u0001\t")), e => e.Contains("Vendor Number"));
+    }
+
     [Theory]
     [InlineData("MiSUMi", true)]
     [InlineData("Bosch Rexroth", true)]
@@ -78,5 +100,6 @@ public class ImportRulesTests
     [InlineData("trail ", false)]
     [InlineData("end.", false)]
     [InlineData("a*b", false)]
+    [InlineData("a\tb", false)]
     public void Name_rule(string name, bool ok) => Assert.Equal(ok, ImportRules.IsValidName(name));
 }
