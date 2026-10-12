@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
+from datetime import date
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -15,14 +16,19 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 import bom_purchasing as bp
-from pdf_watermark import apply_watermark
+from pdf_watermark import apply_watermark, apply_watermark_to_pages
 
 WATERMARK = "DRAFT"
 WATERMARK_COLOR = "#C62828"
 WATERMARK_OPACITY = 0.25
+UNRELEASED_TEXT = "NOT RELEASED"
+FOOTER_COLOR = "#666666"
+FOOTER_SIZE = 7
+FOOTER_BOTTOM = 18
 BOM_COLUMNS = ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV"]
 
 
@@ -36,6 +42,51 @@ def _doc(story) -> bytes:
 def _para(text: Any, style) -> Paragraph:
     # Paragraph parses markup, so every interpolated value must be escaped.
     return Paragraph(escape(str(text)), style)
+
+
+def _is_released(d: dict[str, Any]) -> bool:
+    return str(d.get("state") or "").strip().lower() == "released"
+
+
+def _assembly_cover(m: dict[str, Any], usable: list, failed: list[dict[str, str]]) -> bytes:
+    st = getSampleStyleSheet()
+    story = [_para(f"Assembly package: {m.get('assembly', '')}", st["Title"]),
+             _para(m.get("description") or "", st["Heading2"]),
+             _para(f"Created {m.get('created', '')} by {m.get('user', '')}", st["Normal"]),
+             _para(f"Vault state {m.get('state', '')}, version {m.get('version', '')}", st["Normal"]),
+             _para(f"Revision {m.get('revision') or '-'}", st["Normal"]),
+             Spacer(1, 12), _para("Included drawings", st["Heading3"])]
+    story += [_para(f"{d.get('part_number', '')} - {d.get('drawing', '')} ({str(d.get('state') or '').strip() or 'unknown'})",
+                    st["Normal"]) for d, _ in usable] or [_para("None", st["Normal"])]
+    story += [Spacer(1, 12), _para("Missing drawings", st["Heading3"])]
+    story += [_para(x, st["Normal"]) for x in (m.get("missing") or [])] or [_para("None", st["Normal"])]
+    story += [Spacer(1, 12), _para("Could not export", st["Heading3"])]
+    story += [_para(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed]         or [_para("None", st["Normal"])]
+    return _doc(story)
+
+
+def _apply_footer(pdf_bytes: bytes, text: str) -> bytes:
+    reader = PdfReader(BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    cache: dict[tuple[float, float], Any] = {}
+    for page in reader.pages:
+        box = page.mediabox
+        left, bottom = float(box.left), float(box.bottom)
+        size = (float(box.width), float(box.height))
+        key = (*size, left, bottom)
+        if key not in cache:
+            buf = BytesIO()
+            c = canvas.Canvas(buf, pagesize=(left + size[0], bottom + size[1]))
+            c.setFont("Helvetica", FOOTER_SIZE)
+            c.setFillColor(colors.HexColor(FOOTER_COLOR))
+            c.drawCentredString(left + size[0] / 2.0, bottom + FOOTER_BOTTOM, text)
+            c.save()
+            cache[key] = PdfReader(BytesIO(buf.getvalue())).pages[0]
+        page.merge_page(cache[key])
+        writer.add_page(page)
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 def _cover(m: dict[str, Any], drawings: int, failed: list[dict[str, str]]) -> bytes:
@@ -81,6 +132,7 @@ def _bom_table(bom: str) -> bytes:
 
 def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
     m = json.loads(Path(manifest).read_text(encoding="utf-8"))
+    mode = "assembly" if str(m.get("mode") or "review").strip().lower() == "assembly" else "review"
     failed = [dict(f) for f in (m.get("failed") or [])]
     usable = []
     for d in m.get("drawings") or []:
@@ -90,7 +142,7 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
             failed.append({"drawing": d.get("drawing", ""), "reason": f"PDF unreadable: {exc}"})
 
     purchased = []
-    for p in m.get("purchased") or []:
+    for p in ([] if mode == "assembly" else (m.get("purchased") or [])):
         try:
             purchased.append((p, PdfReader(str(p["pdf"]))))
         except Exception as exc:
@@ -104,23 +156,36 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
         for page in reader.pages:
             writer.add_page(page)
 
-    add("Cover", PdfReader(BytesIO(_cover(m, len(usable), failed))))
+    cover = _assembly_cover(m, usable, failed) if mode == "assembly" else _cover(m, len(usable), failed)
+    add("Cover", PdfReader(BytesIO(cover)))
     add("BOM", PdfReader(BytesIO(_bom_table(bom))))
+    unreleased_pages: set[int] = set()
+    unreleased = 0
     for d, reader in usable:
+        start = len(writer.pages)
         add(f"{d.get('part_number', '')} - {d.get('drawing', '')}", reader)
+        if mode == "assembly" and not _is_released(d):
+            unreleased += 1
+            unreleased_pages.update(range(start, len(writer.pages)))
     for p, reader in purchased:
         add(_purchased_title(p), reader)
 
     merged = BytesIO()
     writer.write(merged)
-    stamped = apply_watermark(merged.getvalue(), WATERMARK, font_size=120,
-                              color=WATERMARK_COLOR, opacity=WATERMARK_OPACITY)
+    if mode == "assembly":
+        stamped = apply_watermark_to_pages(merged.getvalue(), UNRELEASED_TEXT, unreleased_pages, font_size=120,
+                                           color=WATERMARK_COLOR, opacity=WATERMARK_OPACITY)
+        footer = f"FOR ASSEMBLY | {m.get('assembly', '')} Rev {m.get('revision') or '-'} | {date.today().isoformat()}"
+        stamped = _apply_footer(stamped, footer)
+    else:
+        stamped = apply_watermark(merged.getvalue(), WATERMARK, font_size=120,
+                                  color=WATERMARK_COLOR, opacity=WATERMARK_OPACITY)
     final = PdfWriter(clone_from=PdfReader(BytesIO(stamped)))
     for title, index in marks:
         final.add_outline_item(title, index)
     Path(out_pdf).parent.mkdir(parents=True, exist_ok=True)
     with open(out_pdf, "wb") as fh:
         final.write(fh)
-    return {"ok": True, "pdf": str(out_pdf), "pages": len(final.pages), "drawings": len(usable),
+    return {"ok": True, "mode": mode, "unreleased": unreleased, "pdf": str(out_pdf), "pages": len(final.pages), "drawings": len(usable),
             "purchased": len(purchased), "no_vendor_drawing": len(m.get("no_vendor_drawing") or []),
             "missing": len(m.get("missing") or []), "failed": len(failed)}

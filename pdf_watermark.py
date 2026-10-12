@@ -83,3 +83,34 @@ def apply_watermark(
     out = BytesIO()
     writer.write(out)
     return out.getvalue()
+
+
+def apply_watermark_to_pages(
+    pdf_bytes: bytes,
+    text: str,
+    page_indices,
+    *,
+    font_size: int = 80,
+    color: str = "#888888",
+    opacity: float = 0.3,
+    rotation: float = 45.0,
+) -> bytes:
+    """Like apply_watermark, but only the pages whose 0-based index is in page_indices."""
+    wanted = set(page_indices)
+    reader = PdfReader(BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    cache: Dict[Tuple[float, float], object] = {}
+    for i, page in enumerate(reader.pages):
+        if i in wanted:
+            size = (float(page.mediabox.width), float(page.mediabox.height))
+            if size not in cache:
+                wm_pdf = _make_watermark_page(
+                    text, size[0], size[1],
+                    font_size=font_size, color=color, opacity=opacity, rotation=rotation,
+                )
+                cache[size] = PdfReader(BytesIO(wm_pdf)).pages[0]
+            page.merge_page(cache[size])
+        writer.add_page(page)
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()

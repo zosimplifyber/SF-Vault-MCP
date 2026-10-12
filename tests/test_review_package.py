@@ -135,3 +135,111 @@ def test_cover_shows_none_for_empty_no_vendor_list(tmp_path):
     assert res["ok"] is True
     cover = PdfReader(str(out)).pages[0].extract_text() or ""
     assert "No vendor drawing" in cover
+
+
+# ---- assembly mode ----
+
+def _assembly_manifest(tmp_path: Path, drawings, revision="3", **extra) -> Path:
+    m = {"mode": "assembly", "revision": revision, "assembly": "CD-001887",
+         "description": "big blue sub-adapter assembly", "user": "zak@simplifyber.com",
+         "state": "Work in Progress", "version": "5", "created": "2026-10-13 07:00",
+         "drawings": drawings, "missing": ["CD-001889"], "failed": []}
+    m.update(extra)
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps(m), encoding="utf-8")
+    return p
+
+
+def _build_assembly(tmp_path: Path, drawings, revision="3", **extra):
+    out = tmp_path / "asm.pdf"
+    manifest = _assembly_manifest(tmp_path, drawings, revision, **extra)
+    res = rp.run_review(str(_bom(tmp_path / "bom.txt", 2)), str(manifest), str(out))
+    reader = PdfReader(str(out))
+    return res, reader, [p.extract_text() or "" for p in reader.pages]
+
+
+def test_assembly_stamps_only_unreleased_pages_and_footer_everywhere(tmp_path):
+    import datetime
+    d1 = _drawing(tmp_path / "a.pdf", "RELDRAWING", pages=1)
+    d2 = _drawing(tmp_path / "b.pdf", "WIPDRAWING", pages=2)
+    d3 = _drawing(tmp_path / "c.pdf", "LATERREL", pages=1)
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-001887", "drawing": "CD-001887.idw", "pdf": str(d1), "state": "Released"},
+        {"part_number": "CD-001891", "drawing": "CD-001891.idw", "pdf": str(d2), "state": "Work in Progress"},
+        {"part_number": "CD-001892", "drawing": "CD-001892.idw", "pdf": str(d3), "state": "Released"},
+    ])
+    assert res["ok"] is True, res
+    assert res["mode"] == "assembly" and res["unreleased"] == 1 and res["drawings"] == 3
+    assert [o.title for o in reader.outline] == ["Cover", "BOM", "CD-001887 - CD-001887.idw",
+                                                  "CD-001891 - CD-001891.idw", "CD-001892 - CD-001892.idw"]
+    idx = lambda key: [i for i, t in enumerate(texts) if key in t]
+    assert idx("NOT RELEASED") == idx("WIPDRAWING") and len(idx("NOT RELEASED")) == 2
+    assert idx("RELDRAWING") and not set(idx("RELDRAWING")) & set(idx("NOT RELEASED"))
+    assert not set(idx("LATERREL")) & set(idx("NOT RELEASED"))
+    assert all("DRAFT" not in t for t in texts)
+    footer = "FOR ASSEMBLY | CD-001887 Rev 3 |"
+    assert all(footer in t for t in texts), texts
+    assert all(datetime.date.today().isoformat() in t for t in texts)
+    cover = texts[0]
+    assert "Assembly package: CD-001887" in cover and "Revision 3" in cover
+    assert "CD-001891 - CD-001891.idw (Work in Progress)" in cover
+    assert "CD-001889" in cover and "No vendor drawing" not in cover
+
+
+def test_assembly_empty_revision_renders_dash(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "ONLY")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-001887", "drawing": "CD-001887.idw", "pdf": str(d1), "state": "Released"}], revision="")
+    assert all("FOR ASSEMBLY | CD-001887 Rev - |" in t for t in texts)
+    assert "Revision -" in texts[0]
+    assert res["unreleased"] == 0
+
+
+def test_assembly_state_case_and_whitespace_count_as_released(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "ONE")
+    d2 = _drawing(tmp_path / "b.pdf", "TWO")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1), "state": "released "},
+        {"part_number": "CD-2", "drawing": "CD-2.idw", "pdf": str(d2), "state": "RELEASED"}])
+    assert res["unreleased"] == 0
+    assert all("NOT RELEASED" not in t for t in texts)
+
+
+def test_assembly_missing_state_is_unreleased_and_unknown_on_cover(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "NOSTATE")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1)}])
+    assert res["unreleased"] == 1
+    assert any("NOT RELEASED" in t and "NOSTATE" in t for t in texts)
+    assert "(unknown)" in texts[0]
+
+
+def test_assembly_only_assembly_drawing_gives_cover_bom_drawing(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "TOP")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1), "state": "Released"}])
+    assert [o.title for o in reader.outline] == ["Cover", "BOM", "CD-1 - CD-1.idw"]
+    assert res["pages"] == 3
+
+
+def test_assembly_ignores_purchased(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "TOP")
+    p1 = _drawing(tmp_path / "p1.pdf", "BOLTSHEET")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1), "state": "Released"}],
+        purchased=[{"part_number": "CD-7", "vendor": "x", "vendor_number": "1", "pdf": str(p1)}],
+        no_vendor_drawing=["CD-11"])
+    assert all("BOLTSHEET" not in t for t in texts)
+    assert [o.title for o in reader.outline] == ["Cover", "BOM", "CD-1 - CD-1.idw"]
+    assert res["purchased"] == 0 and "CD-11" not in texts[0]
+
+
+def test_manifest_without_mode_is_review(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "TOP")
+    out = tmp_path / "r.pdf"
+    manifest = _manifest(tmp_path, [{"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1)}])
+    res = rp.run_review(str(_bom(tmp_path / "bom.txt", 1)), str(manifest), str(out))
+    texts = [p.extract_text() or "" for p in PdfReader(str(out)).pages]
+    assert res["mode"] == "review"
+    assert all("DRAFT" in t for t in texts)
+    assert all("FOR ASSEMBLY" not in t and "NOT RELEASED" not in t for t in texts)
