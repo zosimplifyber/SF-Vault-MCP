@@ -61,6 +61,7 @@ public static class ImportRules
         if (sub.Length > 0 && sub.Split('/').Any(s => !IsValidName(s))) errors.Add("Subfolder: each level needs a name without \\ : * ? \" < > | and no trailing dot or space.");
         var vn = new string((p.VendorNumber ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
         if (vn.Length == 0) errors.Add("Vendor Number is required.");
+        else if (!SafeFilePart(vn).Any(char.IsLetterOrDigit)) errors.Add("Vendor Number must contain at least one letter or digit.");
         if (string.IsNullOrWhiteSpace(p.Description)) errors.Add("Description is required.");
         return errors;
     }

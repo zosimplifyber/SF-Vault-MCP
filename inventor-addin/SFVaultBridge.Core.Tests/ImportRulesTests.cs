@@ -93,6 +93,22 @@ public class ImportRulesTests
     }
 
     [Theory]
+    [InlineData(".")]
+    [InlineData(" . ")]
+    [InlineData("..")]
+    [InlineData("///")]
+    public void Vendor_number_without_letter_or_digit_is_rejected(string vn)
+    {
+        Assert.Contains(ImportRules.Validate(Plan(vn: vn)), e => e == "Vendor Number must contain at least one letter or digit.");
+    }
+
+    [Fact]
+    public void Vendor_number_with_slash_is_still_valid()
+    {
+        Assert.Empty(ImportRules.Validate(Plan(vn: "SFJ10/100")));
+    }
+
+    [Theory]
     [InlineData("MiSUMi", true)]
     [InlineData("Bosch Rexroth", true)]
     [InlineData("", false)]
