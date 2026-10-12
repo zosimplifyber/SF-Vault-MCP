@@ -20,7 +20,7 @@ New-Item -ItemType Directory -Force -Path $dest, $addins | Out-Null
 Copy-Item (Join-Path $out 'SFVaultBridge.*') $dest -Force
 
 $assembly = Join-Path $dest 'SFVaultBridge.Addin.dll'
-$manifest = (Get-Content (Join-Path $root 'manifestSFVaultBridge.addin') -Raw).Replace('{{ASSEMBLY}}', $assembly)
+$manifest = (Get-Content (Join-Path $root 'manifest\SFVaultBridge.addin') -Raw).Replace('{{ASSEMBLY}}', $assembly)
 Set-Content -Path (Join-Path $addins 'SFVaultBridge.addin') -Value $manifest -Encoding UTF8
 
 Write-Host "Installed SF Vault Bridge to $dest"
