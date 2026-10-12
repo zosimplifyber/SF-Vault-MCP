@@ -24,9 +24,10 @@ internal sealed class RibbonActions
     {
         Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
         Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, Review);
+        Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
     }
 
-    private void Add(string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument> work)
+    private void Add(string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument>? work, Action? custom = null)
     {
         try
         {
@@ -37,7 +38,7 @@ internal sealed class RibbonActions
             def ??= defs.AddButtonDefinition(label, internalName, Inv.CommandTypesEnum.kNonShapeEditCmdType, ClientId, tip, tip,
                                              small, large, Inv.ButtonDisplayEnum.kAlwaysDisplayText);
             try { def.StandardIcon = small; def.LargeIcon = large; } catch (Exception ex) { _log($"{label} icon not set: {ex.Message}"); }
-            Inv.ButtonDefinitionSink_OnExecuteEventHandler handler = _ => Click(label, work);
+            Inv.ButtonDefinitionSink_OnExecuteEventHandler handler = _ => { if (custom is not null) ClickAny(label, custom); else Click(label, work!); };
             def.OnExecute += handler;
             _buttons.Add((def, handler));
             foreach (var panel in _panels)
@@ -91,6 +92,79 @@ internal sealed class RibbonActions
         catch (BridgeException ex) { _log($"{label}: {ex.Code} {ex.Message}"); Msg(ex.Message, label); }
         catch (Exception ex) { _log($"{label} failed: {ex}"); Msg($"{label} failed: {ex.Message}\nDetails are in bridge.log.", label); }
         finally { Cursor.Current = cursor; _running = false; }
+    }
+
+    /// <summary>Click guard for buttons that need no open document.</summary>
+    private void ClickAny(string label, Action work)
+    {
+        if (_running) { Msg("Already running.", label); return; }
+        _running = true;
+        try { work(); }
+        catch (BridgeException ex) { _log($"{label}: {ex.Code} {ex.Message}"); Msg(ex.Message, label); }
+        catch (Exception ex) { _log($"{label} failed: {ex}"); Msg($"{label} failed: {ex.Message}\nDetails are in bridge.log.", label); }
+        finally { _running = false; }
+    }
+
+    private void ImportNewPart()
+    {
+        const string title = "Import New Part";
+        string? step = null, pdf = null;
+        var downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        while (true)
+        {
+            using var dlg = new OpenFileDialog
+            {
+                Title = "Select the vendor STEP and PDF",
+                InitialDirectory = System.IO.Directory.Exists(downloads) ? downloads : "",
+                Filter = "Vendor files (*.stp;*.step;*.pdf)|*.stp;*.step;*.pdf",
+                Multiselect = true,
+            };
+            var owner = OwnerWindow();
+            var ok = owner is null ? dlg.ShowDialog() : dlg.ShowDialog(owner);
+            if (ok != DialogResult.OK) return;
+            var check = SelectionCheck.Check(dlg.FileNames);
+            if (check.Error is not null) { Msg(check.Error, title); continue; }
+            step = check.Step; pdf = check.Pdf;
+            break;
+        }
+        if (step is null || pdf is null) return;
+
+        ImportPlan? plan;
+        using (var form = new ImportPartForm(_app, step, pdf, _log))
+        {
+            var owner = OwnerWindow();
+            var r = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
+            plan = r == DialogResult.OK ? form.Plan : null;
+        }
+        if (plan is null) return;
+
+        ImportResult result;
+        var cursor = Cursor.Current;
+        try
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            result = ImportPartRunner.Run(_app, plan, step, pdf);
+        }
+        finally { Cursor.Current = cursor; }
+
+        if (!result.Ok)
+        {
+            _log($"import failed at {result.FailedStep}: {result.Error}");
+            var text = $"Import stopped at step: {result.FailedStep}\n{result.Error}";
+            if (result.AlreadyInVault.Count > 0) text += "\n\nAlready in Vault: " + string.Join(", ", result.AlreadyInVault);
+            if (result.Warnings.Count > 0) text += "\n\n" + string.Join("\n", result.Warnings);
+            Msg(text, title);
+            return;
+        }
+        _log($"import ok: {result.Cd} at {result.VaultPath}");
+        var msg = $"{result.Cd} added to {result.VaultPath}. PDF attached.";
+        if (result.Warnings.Count > 0) msg += "\n\n" + string.Join("\n", result.Warnings);
+        msg += "\n\nOpen the part now?";
+        if (Msg(msg, title, MessageBoxButtons.YesNo) == DialogResult.Yes && result.LocalIpt is not null)
+        {
+            try { _app.Documents.Open(result.LocalIpt, true); }
+            catch (Exception ex) { _log($"open {result.LocalIpt} failed: {ex}"); Msg($"Could not open the part: {ex.Message}", title); }
+        }
     }
 
     private static (string Folder, string VaultFolder, string Stem) Locate(Inv.AssemblyDocument asm)

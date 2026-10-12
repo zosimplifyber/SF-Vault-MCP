@@ -117,4 +117,32 @@ internal static class Icons
         }
         return bmp;
     }
+
+    /// <summary>Isometric box with a green down arrow dropping into it.</summary>
+    public static Bitmap BoxDown(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var top = new[] { new PointF(S(16), S(13)), new PointF(S(27), S(18)), new PointF(S(16), S(23)), new PointF(S(5), S(18)) };
+            var left = new[] { new PointF(S(5), S(18)), new PointF(S(16), S(23)), new PointF(S(16), S(31)), new PointF(S(5), S(26)) };
+            var right = new[] { new PointF(S(27), S(18)), new PointF(S(16), S(23)), new PointF(S(16), S(31)), new PointF(S(27), S(26)) };
+            using (var b = new SolidBrush(Paper)) g.FillPolygon(b, top);
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, left);
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillPolygon(b, right);
+            g.DrawPolygon(pen, top); g.DrawPolygon(pen, left); g.DrawPolygon(pen, right);
+            var arrow = new[]
+            {
+                new PointF(S(13.5f), S(1)), new PointF(S(18.5f), S(1)), new PointF(S(18.5f), S(8)), new PointF(S(22), S(8)),
+                new PointF(S(16), S(15)), new PointF(S(10), S(8)), new PointF(S(13.5f), S(8)),
+            };
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, arrow);
+            using var ap = new Pen(Color.FromArgb(255, 30, 100, 45), big ? 1f : 0.75f) { LineJoin = LineJoin.Round };
+            g.DrawPolygon(ap, arrow);
+        }
+        return bmp;
+    }
 }
