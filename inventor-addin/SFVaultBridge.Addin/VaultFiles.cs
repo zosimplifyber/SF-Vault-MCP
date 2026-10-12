@@ -253,9 +253,10 @@ internal static class VaultFiles
         var numDef = FilePropDef("Vendor Number");
         var vendorDef = FilePropDef("Vendor");
         var wanted = ImportRules.DuplicateKey(vendor, vendorNumber);
-        // Contains on the whitespace-free number: a superset of equality, so stored case/spacing variants still turn up.
-        var needle = System.Text.RegularExpressions.Regex.Replace(vendorNumber ?? "", @"\s+", "");
+        // Contains on the longest whitespace-delimited token: stored numbers with internal spaces ("90510A 313") still contain it.
+        var needle = (vendorNumber ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).OrderByDescending(t => t.Length).FirstOrDefault() ?? "";
         if (needle.Length == 0) return null;
+        const int MaxHits = 500;
         var cond = new SrchCond { PropDefId = numDef.Id, PropTyp = PropertySearchType.SingleProperty, SrchOper = 1, SrchTxt = needle, SrchRule = SearchRuleType.Must };
         var hits = new List<WsFile>();
         string bookmark = string.Empty;
@@ -266,6 +267,8 @@ internal static class VaultFiles
             var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out status);
             if (page is null || page.Length == 0) break;
             hits.AddRange(page);
+            if (hits.Count >= MaxHits && status is not null && hits.Count < status.TotalHits)
+                throw new BridgeException("duplicate", $"Too many Vault files match {needle}; check for an existing part by hand.");
         } while (status is not null && hits.Count < status.TotalHits);
         if (hits.Count == 0) return null;
         var ids = hits.Select(f => f.Id).ToArray();
