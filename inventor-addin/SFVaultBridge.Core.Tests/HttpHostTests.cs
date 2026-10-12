@@ -107,4 +107,22 @@ public class HttpHostTests
         var host = new HttpHost($"http://localhost:{FreePort()}/", EchoRouter(), _ => { });
         host.Dispose();
     }
+
+    [Fact]
+    public async Task Tracks_IsListening_and_LastRequestUtc()
+    {
+        var port = FreePort();
+        var host = new HttpHost($"http://localhost:{port}/", EchoRouter(), _ => { });
+        Assert.False(host.IsListening);
+        Assert.Null(host.LastRequestUtc);
+        host.Start();
+        Assert.True(host.IsListening);
+        using var client = new HttpClient();
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        await client.PostAsync($"http://localhost:{port}/op/echo", new StringContent("{}"));
+        Assert.NotNull(host.LastRequestUtc);
+        Assert.True(host.LastRequestUtc >= before);
+        host.Dispose();
+        Assert.False(host.IsListening);
+    }
 }

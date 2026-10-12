@@ -13,6 +13,13 @@ public sealed class HttpHost : IDisposable
     private readonly Action<string> _log;
     private Thread? _thread;
 
+    public bool IsListening
+    {
+        get { try { return _listener.IsListening; } catch (ObjectDisposedException) { return false; } }
+    }
+
+    public DateTime? LastRequestUtc { get; private set; }
+
     public HttpHost(string prefix, Router router, Action<string> log)
     {
         _listener.Prefixes.Add(prefix);
@@ -67,6 +74,7 @@ public sealed class HttpHost : IDisposable
                     continue;
                 }
 
+                LastRequestUtc = DateTime.UtcNow;
                 try
                 {
                     string body;
