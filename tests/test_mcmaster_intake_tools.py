@@ -313,6 +313,23 @@ def test_failed_part_add_reports_uncertain_and_cd(env):
     assert out["uncertain"] == ["CD-001900.ipt"]
 
 
+def test_bridge_timeout_on_add_file_is_uncertain_without_licence_note(env):
+    import vault_bridge
+
+    token = preview(env)["token"]
+    orig = env.sdk.add_file
+
+    def timed_out(folder, local, name, **kw):
+        if name == "CD-001900.ipt":
+            raise vault_bridge.BridgeError("timeout", "no reply in time")
+        return orig(folder, local, name, **kw)
+
+    env.sdk.add_file = timed_out
+    out = commit(env, token)
+    assert "CD-001900.ipt" in out["uncertain"]
+    assert "license" not in out
+
+
 def test_failed_category_reports_uncertain_names(env):
     token = preview(env)["token"]
     env.sdk.fail_on = "update_file_categories"
