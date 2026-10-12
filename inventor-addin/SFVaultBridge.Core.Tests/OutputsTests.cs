@@ -54,6 +54,54 @@ public class OutputsTests
         Assert.Equal(PartKind.Make, ReviewRules.Classify(N("A", "Inseparable"), null));
     }
 
+    private static BomNode F(string pn, string fileName, string structure = "Normal") =>
+        new(pn, "d", 1, "Each", structure, "", "", fileName, @"C:\Vault Workspace\DESIGNS\" + fileName, Array.Empty<BomNode>(), "", "");
+
+    [Fact]
+    public void Assembly_inclusion_only_for_made_assemblies()
+    {
+        Assert.True(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam"), "Part - Engineering"));
+        Assert.True(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.IAM"), null));
+        Assert.True(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam", "Inseparable"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("P-1", "P-1.ipt"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("P-1", "P-1.idw"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam.bak"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam", "Phantom"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam", "Reference"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam"), "Part - Content Center"));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam", "Purchased"), null));
+        Assert.False(ReviewRules.IncludeInAssemblyPackage(F("SUB-1", "SUB-1.iam"), "Part - Purchased"));
+    }
+
+    [Fact]
+    public void Assembly_package_name()
+    {
+        Assert.Equal("CD-001887 Assembly Package.pdf", VaultPaths.AssemblyPackageName(@"C:\x\CD-001887.iam"));
+    }
+
+    [Fact]
+    public void Manifest_mode_revision_and_drawing_state()
+    {
+        var json = ReviewManifest.ToJson("CD-001887", "desc", "zak", "Work in Progress", "5", new DateTime(2026, 10, 12, 17, 30, 0),
+            new[] { new ReviewDrawing("CD-1", "CD-1.idw", @"C:\t\1.pdf", "Released"), new ReviewDrawing("CD-2", "CD-2.idw", @"C:\t\2.pdf") },
+            Array.Empty<string>(), Array.Empty<ReviewFailure>(), Array.Empty<ReviewPurchased>(), Array.Empty<string>(),
+            PackageMode.Assembly, "3");
+        var o = (JsonObject)JsonNode.Parse(json)!;
+        Assert.Equal("assembly", o["mode"]!.GetValue<string>());
+        Assert.Equal("3", o["revision"]!.GetValue<string>());
+        Assert.Equal("Released", o["drawings"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal("", o["drawings"]![1]!["state"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Manifest_defaults_to_review_mode_with_empty_revision()
+    {
+        var o = (JsonObject)JsonNode.Parse(ReviewManifest.ToJson("A", "", "", "", "", DateTime.Now,
+            Array.Empty<ReviewDrawing>(), Array.Empty<string>(), Array.Empty<ReviewFailure>(), Array.Empty<ReviewPurchased>(), Array.Empty<string>()))!;
+        Assert.Equal("review", o["mode"]!.GetValue<string>());
+        Assert.Equal("", o["revision"]!.GetValue<string>());
+    }
+
     [Fact]
     public void Vendor_pdf_rules()
     {

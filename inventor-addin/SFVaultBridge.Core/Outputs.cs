@@ -32,6 +32,8 @@ public static class VaultPaths
     }
 
     public static string ReviewName(string assemblyFile) => Path.GetFileNameWithoutExtension(assemblyFile) + " Design Review.pdf";
+
+    public static string AssemblyPackageName(string assemblyFile) => Path.GetFileNameWithoutExtension(assemblyFile) + " Assembly Package.pdf";
 }
 
 public static class ReviewRules
@@ -102,24 +104,32 @@ public static class ReviewRules
     }
 
     public static string Bookmark(string partNumber, string drawingFileName) => $"{partNumber} - {drawingFileName}";
+
+    /// <summary>Made (not ignored, not purchased) assembly rows only; drawings of these go into the assembly package.</summary>
+    public static bool IncludeInAssemblyPackage(BomNode node, string? vaultCategory) =>
+        node.FileName.EndsWith(".iam", StringComparison.OrdinalIgnoreCase) && Classify(node, vaultCategory) == PartKind.Make;
 }
 
 public enum PartKind { Ignored, Purchased, Make }
 
+public enum PackageMode { Review, Assembly }
+
 public sealed record ReviewPurchased(string PartNumber, string Vendor, string VendorNumber, string Pdf);
-public sealed record ReviewDrawing(string PartNumber, string Drawing, string Pdf);
+public sealed record ReviewDrawing(string PartNumber, string Drawing, string Pdf, string State = "");
 public sealed record ReviewFailure(string Drawing, string Reason);
 
 public static class ReviewManifest
 {
     public static string ToJson(string assembly, string description, string user, string state, string version, DateTime created,
                                 IEnumerable<ReviewDrawing> drawings, IEnumerable<string> missing, IEnumerable<ReviewFailure> failed,
-                                IEnumerable<ReviewPurchased> purchased, IEnumerable<string> noVendorDrawing) =>
+                                IEnumerable<ReviewPurchased> purchased, IEnumerable<string> noVendorDrawing,
+                                PackageMode mode = PackageMode.Review, string revision = "") =>
         new JsonObject
         {
             ["assembly"] = assembly, ["description"] = description, ["user"] = user, ["state"] = state, ["version"] = version,
+            ["mode"] = mode == PackageMode.Assembly ? "assembly" : "review", ["revision"] = revision,
             ["created"] = created.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-            ["drawings"] = new JsonArray(drawings.Select(d => (JsonNode?)new JsonObject { ["part_number"] = d.PartNumber, ["drawing"] = d.Drawing, ["pdf"] = d.Pdf }).ToArray()),
+            ["drawings"] = new JsonArray(drawings.Select(d => (JsonNode?)new JsonObject { ["part_number"] = d.PartNumber, ["drawing"] = d.Drawing, ["pdf"] = d.Pdf, ["state"] = d.State }).ToArray()),
             ["missing"] = new JsonArray(missing.Select(m => (JsonNode?)JsonValue.Create(m)).ToArray()),
             ["failed"] = new JsonArray(failed.Select(f => (JsonNode?)new JsonObject { ["drawing"] = f.Drawing, ["reason"] = f.Reason }).ToArray()),
             ["purchased"] = new JsonArray(purchased.Select(p => (JsonNode?)new JsonObject { ["part_number"] = p.PartNumber, ["vendor"] = p.Vendor, ["vendor_number"] = p.VendorNumber, ["pdf"] = p.Pdf }).ToArray()),
