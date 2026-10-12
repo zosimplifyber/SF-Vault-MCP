@@ -22,19 +22,21 @@ internal sealed class RibbonActions
 
     public void Create()
     {
-        Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Purchasing);
-        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Review);
+        Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
+        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, Review);
     }
 
-    private void Add(string label, string internalName, string tip, Action<Inv.AssemblyDocument> work)
+    private void Add(string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument> work)
     {
         try
         {
             var defs = _app.CommandManager.ControlDefinitions;
             Inv.ButtonDefinition? def = null;
             try { def = defs[internalName] as Inv.ButtonDefinition; } catch { }
+            var (small, large) = Icons.Pair(draw);
             def ??= defs.AddButtonDefinition(label, internalName, Inv.CommandTypesEnum.kNonShapeEditCmdType, ClientId, tip, tip,
-                                             Type.Missing, Type.Missing, Inv.ButtonDisplayEnum.kAlwaysDisplayText);
+                                             small, large, Inv.ButtonDisplayEnum.kAlwaysDisplayText);
+            try { def.StandardIcon = small; def.LargeIcon = large; } catch (Exception ex) { _log($"{label} icon not set: {ex.Message}"); }
             Inv.ButtonDefinitionSink_OnExecuteEventHandler handler = _ => Click(label, work);
             def.OnExecute += handler;
             _buttons.Add((def, handler));
@@ -131,10 +133,26 @@ internal sealed class RibbonActions
         try
         {
             var drawings = new List<ReviewDrawing>();
+            var purchased = new List<ReviewPurchased>();
             var missing = new List<string>();
+            var noVendor = new List<string>();
             var failed = new List<ReviewFailure>();
             var root = VaultFiles.WorkingFolderRoot();
             var seen = new HashSet<long>();
+            var pdfCount = 0;
+
+            // Where-used drawings plus any .idw/.dwg in Vault named like the component, de-duplicated by master id.
+            IReadOnlyList<Autodesk.Connectivity.WebServices.File> Candidates(Autodesk.Connectivity.WebServices.File model)
+            {
+                var list = new List<Autodesk.Connectivity.WebServices.File>(VaultFiles.WhereUsedDrawings(model));
+                try
+                {
+                    foreach (var f in VaultFiles.DrawingsNamed(System.IO.Path.GetFileNameWithoutExtension(model.Name)))
+                        if (list.All(x => x.MasterId != f.MasterId)) list.Add(f);
+                }
+                catch (Exception ex) { _log($"review name search for {model.Name} failed: {ex.Message}"); }
+                return list;
+            }
 
             void Collect(string partNumber, string localModel)
             {
@@ -143,7 +161,7 @@ internal sealed class RibbonActions
                     var vaultModel = VaultPaths.ToVaultFolder(localModel, root) + "/" + System.IO.Path.GetFileName(localModel);
                     var model = VaultFiles.FindLatest(vaultModel);
                     if (model is null) { missing.Add($"{partNumber} (not in Vault)"); return; }
-                    var candidates = VaultFiles.WhereUsedDrawings(model);
+                    var candidates = Candidates(model);
                     var picked = ReviewRules.PickDrawings(model.Name, candidates.Select(c => c.Name));
                     if (picked.Count == 0) { missing.Add(partNumber); return; }
                     foreach (var name in picked)
@@ -155,7 +173,7 @@ internal sealed class RibbonActions
                             var local = VaultFiles.LocalPathOf(file);
                             if (DrawingExporter.FindOpen(_app, local) is null)
                                 VaultFiles.AcquireLatest(new[] { file });
-                            var pdf = System.IO.Path.Combine(temp, $"{drawings.Count + failed.Count:D3}.pdf");
+                            var pdf = System.IO.Path.Combine(temp, $"{pdfCount++:D3}.pdf");
                             DrawingExporter.Export(_app, local, pdf);
                             drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf));
                         }
@@ -173,20 +191,42 @@ internal sealed class RibbonActions
                 }
             }
 
+            void CollectPurchased(BomNode n, Autodesk.Connectivity.WebServices.File? part)
+            {
+                try
+                {
+                    var pdf = part is null ? null : VaultFiles.VendorPdf(part, n.VendorNumber);
+                    if (pdf is null) { noVendor.Add(n.PartNumber); return; }
+                    var local = VaultFiles.LocalPathOf(pdf);
+                    if (!System.IO.File.Exists(local)) VaultFiles.AcquireLatest(new[] { pdf });
+                    if (!System.IO.File.Exists(local)) throw new BridgeException("download_failed", $"{pdf.Name} could not be downloaded.");
+                    purchased.Add(new ReviewPurchased(n.PartNumber, n.Vendor, n.VendorNumber, local));
+                }
+                catch (Exception ex)
+                {
+                    _log($"review vendor PDF for {n.PartNumber} failed: {ex}");
+                    failed.Add(new ReviewFailure("Purchased: " + n.PartNumber, ex.Message));
+                }
+            }
+
             Collect(stem, asm.FullFileName);
             foreach (var line in ReviewRules.UniqueComponents(lines))
             {
                 var n = line.Node;
                 if (string.IsNullOrWhiteSpace(n.FullPath)) continue;
+                Autodesk.Connectivity.WebServices.File? f = null;
                 string? category = null;
                 try
                 {
-                    var f = VaultFiles.FindLatest(VaultPaths.ToVaultFolder(n.FullPath, root) + "/" + n.FileName);
+                    f = VaultFiles.FindLatest(VaultPaths.ToVaultFolder(n.FullPath, root) + "/" + n.FileName);
                     category = f is null ? null : VaultFiles.CategoryName(f);
                 }
                 catch (Exception ex) { _log($"review category lookup for {n.PartNumber} failed: {ex.Message}"); }
-                if (ReviewRules.Skip(n, category)) continue;
-                Collect(n.PartNumber, n.FullPath);
+                switch (ReviewRules.Classify(n, category))
+                {
+                    case PartKind.Make: Collect(n.PartNumber, n.FullPath); break;
+                    case PartKind.Purchased: CollectPurchased(n, f); break;
+                }
             }
 
             var bom = System.IO.Path.Combine(temp, "bom.txt");
@@ -197,7 +237,7 @@ internal sealed class RibbonActions
             System.IO.File.WriteAllText(manifest, ReviewManifest.ToJson(stem,
                 Convert.ToString(asm.PropertySets["Design Tracking Properties"]["Description"].Value) ?? "",
                 conn.UserName, asmFile?.FileLfCyc?.LfCycStateName ?? "", asmFile?.VerNum.ToString() ?? "",
-                DateTime.Now, drawings, missing, failed));
+                DateTime.Now, drawings, missing, failed, purchased, noVendor));
 
             var name = VaultPaths.ReviewName(asm.FullFileName);
             var outPdf = System.IO.Path.Combine(temp, name);
@@ -205,22 +245,39 @@ internal sealed class RibbonActions
             var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The review tool failed.");
             Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Design review for {stem}",
-                    $"{result.Count} pages, {drawings.Count} drawings, {missing.Count} missing, {failed.Count} could not export.");
+                    $"{result.Count} pages, {drawings.Count} drawings, {purchased.Count} vendor PDFs, {missing.Count} missing, {noVendor.Count} without vendor drawing, {failed.Count} could not export.");
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }
 
+    /// <summary>Copies the finished output to Downloads\SF Vault Bridge before the temp folder goes away; null if even that fails.</summary>
+    private string? KeepOutput(string tempOutput, string name)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "SF Vault Bridge");
+            System.IO.Directory.CreateDirectory(dir);
+            var target = System.IO.Path.Combine(dir, VaultPaths.UniqueName(name, n => System.IO.File.Exists(System.IO.Path.Combine(dir, n))));
+            System.IO.File.Copy(tempOutput, target, false);
+            return target;
+        }
+        catch (Exception ex) { _log($"could not keep a copy of {name}: {ex.Message}"); return null; }
+    }
+
     private void Publish(string tempOutput, string destLocal, string vaultFolder, string name, string comment, string summary)
     {
-        (Autodesk.Connectivity.WebServices.File File, bool NewVersion, string? Warning) r;
+        (Autodesk.Connectivity.WebServices.File? File, bool NewVersion, string? Warning) r;
         try { r = VaultFiles.Publish(tempOutput, destLocal, vaultFolder, name, comment); }
-        catch (BridgeException) { throw; }
         catch (Exception ex)
         {
-            throw new BridgeException("vault_failed", $"{name} was not checked in to Vault: {ex.Message}");
+            var kept = KeepOutput(tempOutput, name);
+            var note = kept is null ? "" : $"\nYour file was saved to {kept}.";
+            if (ex is BridgeException be) throw new BridgeException(be.Code, be.Message + note);
+            throw new BridgeException("vault_failed", $"{name} was not checked in to Vault: {ex.Message}{note}");
         }
-        _log($"published {vaultFolder}/{name} version {r.File.VerNum}");
-        var text = $"{(r.NewVersion ? "Updated" : "Added")} {vaultFolder}/{name} (version {r.File.VerNum}).\n{summary}"
+        _log($"published {vaultFolder}/{name} version {(r.File is null ? "?" : r.File.VerNum.ToString())}");
+        var version = r.File is null ? "" : $" (version {r.File.VerNum})";
+        var text = $"{(r.NewVersion ? "Updated" : "Added")} {vaultFolder}/{name}{version}.\n{summary}"
                    + (r.Warning is null ? "" : $"\n{r.Warning}") + "\n\nOpen it now?";
         try
         {

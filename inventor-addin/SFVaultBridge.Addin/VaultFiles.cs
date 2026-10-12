@@ -31,26 +31,31 @@ internal static class VaultFiles
     /// <summary>
     /// Adds the file, or checks out and checks in a new version. tempOutput is the finished tool output; destLocal is where
     /// the file lives in the workspace. Nothing touches the workspace until the Vault checks pass. Sets category Documents
-    /// (a failure there is returned as Warning, not thrown).
+    /// (a failure there, or in reading the version back after a successful check-in, is returned as Warning, not thrown;
+    /// File is null when the read-back failed).
     /// </summary>
-    public static (WsFile File, bool NewVersion, string? Warning) Publish(string tempOutput, string destLocal, string vaultFolder, string fileName, string comment)
+    public static (WsFile? File, bool NewVersion, string? Warning) Publish(string tempOutput, string destLocal, string vaultFolder, string fileName, string comment)
     {
         var conn = Conn;
         var ds = conn.WebServiceManager.DocumentService;
         var vaultPath = vaultFolder.TrimEnd('/') + "/" + fileName;
         var existing = FindLatest(vaultPath);
-        WsFile result;
+        long masterId;
         if (existing is null)
         {
             var wsFolder = ds.FindFoldersByPaths(new[] { vaultFolder })?.FirstOrDefault();
             if (wsFolder is null || wsFolder.Id <= 0) throw new BridgeException("not_found", $"Vault folder {vaultFolder} does not exist.");
             var folder = new VDF.Vault.Currency.Entities.Folder(conn, wsFolder);
-            ClearReadOnly(destLocal);
-            System.IO.File.Copy(tempOutput, destLocal, true);
+            try
+            {
+                ClearReadOnly(destLocal);
+                System.IO.File.Copy(tempOutput, destLocal, true);
+            }
+            catch (Exception ex) { throw new BridgeException("local_write_failed", $"Could not write {destLocal}: {ex.Message}"); }
             using var stream = System.IO.File.OpenRead(destLocal);
             var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(destLocal),
                                                  Array.Empty<FileAssocParam>(), null, FileClassification.None, false, stream);
-            result = ds.GetLatestFileByMasterId(added.EntityMasterId);
+            masterId = added.EntityMasterId;
         }
         else
         {
@@ -68,7 +73,7 @@ internal static class VaultFiles
                 System.IO.File.Copy(tempOutput, destLocal, true);
                 var checkedIn = conn.FileManager.CheckinFile(iteration, comment, false, null, null, false, null,
                     FileClassification.None, false, new VDF.Currency.FilePathAbsolute(destLocal));
-                result = ds.GetLatestFileByMasterId(checkedIn.EntityMasterId);
+                masterId = checkedIn.EntityMasterId;
             }
             catch (Exception ex)
             {
@@ -78,6 +83,10 @@ internal static class VaultFiles
                 throw new BridgeException("checkin_failed", $"Check-in failed; {undone}: {ex.Message}");
             }
         }
+        // The file is in Vault from here on; nothing below may report a failed check-in.
+        WsFile result;
+        try { result = ds.GetLatestFileByMasterId(masterId); }
+        catch (Exception ex) { return (null, existing is not null, $"Checked in; could not read back the version: {ex.Message}"); }
         string? warning = null;
         if (CategoryName(result) != "Documents")
         {
@@ -107,6 +116,73 @@ internal static class VaultFiles
         return ds.GetFilesByIds(parentIds)
             .Where(f => f.Name.EndsWith(".idw", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase))
             .GroupBy(f => f.MasterId).Select(g => ds.GetLatestFileByMasterId(g.Key)).ToList();
+    }
+
+    private static long? _fileNameDefId;
+
+    private static long FileNameDefId()
+    {
+        if (_fileNameDefId is long id) return id;
+        var defs = Conn.WebServiceManager.PropertyService.GetPropertyDefinitionsByEntityClassId("FILE") ?? Array.Empty<PropDef>();
+        var def = defs.FirstOrDefault(d => d.SysName == "Name") ?? defs.FirstOrDefault(d => d.SysName == "ClientFileName")
+                  ?? defs.FirstOrDefault(d => d.DispName is "Name" or "File Name")
+                  ?? throw new BridgeException("not_found", "Vault has no file name property to search on.");
+        _fileNameDefId = def.Id;
+        return def.Id;
+    }
+
+    /// <summary>Latest versions of every file in Vault (all folders) whose name contains the text.</summary>
+    public static IReadOnlyList<WsFile> FindByNameContaining(string text)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        var cond = new SrchCond
+        {
+            PropDefId = FileNameDefId(), PropTyp = PropertySearchType.SingleProperty,
+            SrchOper = 1, SrchTxt = text, SrchRule = SearchRuleType.Must,
+        };
+        var root = ds.GetFolderRoot();
+        var all = new List<WsFile>();
+        string bookmark = string.Empty;
+        SrchStatus? status = null;
+        do
+        {
+            var page = ds.FindFilesBySearchConditions(new[] { cond }, null, new[] { root.Id }, true, true, ref bookmark, out status);
+            if (page is null || page.Length == 0) break;
+            all.AddRange(page);
+        } while (status is not null && all.Count < status.TotalHits);
+        return all;
+    }
+
+    /// <summary>Latest .idw/.dwg files anywhere in Vault whose file name stem equals the given stem.</summary>
+    public static IReadOnlyList<WsFile> DrawingsNamed(string stem)
+    {
+        if (string.IsNullOrWhiteSpace(stem)) return Array.Empty<WsFile>();
+        return FindByNameContaining(stem)
+            .Where(f => (f.Name.EndsWith(".idw", StringComparison.OrdinalIgnoreCase) || f.Name.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase))
+                        && string.Equals(System.IO.Path.GetFileNameWithoutExtension(f.Name), stem, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(f => f.MasterId).Select(g => g.First()).ToList();
+    }
+
+    /// <summary>Vendor PDF of a purchased part: a .pdf attached to the part's latest version, else a .pdf in Vault named by the part stem or vendor number.</summary>
+    public static WsFile? VendorPdf(WsFile part, string vendorNumber)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        var assocs = ds.GetFileAssociationLitesByIds(new[] { part.Id }, FileAssocAlg.LatestTip,
+            FileAssociationTypeEnum.None, false, FileAssociationTypeEnum.Attachment, false, false, false, false) ?? Array.Empty<FileAssocLite>();
+        var childIds = assocs.Where(a => a.ParFileId == part.Id).Select(a => a.CldFileId).Distinct().ToArray();
+        if (childIds.Length > 0)
+        {
+            var attached = (ds.GetFilesByIds(childIds) ?? Array.Empty<WsFile>()).ToList();
+            var name = ReviewRules.FirstPdf(attached.Select(f => f.Name));
+            var hit = attached.FirstOrDefault(f => f.Name == name);
+            if (hit is not null) return ds.GetLatestFileByMasterId(hit.MasterId);
+        }
+        var stem = System.IO.Path.GetFileNameWithoutExtension(part.Name);
+        var found = new List<WsFile>();
+        foreach (var text in new[] { stem, vendorNumber.Trim() }.Where(t => t.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+            found.AddRange(FindByNameContaining(text));
+        var match = ReviewRules.MatchVendorPdf(stem, vendorNumber, found.Select(f => f.Name));
+        return found.FirstOrDefault(f => f.Name == match);
     }
 
     /// <summary>Download the latest version of each drawing only (never its references, which may be open in Inventor); never over existing files.</summary>

@@ -42,7 +42,7 @@ internal static class BomReader
 
     private static BomNode Node(Inv.BOMRow row)
     {
-        string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "";
+        string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "", vendor = "", vendorNumber = "";
         double qty;
         try { qty = Convert.ToDouble(row.ItemQuantity, System.Globalization.CultureInfo.InvariantCulture); } catch { qty = 0; }
         var structure = "Normal";
@@ -71,6 +71,8 @@ internal static class BomReader
             description = Prop("Design Tracking Properties", "Description");
             revision = Prop("Inventor Summary Information", "Revision Number");
             material = Prop("Design Tracking Properties", "Material");
+            vendor = Prop("Design Tracking Properties", "Vendor");
+            vendorNumber = Prop("Inventor User Defined Properties", "Vendor Number");
         }
         catch { }
         if (string.IsNullOrWhiteSpace(partNumber))
@@ -81,7 +83,7 @@ internal static class BomReader
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
         try { children = Rows(row.ChildRows); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
-        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children);
+        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber);
     }
 
     private static string Structure(Inv.BOMStructureEnum s) => s switch
