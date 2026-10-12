@@ -33,6 +33,24 @@ public sealed class HttpHost : IDisposable
         try { _log(message); } catch { }
     }
 
+    private static readonly HashSet<string> WriteOps = new(StringComparer.Ordinal)
+    {
+        "generate_file_number", "add_folder", "add_file", "update_file_categories", "import_step_as_part",
+    };
+
+    private const int LogLimit = 500;
+
+    private static string Truncate(string s) => s.Length <= LogLimit ? s : s[..LogLimit] + "...";
+
+    // Every request gets an outcome line. Errors include the reply; successful writes include request and reply.
+    private static string Describe(string path, int status, string body, string reply)
+    {
+        var line = $"{path} -> {status}";
+        if (status >= 400) return $"{line} {reply}";
+        var op = path.StartsWith("/op/", StringComparison.Ordinal) ? path["/op/".Length..].TrimEnd('/') : "";
+        return WriteOps.Contains(op) ? $"{line} request={Truncate(body)} reply={Truncate(reply)}" : line;
+    }
+
     private void Loop()
     {
         try
@@ -61,7 +79,7 @@ public sealed class HttpHost : IDisposable
                     ctx.Response.ContentLength64 = bytes.Length;
                     ctx.Response.OutputStream.Write(bytes);
                     ctx.Response.Close();
-                    if (status >= 400) SafeLog($"{path} -> {status} {json}");
+                    SafeLog(Describe(path, status, body, json));
                 }
                 catch (Exception ex)
                 {
@@ -72,8 +90,9 @@ public sealed class HttpHost : IDisposable
         }
         catch (Exception ex)
         {
-            // Last resort: nothing may escape the background thread.
+            // Last resort: nothing may escape the background thread. Stop listening so clients are refused, not left hanging.
             SafeLog("listener loop stopped: " + ex.Message);
+            try { _listener.Stop(); } catch { }
         }
     }
 

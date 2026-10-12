@@ -49,6 +49,34 @@ public class HttpHostTests
     }
 
     [Fact]
+    public async Task Logs_successful_write_with_body_and_status_op_without()
+    {
+        var port = FreePort();
+        var logs = new List<string>();
+        var r = new Router(Token);
+        r.Register("add_file", b => new JsonObject { ["name"] = b["fileName"]?.DeepClone() });
+        r.Register("status", _ => new JsonObject { ["ok"] = true });
+        using var host = new HttpHost($"http://localhost:{port}/", r, logs.Add);
+        host.Start();
+        using var client = new HttpClient();
+
+        async Task Post(string op, string json)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, $"http://localhost:{port}/op/{op}")
+            { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+            req.Headers.Add(HttpHost.TokenHeader, Token);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(req)).StatusCode);
+        }
+        await Post("add_file", "{\"fileName\": \"MC-123.pdf\"}");
+        await Post("status", "{\"secretish\": \"zzz\"}");
+
+        var write = Assert.Single(logs, l => l.StartsWith("/op/add_file -> 200"));
+        Assert.Contains("MC-123.pdf", write);
+        var status = Assert.Single(logs, l => l.StartsWith("/op/status -> 200"));
+        Assert.DoesNotContain("zzz", status);
+    }
+
+    [Fact]
     public void Second_host_on_same_prefix_fails_to_start()
     {
         var port = FreePort();
