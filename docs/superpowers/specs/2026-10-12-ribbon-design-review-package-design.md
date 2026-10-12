@@ -19,6 +19,7 @@ to Claude for a design review.
 | 2 | Output is **one combined PDF**. |
 | 3 | Drawings are the **latest version in Vault**, including Work in Progress. |
 | 4 | The PDF is checked into Vault in the assembly's folder; re-running adds a new version. |
+| 5 | Every page is watermarked **DRAFT** so nobody mistakes a review copy for a released drawing. |
 
 ## Contents of the PDF, in order
 
@@ -33,7 +34,8 @@ to Claude for a design review.
    unique part or sub-assembly in BOM item order, all sheets of each drawing.
    Purchased and Content Center parts are skipped (Vault category Part -
    Purchased or Part - Content Center, or BOM Structure Purchased).
-4. **Bookmarks:** Cover, BOM, then one per drawing (`<part number> - <drawing file name>`; hyphen, not a dash character).
+4. **DRAFT watermark** on every page (cover, BOM and drawings): large diagonal "DRAFT", red, about 25% opacity, applied after the merge with the existing `pdf_watermark.apply_watermark` so the drawings stay readable.
+5. **Bookmarks:** Cover, BOM, then one per drawing (`<part number> - <drawing file name>`; hyphen, not a dash character).
 
 File name: `<assembly name> Design Review.pdf`, category Documents.
 
@@ -60,7 +62,7 @@ Ribbon button (add-in, UI thread)
   ├─ DrawingFinder    Vault where-used via the session -> drawing per component
   ├─ DrawingExporter  acquire latest, open invisibly, PDF translator -> temp PDFs
   ├─ SFVaultTools.exe review --bom <txt> --drawings <json> --cover <json> --out <pdf> --json
-  │                   cover + BOM table (reportlab) + merge + bookmarks (pypdf)
+  │                   cover + BOM table (reportlab) + merge + bookmarks (pypdf) + DRAFT watermark (pdf_watermark.py)
   └─ VaultPublisher   (shared) add or new version, category Documents
 ```
 
@@ -82,7 +84,7 @@ subcommands, `purchasing` and `review`. One exe, installed next to the add-in.
   skip rule for purchased and Content Center parts, bookmark labels, tool
   command line and JSON result parsing.
 - Python: `review` builds a PDF from fixture inputs (small generated PDFs):
-  page order, bookmark titles, missing list on the cover, header row repeated
+  page order, bookmark titles, missing list on the cover, DRAFT text present on every page, header row repeated
   on a multi-page BOM.
 - Live, with Zak: CD-001887 open, click, PDF in its Vault folder with the
   assembly drawing first and CD-001888 (no Simplifyber drawing, purchased)
