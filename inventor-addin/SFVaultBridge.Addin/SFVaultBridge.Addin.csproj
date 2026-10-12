@@ -20,6 +20,11 @@
       <Private>false</Private>
       <EmbedInteropTypes>false</EmbedInteropTypes>
     </Reference>
+    <Reference Include="stdole">
+      <HintPath>$(InventorBin)\stdole.dll</HintPath>
+      <Private>false</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
     <Reference Include="Autodesk.Connectivity.WebServices">
       <HintPath>$(VaultBundle)\Autodesk.Connectivity.WebServices.dll</HintPath>
       <Private>false</Private>

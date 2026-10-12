@@ -14,6 +14,9 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 - Log: `%APPDATA%\Simplifyber\VaultBridge\bridge.log` should say `started 0.1.0 on http://localhost:8790/`.
 - `py -3.14 -c "import sys; sys.path.insert(0, 'scripts'); import vault_bridge; print(vault_bridge.status())"`
+- Ribbon: the **SF Vault Bridge** panel on the Tools tab (Part, Assembly, Drawing, ZeroDoc) shows a dot, refreshed every 5 s.
+  Green = Ready (listening, Vault signed in). Amber = Sign in to Vault (listening, not signed in). Red = Stopped (not listening; see bridge.log).
+  Hover for details; click for a dialog with an option to open bridge.log.
 
 ## Uninstall
 

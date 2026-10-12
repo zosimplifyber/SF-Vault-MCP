@@ -21,6 +21,8 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
     private HttpHost? _host;
     private FileLog? _log;
     private ResolveEventHandler? _resolver;
+    private IVaultSession? _vault;
+    private RibbonStatus? _ribbon;
 
     // Vault DLLs are Private=false: they must come from Inventor's own load of the Vault add-in. Hand back an
     // already-loaded assembly of the same simple name so we never load a second copy into another context.
@@ -59,7 +61,8 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             var token = TokenStore.LoadOrCreate(System.IO.Path.Combine(dataDir, "token"));
             var router = new Router(token);
             var roots = AllowedRoots(_app).ToList();
-            BridgeOps.RegisterAll(router, NewVaultSession(), new StepImporter(_app), new PathGuard(roots), Version, RunOnUi);
+            _vault = NewVaultSession();
+            BridgeOps.RegisterAll(router, _vault, new StepImporter(_app), new PathGuard(roots), Version, RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write);
             _host.Start();
             _log.Write($"started {Version} on {Prefix}; vault assembly: {DescribeVaultAssembly()}; roots: {string.Join(" | ", roots)}");
@@ -71,10 +74,33 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             _host = null;
             DropResolver();
         }
+        CreateRibbon(dataDir);
+    }
+
+    // Runs even when the host failed to start so the button shows Stopped. Never throws.
+    private void CreateRibbon(string dataDir)
+    {
+        try
+        {
+            if (_app is null || _log is null) return;
+            _ribbon = new RibbonStatus(_app, () => _host, SafeVaultStatus, Prefix,
+                System.IO.Path.Combine(dataDir, "bridge.log"), _log.Write);
+            _ribbon.Create();
+        }
+        catch (Exception ex) { _log?.Write("ribbon setup failed: " + ex); }
+    }
+
+    private StatusInfo? SafeVaultStatus()
+    {
+        try { return _vault?.Status(); }
+        catch (Exception) { return null; }
     }
 
     public void Deactivate()
     {
+        try { _ribbon?.Destroy(); }
+        catch (Exception ex) { _log?.Write("ribbon stop failed: " + ex); }
+        _ribbon = null;
         try
         {
             _host?.Dispose();
@@ -84,6 +110,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
         }
         catch (Exception ex) { _log?.Write("stop failed: " + ex); }
         _host = null;
+        _vault = null;
         _ui = null;
         _app = null;
     }
