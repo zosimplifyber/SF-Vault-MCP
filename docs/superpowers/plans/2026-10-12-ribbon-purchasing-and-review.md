@@ -14,7 +14,7 @@
 
 - Buttons live on the existing **SF Vault Bridge** panel (Tools tab) next to the status button: **Purchasing Sheet** and **Design Review**. Outside an assembly they show "Open an assembly first."
 - BOM: Structured view, all levels, read from the open document (unsaved edits included). Siblings sorted by Description descending (case-insensitive), ties by Part Number ascending, renumbered `1`, `1.1`, `1.2`, `2`. Part Number falls back to the file name stem.
-- BOM file headers exactly: `Item`, `Part Number`, `BOM Structure`, `Unit QTY`, `QTY`, `Description`, `REV`, `Material`, `File Name` (tab-delimited, UTF-8, CRLF).
+- BOM file headers exactly: `Item`, `Part Number`, `BOM Structure`, `Unit QTY`, `QTY`, `Description`, `REV`, `Material`, `File Name`, `Vendor`, `Vendor Number` (tab-delimited, UTF-8, CRLF).
 - Output names: `<assembly file stem> Purchasing.xlsx` and `<assembly file stem> Design Review.pdf`, saved in the assembly's local workspace folder, checked into the assembly's Vault folder, category **Documents**. Existing file: check out, replace, check in as a new version. Checked out by someone else: stop with "<user> has <file> checked out."
 - Review PDF order: cover, BOM table (header row repeated), assembly drawing first, then one drawing per unique included component in BOM item order, all sheets. Purchased parts (BOM Structure Purchased, or Vault category Part - Purchased / Part - Content Center, or under `Content Center Files`) are skipped. Drawing choice: same-stem `.idw` first, else same-stem `.dwg`, else every `.idw`/`.dwg` that references the component; none = cover "Missing drawings" list. Export failures = cover "Could not export" list.
 - Drawings are the latest version in Vault; files checked out to the user are never downloaded over.
@@ -105,7 +105,7 @@ def test_purchasing_replaces_existing_workbook(tmp_path):
 
 def test_purchasing_reads_quoted_description(tmp_path):
     bom = tmp_path / "bom.txt"
-    bom.write_text('Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\r\n'
+    bom.write_text('Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\tVendor\tVendor Number\r\n'
                    '1\tCD-000001\tPurchased\tEach\t4\t"1/2"" bolt"\t\tSteel\tCD-000001.ipt\r\n', encoding="utf-8")
     out = cli.run_purchasing(str(bom), "X", str(tmp_path), "X Purchasing.xlsx")
     assert out["ok"] is True, out
@@ -255,7 +255,7 @@ from reportlab.pdfgen import canvas
 
 import review_package as rp
 
-HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\r\n"
+HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\tVendor\tVendor Number\r\n"
 
 
 def _bom(path: Path, rows: int) -> Path:
@@ -589,7 +589,7 @@ public class BomTests : IDisposable
         var node = new BomNode("CD-1", "1/2\" bolt\twith tab", 2.5, "Each", "Purchased", "", "Steel", "CD-1.ipt", @"C:\x\CD-1.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\r\n", text);
+        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\tVendor\tVendor Number\r\n", text);
         Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\tSteel\tCD-1.ipt\r\n", text);
     }
 
@@ -748,7 +748,7 @@ public static class BomOrdering
 /// <summary>Tab-delimited BOM in the layout bom_purchasing.read_bom_file reads.</summary>
 public static class BomFile
 {
-    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "Material", "File Name" };
+    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "Material", "File Name", "Vendor", "Vendor Number" };
 
     public static void Write(string path, IReadOnlyList<BomLine> lines)
     {

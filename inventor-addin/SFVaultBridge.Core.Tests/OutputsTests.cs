@@ -111,6 +111,9 @@ public class OutputsTests
         Assert.True(ok.Ok); Assert.Equal(@"C:\a.xlsx", ok.Output); Assert.Equal(12, ok.Count); Assert.Equal(new[] { "X" }, ok.Unmatched);
         var bad = ToolResults.Parse("{\"ok\": false, \"error\": \"No part numbers\"}", "workbook", "lines");
         Assert.False(bad.Ok); Assert.Equal("No part numbers", bad.Error);
+        Assert.Null(ok.Note);
+        var noted = ToolResults.Parse("{\"ok\": true, \"workbook\": \"a\", \"lines\": 1, \"reference_note\": \"Prices from the purchasing Microsoft List.\"}", "workbook", "lines");
+        Assert.Equal("Prices from the purchasing Microsoft List.", noted.Note);
         Assert.False(ToolResults.Parse(null, "pdf", "pages").Ok);
         Assert.Contains("bridge.log", ToolResults.Parse("not json", "pdf", "pages").Error);
     }

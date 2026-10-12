@@ -119,7 +119,7 @@ internal sealed class RibbonActions
             var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath), resultPath, ToolTimeout), "workbook", "lines");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The purchasing tool failed.");
             Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Purchasing sheet for {stem}",
-                    $"{result.Count} BOM lines." + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
+                    $"{result.Count} BOM lines." + (result.Note is null ? "" : $"\n{result.Note}") + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }

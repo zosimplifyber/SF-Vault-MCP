@@ -34,8 +34,17 @@ public class BomTests : IDisposable
         var node = new BomNode("CD-1", "1/2\" bolt\twith tab", 2.5, "Each", "Purchased", "", "Steel", "CD-1.ipt", @"C:\x\CD-1.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\r\n", text);
-        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\tSteel\tCD-1.ipt\r\n", text);
+        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\tVendor\tVendor Number\r\n", text);
+        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\tSteel\tCD-1.ipt\t\t\r\n", text);
+    }
+
+    [Fact]
+    public void Writes_vendor_and_vendor_number_last()
+    {
+        var path = Path.Combine(_dir, "bom-vendor.txt");
+        var node = new BomNode("CD-2", "nut", 1, "Each", "Purchased", "", "", "CD-2.ipt", @"C:\x\CD-2.ipt", Array.Empty<BomNode>(), "Acme", "A-9");
+        BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
+        Assert.Contains("CD-2.ipt\tAcme\tA-9\r\n", File.ReadAllText(path));
     }
 
     [Fact]

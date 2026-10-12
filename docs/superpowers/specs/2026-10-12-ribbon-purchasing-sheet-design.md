@@ -46,7 +46,12 @@ Vault.
    3. **Builds the workbook** by handing that BOM to the existing purchasing
       engine (`bom_purchasing.generate_from_file`) through the purchasing tool
       in a new no-window mode. The purchased-items reference lookup runs as it
-      does today.
+      does today. The BOM file carries Vendor and Vendor Number last (from
+      the part iProperties); they only fill cells the purchasing list leaves
+      blank, and the list wins where it has a value. "Not matched" still
+      means "not on the purchasing list". The result also names the list
+      source used (`reference`: mslist, excel or none) and a one-sentence
+      `reference_note`, which the summary dialog shows.
    4. **Saves** `<assembly name> Purchasing.xlsx` in the assembly's local
       Vault workspace folder.
    5. **Checks it into Vault** in the assembly's Vault folder, category

@@ -99,7 +99,7 @@ public static class ReviewManifest
         }.ToJsonString();
 }
 
-public sealed record ToolResult(bool Ok, string? Output, int Count, IReadOnlyList<string> Unmatched, string? Error);
+public sealed record ToolResult(bool Ok, string? Output, int Count, IReadOnlyList<string> Unmatched, string? Error, string? Note = null);
 
 public static class ToolResults
 {
@@ -116,7 +116,8 @@ public static class ToolResults
         var unmatched = o["unmatched"] is JsonArray a ? a.Select(x => x?.ToString() ?? "").ToList() : new List<string>();
         var count = o[countKey] is JsonValue c && c.TryGetValue<int>(out var n) ? n : 0;
         return new ToolResult(ok, o[outputKey]?.GetValue<string>(), count, unmatched,
-                              ok ? null : (o["error"]?.ToString() ?? NoResult));
+                              ok ? null : (o["error"]?.ToString() ?? NoResult),
+                              o["reference_note"] is JsonValue nv && nv.TryGetValue<string>(out var note) && note.Length > 0 ? note : null);
     }
 
     public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath) =>
