@@ -11,12 +11,28 @@ internal static class DrawingExporter
     /// <summary>The document Inventor already has open at this path, or null.</summary>
     public static Inv.Document? FindOpen(Inv.Application app, string path)
     {
+        var want = Normalize(path);
         foreach (Inv.Document d in app.Documents)
         {
-            try { if (string.Equals(d.FullFileName, path, StringComparison.OrdinalIgnoreCase)) return d; }
+            try { if (string.Equals(Normalize(d.FullFileName), want, StringComparison.OrdinalIgnoreCase)) return d; }
             catch { }
         }
         return null;
+    }
+
+    private static string Normalize(string p)
+    {
+        try { return System.IO.Path.GetFullPath(p); } catch { return p; }
+    }
+
+    private static HashSet<string> OpenIds(Inv.Application app)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Inv.Document d in app.Documents)
+        {
+            try { ids.Add(d.InternalName); } catch { }
+        }
+        return ids;
     }
 
     /// <summary>Reuses a drawing the user has open (never closed); closes only a document this call opened.</summary>
@@ -32,7 +48,14 @@ internal static class DrawingExporter
         try
         {
             doc = FindOpen(app, drawingPath);
-            if (doc is null) doc = opened = app.Documents.Open(drawingPath, false);
+            if (doc is null)
+            {
+                var before = OpenIds(app);
+                doc = app.Documents.Open(drawingPath, false);
+                bool wasOpen;
+                try { wasOpen = before.Contains(doc.InternalName); } catch { wasOpen = true; }
+                if (!wasOpen) opened = doc;
+            }
             var ctx = app.TransientObjects.CreateTranslationContext();
             ctx.Type = Inv.IOMechanismEnum.kFileBrowseIOMechanism;
             var options = app.TransientObjects.CreateNameValueMap();
