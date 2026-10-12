@@ -60,10 +60,34 @@ public class OutputsTests
         Assert.Equal("a.pdf", ReviewRules.FirstPdf(new[] { "n.txt", "a.pdf", "b.PDF" }));
         Assert.Null(ReviewRules.FirstPdf(new[] { "n.txt", "CD-9.idw" }));
         var names = new[] { "notes.txt", "other.pdf", "CD-5 McMaster 91251A.pdf", "CD-5 datasheet.pdf" };
-        Assert.Equal("CD-5 McMaster 91251A.pdf", ReviewRules.MatchVendorPdf("CD-5", "", names));
+        Assert.Equal("CD-5 datasheet.pdf", ReviewRules.MatchVendorPdf("CD-5", "", names));
         Assert.Equal("x 91251A y.PDF", ReviewRules.MatchVendorPdf("CD-9", "91251A", new[] { "a.pdf", "x 91251A y.PDF" }));
         Assert.Null(ReviewRules.MatchVendorPdf("CD-9", "", new[] { "CD-9.idw", "zz.pdf" }));
         Assert.Null(ReviewRules.MatchVendorPdf("", "", new[] { "zz.pdf" }));
+    }
+
+    [Fact]
+    public void Vendor_pdf_stem_needs_a_boundary()
+    {
+        Assert.Null(ReviewRules.MatchVendorPdf("CD-1", "", new[] { "CD-10 McMaster 123.pdf" }));
+        Assert.Equal("CD-1 McMaster 90510A313.pdf", ReviewRules.MatchVendorPdf("CD-1", "", new[] { "CD-1 McMaster 90510A313.pdf" }));
+        Assert.Equal("CD-1.pdf", ReviewRules.MatchVendorPdf("cd-1", "", new[] { "CD-1.pdf" }));
+        Assert.Equal("CD-1_x.pdf", ReviewRules.MatchVendorPdf("CD-1", "", new[] { "CD-1_x.pdf" }));
+    }
+
+    [Fact]
+    public void Vendor_number_must_be_a_whole_token()
+    {
+        Assert.Null(ReviewRules.MatchVendorPdf("CD-9", "90510A31", new[] { "x 90510A313.pdf" }));
+        Assert.Null(ReviewRules.MatchVendorPdf("CD-9", "0510A313", new[] { "x 90510A313.pdf" }));
+        Assert.Equal("x 90510A313.pdf", ReviewRules.MatchVendorPdf("CD-9", "90510A313", new[] { "x 90510A313.pdf" }));
+    }
+
+    [Fact]
+    public void Vendor_pdf_stem_beats_vendor_number_and_ties_are_deterministic()
+    {
+        Assert.Equal("CD-1 notes.pdf", ReviewRules.MatchVendorPdf("CD-1", "555", new[] { "a 555.pdf", "CD-1 notes.pdf" }));
+        Assert.Equal("CD-1 a.pdf", ReviewRules.MatchVendorPdf("CD-1", "", new[] { "CD-1 bb.pdf", "CD-1 b.pdf", "CD-1 a.pdf" }));
     }
 
     [Fact]

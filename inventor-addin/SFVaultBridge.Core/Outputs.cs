@@ -51,11 +51,39 @@ public static class ReviewRules
     /// <summary>First .pdf in the list (an attachment of the purchased part), or null.</summary>
     public static string? FirstPdf(IEnumerable<string> names) => names.FirstOrDefault(IsPdf);
 
-    /// <summary>First .pdf whose name starts with the part's file stem or contains its vendor number, or null.</summary>
-    public static string? MatchVendorPdf(string fileStem, string vendorNumber, IEnumerable<string> names) =>
-        names.FirstOrDefault(n => IsPdf(n)
-            && ((fileStem.Length > 0 && n.StartsWith(fileStem, StringComparison.OrdinalIgnoreCase))
-                || (vendorNumber.Trim().Length > 0 && n.Contains(vendorNumber.Trim(), StringComparison.OrdinalIgnoreCase))));
+    private static bool IsBoundary(char c) => c is ' ' or '-' or '_' or '.';
+
+    private static bool HasToken(string name, string token, bool atStart)
+    {
+        for (var i = name.IndexOf(token, StringComparison.OrdinalIgnoreCase); i >= 0;
+             i = name.IndexOf(token, i + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            if (atStart && i != 0) return false;
+            var end = i + token.Length;
+            var before = i == 0 || IsBoundary(name[i - 1]);
+            var after = end >= name.Length || IsBoundary(name[end]);
+            if (before && after) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A .pdf named for the part: first those starting with the file stem followed by a boundary (end, space, '-', '_' or '.'),
+    /// then those containing the vendor number as a whole token. Ties: shortest name, then alphabetical. Null if none.
+    /// </summary>
+    public static string? MatchVendorPdf(string fileStem, string vendorNumber, IEnumerable<string> names)
+    {
+        var pdfs = names.Where(IsPdf).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(n => n.Length).ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        var stem = fileStem.Trim();
+        if (stem.Length > 0)
+        {
+            var hit = pdfs.FirstOrDefault(n => HasToken(n, stem, atStart: true));
+            if (hit is not null) return hit;
+        }
+        var number = vendorNumber.Trim();
+        return number.Length == 0 ? null : pdfs.FirstOrDefault(n => HasToken(n, number, atStart: false));
+    }
 
     public static IReadOnlyList<BomLine> UniqueComponents(IReadOnlyList<BomLine> lines)
     {
