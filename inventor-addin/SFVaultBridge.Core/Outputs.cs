@@ -115,11 +115,18 @@ public enum PartKind { Ignored, Purchased, Make }
 public enum PackageMode { Review, Assembly }
 
 public sealed record ReviewPurchased(string PartNumber, string Vendor, string VendorNumber, string Pdf);
-public sealed record ReviewDrawing(string PartNumber, string Drawing, string Pdf, string State = "");
+public sealed record ReviewDrawing(string PartNumber, string Drawing, string Pdf, string State = "", string Note = "");
 public sealed record ReviewFailure(string Drawing, string Reason);
 
 public static class ReviewManifest
 {
+    private static JsonNode? DrawingJson(ReviewDrawing d)
+    {
+        var o = new JsonObject { ["part_number"] = d.PartNumber, ["drawing"] = d.Drawing, ["pdf"] = d.Pdf, ["state"] = d.State };
+        if (!string.IsNullOrEmpty(d.Note)) o["note"] = d.Note;
+        return o;
+    }
+
     public static string ToJson(string assembly, string description, string user, string state, string version, DateTime created,
                                 IEnumerable<ReviewDrawing> drawings, IEnumerable<string> missing, IEnumerable<ReviewFailure> failed,
                                 IEnumerable<ReviewPurchased> purchased, IEnumerable<string> noVendorDrawing,
@@ -129,7 +136,7 @@ public static class ReviewManifest
             ["assembly"] = assembly, ["description"] = description, ["user"] = user, ["state"] = state, ["version"] = version,
             ["mode"] = mode == PackageMode.Assembly ? "assembly" : "review", ["revision"] = revision,
             ["created"] = created.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-            ["drawings"] = new JsonArray(drawings.Select(d => (JsonNode?)new JsonObject { ["part_number"] = d.PartNumber, ["drawing"] = d.Drawing, ["pdf"] = d.Pdf, ["state"] = d.State }).ToArray()),
+            ["drawings"] = new JsonArray(drawings.Select(DrawingJson).ToArray()),
             ["missing"] = new JsonArray(missing.Select(m => (JsonNode?)JsonValue.Create(m)).ToArray()),
             ["failed"] = new JsonArray(failed.Select(f => (JsonNode?)new JsonObject { ["drawing"] = f.Drawing, ["reason"] = f.Reason }).ToArray()),
             ["purchased"] = new JsonArray(purchased.Select(p => (JsonNode?)new JsonObject { ["part_number"] = p.PartNumber, ["vendor"] = p.Vendor, ["vendor_number"] = p.VendorNumber, ["pdf"] = p.Pdf }).ToArray()),
@@ -137,7 +144,7 @@ public static class ReviewManifest
         }.ToJsonString();
 }
 
-public sealed record ToolResult(bool Ok, string? Output, int Count, IReadOnlyList<string> Unmatched, string? Error, string? Note = null, int Unreleased = 0);
+public sealed record ToolResult(bool Ok, string? Output, int Count, IReadOnlyList<string> Unmatched, string? Error, string? Note = null, int Unreleased = 0, string? Mode = null);
 
 public static class ToolResults
 {
@@ -156,7 +163,8 @@ public static class ToolResults
         return new ToolResult(ok, o[outputKey]?.GetValue<string>(), count, unmatched,
                               ok ? null : (o["error"]?.ToString() ?? NoResult),
                               o["reference_note"] is JsonValue nv && nv.TryGetValue<string>(out var note) && note.Length > 0 ? note : null,
-                              o["unreleased"] is JsonValue uv && uv.TryGetValue<int>(out var un) ? un : 0);
+                              o["unreleased"] is JsonValue uv && uv.TryGetValue<int>(out var un) ? un : 0,
+                              o["mode"] is JsonValue mv && mv.TryGetValue<string>(out var mode) ? mode : null);
     }
 
     public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath) =>

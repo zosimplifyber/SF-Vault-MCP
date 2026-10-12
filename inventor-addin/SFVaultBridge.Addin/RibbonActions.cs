@@ -4,7 +4,7 @@ using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The Purchasing Sheet and Design Review buttons on the SF Vault Bridge panel.</summary>
+/// <summary>The five SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Import New Part and the Status button (see RibbonStatus).</summary>
 internal sealed class RibbonActions
 {
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
@@ -247,11 +247,17 @@ internal sealed class RibbonActions
                         try
                         {
                             var local = VaultFiles.LocalPathOf(file);
-                            if (DrawingExporter.FindOpen(_app, local) is null)
+                            var openDoc = DrawingExporter.FindOpen(_app, local);
+                            if (openDoc is null)
                                 VaultFiles.AcquireLatest(new[] { file });
                             var pdf = System.IO.Path.Combine(temp, $"{pdfCount++:D3}.pdf");
                             DrawingExporter.Export(_app, local, pdf);
-                            drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf, assemblyMode ? VaultFiles.StateOf(file) : ""));
+                            if (!assemblyMode) drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf));
+                            else if (openDoc is not null)
+                                drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf, "", "printed from the copy open in Inventor"));
+                            else if (file.CheckedOut)
+                                drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf, "", "checked out; printed from the local copy"));
+                            else drawings.Add(new ReviewDrawing(partNumber, file.Name, pdf, VaultFiles.StateOf(file)));
                         }
                         catch (Exception ex)
                         {
@@ -325,6 +331,8 @@ internal sealed class RibbonActions
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? (assemblyMode ? "The assembly package tool failed." : "The review tool failed."));
+            if (assemblyMode && result.Mode != "assembly")
+                throw new BridgeException("tool_failed", "SFVaultTools.exe is out of date. Close Inventor and rerun Install-VaultBridge.ps1.");
             var summary = assemblyMode
                 ? $"{result.Count} pages, {drawings.Count} drawings, {result.Unreleased} not released, {missing.Count} missing, {failed.Count} could not export."
                 : $"{result.Count} pages, {drawings.Count} drawings, {purchased.Count} vendor PDFs, {missing.Count} missing, {noVendor.Count} without vendor drawing, {failed.Count} could not export.";

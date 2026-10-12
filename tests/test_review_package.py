@@ -243,3 +243,34 @@ def test_manifest_without_mode_is_review(tmp_path):
     assert res["mode"] == "review"
     assert all("DRAFT" in t for t in texts)
     assert all("FOR ASSEMBLY" not in t and "NOT RELEASED" not in t for t in texts)
+
+
+def test_assembly_note_shown_after_state_on_cover_and_escaped(tmp_path):
+    d1 = _drawing(tmp_path / "a.pdf", "NOTED")
+    res, reader, texts = _build_assembly(tmp_path, [
+        {"part_number": "CD-1", "drawing": "CD-1.idw", "pdf": str(d1), "state": "",
+         "note": "printed from the copy open <b>in</b> Inventor"}])
+    assert "(unknown) - printed from the copy open <b>in</b> Inventor" in " ".join(texts[0].split())
+
+
+def test_watermark_honours_mediabox_origin(tmp_path):
+    from io import BytesIO
+    from pypdf.generic import RectangleObject
+    from pypdf import PdfWriter
+    import pdf_watermark as pw
+    src = _drawing(tmp_path / "o.pdf", "ORIGIN")
+    reader = PdfReader(str(src))
+    w = PdfWriter()
+    page = reader.pages[0]
+    page.mediabox = RectangleObject((100, 100, 1324, 892))
+    w.add_page(page)
+    buf = BytesIO()
+    w.write(buf)
+    out = pw.apply_watermark_to_pages(buf.getvalue(), "NOT RELEASED", [0])
+    pg = PdfReader(BytesIO(out)).pages[0]
+    seen = []
+    pg.extract_text(visitor_text=lambda t, cm, tm, fd, fs: seen.append((t, cm, tm)) if "NOT RELEASED" in t else None)
+    assert seen
+    _, cm, tm = seen[0]
+    # the watermark is rotated about the page centre: (100 + 612, 100 + 396), not (612, 396)
+    assert abs(cm[4] - 712) < 1 and abs(cm[5] - 496) < 1, (cm[4], cm[5])

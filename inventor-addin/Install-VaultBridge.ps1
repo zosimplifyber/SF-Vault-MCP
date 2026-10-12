@@ -18,7 +18,11 @@ dotnet build (Join-Path $root 'SFVaultBridge.Addin\SFVaultBridge.Addin.csproj') 
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 $tool = Join-Path $root 'tools\SFVaultTools.exe'
-if (-not (Test-Path $tool)) {
+$repo = Split-Path $root -Parent
+$sources = 'vault_tools_cli.py','review_package.py','bom_purchasing.py','purchasing_reference.py','pdf_watermark.py','vault_state.py' |
+    ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ }
+$stale = (Test-Path $tool) -and (@($sources | Where-Object { (Get-Item $_).LastWriteTime -gt (Get-Item $tool).LastWriteTime }).Count -gt 0)
+if (-not (Test-Path $tool) -or $stale) {
     & cmd /c (Join-Path (Split-Path $root -Parent) 'build_vault_tools_exe.bat')
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tool)) { throw 'Building SFVaultTools.exe failed.' }
 }

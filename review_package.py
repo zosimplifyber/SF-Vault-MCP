@@ -56,12 +56,12 @@ def _assembly_cover(m: dict[str, Any], usable: list, failed: list[dict[str, str]
              _para(f"Vault state {m.get('state', '')}, version {m.get('version', '')}", st["Normal"]),
              _para(f"Revision {m.get('revision') or '-'}", st["Normal"]),
              Spacer(1, 12), _para("Included drawings", st["Heading3"])]
-    story += [_para(f"{d.get('part_number', '')} - {d.get('drawing', '')} ({str(d.get('state') or '').strip() or 'unknown'})",
-                    st["Normal"]) for d, _ in usable] or [_para("None", st["Normal"])]
+    story += [_para(f"{d.get('part_number', '')} - {d.get('drawing', '')} ({str(d.get('state') or '').strip() or 'unknown'})"
+                    + (f" - {d['note']}" if d.get("note") else ""), st["Normal"]) for d, _ in usable] or [_para("None", st["Normal"])]
     story += [Spacer(1, 12), _para("Missing drawings", st["Heading3"])]
     story += [_para(x, st["Normal"]) for x in (m.get("missing") or [])] or [_para("None", st["Normal"])]
     story += [Spacer(1, 12), _para("Could not export", st["Heading3"])]
-    story += [_para(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed]         or [_para("None", st["Normal"])]
+    story += [_para(f"{f.get('drawing', '')}: {f.get('reason', '')}", st["Normal"]) for f in failed] or [_para("None", st["Normal"])]
     return _doc(story)
 
 

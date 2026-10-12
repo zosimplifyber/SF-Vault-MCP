@@ -94,6 +94,23 @@ public class OutputsTests
     }
 
     [Fact]
+    public void Manifest_writes_drawing_note_only_when_present()
+    {
+        var o = (JsonObject)JsonNode.Parse(ReviewManifest.ToJson("A", "", "", "", "", DateTime.Now,
+            new[] { new ReviewDrawing("CD-1", "CD-1.idw", "p", "", "open in Inventor"), new ReviewDrawing("CD-2", "CD-2.idw", "q") },
+            Array.Empty<string>(), Array.Empty<ReviewFailure>(), Array.Empty<ReviewPurchased>(), Array.Empty<string>()))!;
+        Assert.Equal("open in Inventor", o["drawings"]![0]!["note"]!.GetValue<string>());
+        Assert.False(((JsonObject)o["drawings"]![1]!).ContainsKey("note"));
+    }
+
+    [Fact]
+    public void Tool_result_parses_mode()
+    {
+        Assert.Equal("assembly", ToolResults.Parse("{\"ok\": true, \"pdf\": \"a.pdf\", \"pages\": 1, \"mode\": \"assembly\"}", "pdf", "pages").Mode);
+        Assert.Null(ToolResults.Parse("{\"ok\": true, \"pdf\": \"a.pdf\", \"pages\": 1}", "pdf", "pages").Mode);
+    }
+
+    [Fact]
     public void Manifest_defaults_to_review_mode_with_empty_revision()
     {
         var o = (JsonObject)JsonNode.Parse(ReviewManifest.ToJson("A", "", "", "", "", DateTime.Now,
