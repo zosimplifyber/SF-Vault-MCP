@@ -12,10 +12,12 @@ internal static class BomReader
         var wasDirty = asm.Dirty;
         var oldEnabled = bom.StructuredViewEnabled;
         var oldFirstLevel = bom.StructuredViewFirstLevelOnly;
+        var changedEnabled = false;
+        var changedFirstLevel = false;
         try
         {
-            bom.StructuredViewEnabled = true;
-            bom.StructuredViewFirstLevelOnly = false;
+            if (!oldEnabled) { bom.StructuredViewEnabled = true; changedEnabled = true; }
+            if (oldFirstLevel) { bom.StructuredViewFirstLevelOnly = false; changedFirstLevel = true; }
             Inv.BOMView? view = null;
             foreach (Inv.BOMView v in bom.BOMViews)
                 if (v.ViewType == Inv.BOMViewTypeEnum.kStructuredBOMViewType) { view = v; break; }
@@ -24,8 +26,8 @@ internal static class BomReader
         }
         finally
         {
-            try { bom.StructuredViewFirstLevelOnly = oldFirstLevel; } catch { }
-            try { bom.StructuredViewEnabled = oldEnabled; } catch { }
+            if (changedFirstLevel) { try { bom.StructuredViewFirstLevelOnly = oldFirstLevel; } catch { } }
+            if (changedEnabled) { try { bom.StructuredViewEnabled = oldEnabled; } catch { } }
             try { if (!wasDirty && asm.Dirty) asm.Dirty = false; } catch { }
         }
     }
@@ -77,7 +79,8 @@ internal static class BomReader
             else try { partNumber = ((dynamic)row.ComponentDefinitions[1]).DisplayName ?? ""; } catch { }
         }
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
-        try { children = Rows(row.ChildRows); } catch { }
+        try { children = Rows(row.ChildRows); }
+        catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
         return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children);
     }
 

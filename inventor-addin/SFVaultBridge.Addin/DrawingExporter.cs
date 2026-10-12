@@ -25,12 +25,13 @@ internal static class DrawingExporter
         try { return System.IO.Path.GetFullPath(p); } catch { return p; }
     }
 
-    private static HashSet<string> OpenIds(Inv.Application app)
+    /// <summary>InternalName of every open document, or null if any could not be read (then nothing may be closed).</summary>
+    private static HashSet<string>? OpenIds(Inv.Application app)
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Inv.Document d in app.Documents)
         {
-            try { ids.Add(d.InternalName); } catch { }
+            try { ids.Add(d.InternalName); } catch { return null; }
         }
         return ids;
     }
@@ -52,8 +53,11 @@ internal static class DrawingExporter
             {
                 var before = OpenIds(app);
                 doc = app.Documents.Open(drawingPath, false);
-                bool wasOpen;
-                try { wasOpen = before.Contains(doc.InternalName); } catch { wasOpen = true; }
+                var wasOpen = true;
+                if (before is not null)
+                {
+                    try { wasOpen = before.Contains(doc.InternalName); } catch { wasOpen = true; }
+                }
                 if (!wasOpen) opened = doc;
             }
             var ctx = app.TransientObjects.CreateTranslationContext();
