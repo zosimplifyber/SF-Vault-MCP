@@ -297,9 +297,11 @@ The `wrike_*` MCP tools (search/create/update tasks, folders, comments, timelogs
 1. Download the STEP and PDF for the part from McMaster into your Downloads folder.
 2. Ask Claude for the part (for example, "intake the DIN 6796 M8 washer from McMaster").
 3. Review the preview and approve it.
-4. Close Vault Explorer before the commit. The commit uses the Vault SDK, which needs the single client licence seat.
-5. Have Inventor running and signed out of its Vault add-in before the commit. The commit attaches to that Inventor to convert the STEP; it never starts one.
-6. In Inventor, set the STEP import option to Convert Model (not Reference Model). A STEP that opens as a reference model is rejected.
+
+**Before the first intake:** install the SF Vault Bridge (`inventor-addin/README.md`),
+start Inventor and **sign in to Vault there**. All intake writes run on that session,
+so Vault Explorer can stay open and no extra licence seat is used. Set Inventor's
+STEP import option to Convert Model.
 
 Before first use, run `py -3.14 scripts/probes/probe_intake_sdk.py --write` once. To also test an Inventor part, save a scratch .ipt with custom iProperty "Vendor Number" = "PROBE-0000" and add `--ipt part.ipt`. The probe prints the numbering scheme name. Put that name in `config.json` under `intake.numbering_scheme`.
 

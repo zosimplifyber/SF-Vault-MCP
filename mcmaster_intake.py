@@ -237,7 +237,7 @@ async def _collect_parts(api, vault: str, root: dict[str, Any]) -> tuple[list[di
 
 def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = None,
              store: Optional[PreviewStore] = None, inventor=None, sleep=asyncio.sleep) -> None:
-    from vault_write_tools import _dump, _sdk, _sdk_error
+    from vault_write_tools import _dump, _sdk_error
     from part_specs import validate_card
 
     cfg = _intake_config(config)
@@ -249,11 +249,15 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         return (f"McMaster {pn} was already committed in this session as {in_flight_or_done[pn]}; "
                 "check Vault before trying again.")
 
+    def _bridge():
+        """The Vault/Inventor writer: the SF Vault Bridge add-in (scripts/vault_bridge.py)."""
+        import vault_bridge
+        return vault_bridge
+
     def _inventor():
         if inventor is not None:
             return inventor
-        import inventor_automation
-        return inventor_automation
+        return _bridge()
 
     def err(message: str, **extra: Any) -> str:
         return _dump({"error": True, "message": message, **extra})
@@ -304,7 +308,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         except IntakeError as exc:
             return err(str(exc))
         try:
-            folder_info = await asyncio.to_thread(_sdk().get_folder_by_path, vault_folder)
+            folder_info = await asyncio.to_thread(_bridge().get_folder_by_path, vault_folder)
         except Exception as exc:
             return _dump(_sdk_error(exc))
         payload = {
@@ -330,8 +334,8 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
     @mcp.tool()
     async def vault_mcmaster_intake_commit(token: str, vault_id_param: str = "") -> str:
         """Add the previewed McMaster part to Vault. Only after Zak said yes
-        to the preview. Close Vault Explorer first (SDK license seat), and have
-        Inventor running and signed out of its Vault add-in.
+        to the preview. Inventor must be running and signed in to Vault (SF Vault
+        Bridge); Vault Explorer can stay open.
 
         Args:
             token: The token from vault_mcmaster_intake_preview.
@@ -346,7 +350,7 @@ def register(mcp, api, resolved_vault, *, config: Optional[dict[str, Any]] = Non
         steps: list[dict[str, Any]] = []
         written: list[dict[str, Any]] = []
         state: dict[str, Any] = {"cd": None, "uncertain": []}
-        sdk = _sdk()
+        sdk = _bridge()
 
         def failed(step: str, exc: Exception) -> str:
             if step in ("inventor check", "recheck"):

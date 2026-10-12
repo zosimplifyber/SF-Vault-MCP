@@ -62,7 +62,7 @@ class SpecsAPI:
 
 @pytest.fixture
 def tool(monkeypatch, tmp_path):
-    monkeypatch.setitem(sys.modules, "vault_sdk", FakeSDK())
+    monkeypatch.setitem(sys.modules, "vault_bridge", FakeSDK())
     mcp = FakeMCP()
     mi.register(mcp, SpecsAPI(), lambda v: "1", config={"downloads_dir": str(tmp_path)})
     return mcp.tools["vault_get_part_specs"]
@@ -120,7 +120,7 @@ def test_truncated_flag_when_max_parts_hit(monkeypatch, tmp_path):
     api.files["CD-001890.iam"] = fv("CD-001890.iam", 600, "Assembly - Engineering", "$/DESIGNS/PRODUCTION EQUIPMENT")
     api.uses["600"] = [("CD-001888.ipt", 200, "Dependency"), ("Sub.iam", 650, "Dependency")]
     api.uses["650"] = [("CD-001886.ipt", 400, "Dependency")]
-    monkeypatch.setitem(sys.modules, "vault_sdk", FakeSDK())
+    monkeypatch.setitem(sys.modules, "vault_bridge", FakeSDK())
     monkeypatch.setattr(mi, "MAX_PARTS", 1)
     mcp = FakeMCP()
     mi.register(mcp, api, lambda v: "1", config={"downloads_dir": str(tmp_path)})

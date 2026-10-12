@@ -48,7 +48,7 @@ class FakeAPI:
 
 class FakeSDK(types.ModuleType):
     def __init__(self, fail_on=None):
-        super().__init__("vault_sdk")
+        super().__init__("vault_bridge")
         self.calls = []
         self.fail_on = fail_on
         self.next_id = 500
@@ -118,7 +118,7 @@ def env(tmp_path, monkeypatch):
     (dl / "90510A313_Fully Threaded T-Slot Nut.STEP").write_bytes(b"step")
     (dl / "90510A313.pdf").write_bytes(b"%PDF")
     sdk = FakeSDK()
-    monkeypatch.setitem(sys.modules, "vault_sdk", sdk)
+    monkeypatch.setitem(sys.modules, "vault_bridge", sdk)
     fetched = {"props": dict(GOOD_PROPS)}
 
     async def fake_fetch(api, vault_id, file_name):
@@ -441,3 +441,43 @@ def test_preview_rejects_blank_description(env, desc):
     out = run(env.tools["vault_mcmaster_intake_preview"](
         mcmaster_pn="90510A313", spec_card_json=json.dumps(CARD), description=desc))
     assert out["error"] is True and "description is required" in out["message"]
+
+
+def test_commit_defaults_to_bridge_for_inventor(monkeypatch, tmp_path):
+    """With no inventor injected, the STEP import and running check go to vault_bridge."""
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    (dl / "90510A313_Nut.STEP").write_bytes(b"step")
+    (dl / "90510A313.pdf").write_bytes(b"%PDF")
+    sdk = FakeSDK()
+    calls = []
+    sdk.check_inventor_running = lambda: calls.append("check") or {"signed_in": True}
+
+    def fake_import(step, out, iprops):
+        calls.append("import")
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"ipt")
+        return Path(out)
+
+    sdk.import_step_as_part = fake_import
+    monkeypatch.setitem(sys.modules, "vault_bridge", sdk)
+
+    async def fake_fetch(api, vault_id, file_name):
+        return {"properties": dict(GOOD_PROPS), "note": ""}
+
+    import check_file_properties
+    monkeypatch.setattr(check_file_properties, "fetch_file", fake_fetch)
+    mcp = FakeMCP()
+
+    async def no_sleep(_):
+        return None
+
+    mi.register(mcp, FakeAPI(), lambda v: "1",
+                config={"downloads_dir": str(dl), "workspace_root": str(tmp_path / "ws"), "numbering_scheme": "CD Parts"},
+                sleep=no_sleep)
+    token = json.loads(asyncio.run(mcp.tools["vault_mcmaster_intake_preview"](
+        mcmaster_pn="90510A313", spec_card_json=json.dumps(CARD),
+        description="Fully Threaded T-Slot Nut", finish="Black Oxide")))["token"]
+    out = json.loads(asyncio.run(mcp.tools["vault_mcmaster_intake_commit"](token=token)))
+    assert out["applied"] is True, out
+    assert calls == ["check", "import"]
