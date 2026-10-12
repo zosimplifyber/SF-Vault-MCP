@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SFVaultBridge.Core", "SFVau
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SFVaultBridge.Core.Tests", "SFVaultBridge.Core.Tests\SFVaultBridge.Core.Tests.csproj", "{9E622477-70CD-4039-8A71-4B612E3EA3AF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SFVaultBridge.Addin", "SFVaultBridge.Addin\SFVaultBridge.Addin.csproj", "{AC09032A-1295-4AD7-9579-2CD1D34DEF3C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{9E622477-70CD-4039-8A71-4B612E3EA3AF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9E622477-70CD-4039-8A71-4B612E3EA3AF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9E622477-70CD-4039-8A71-4B612E3EA3AF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC09032A-1295-4AD7-9579-2CD1D34DEF3C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC09032A-1295-4AD7-9579-2CD1D34DEF3C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC09032A-1295-4AD7-9579-2CD1D34DEF3C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC09032A-1295-4AD7-9579-2CD1D34DEF3C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

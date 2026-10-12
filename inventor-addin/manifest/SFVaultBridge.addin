@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Addin Type="Standard">
+  <ClassId>{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}</ClassId>
+  <ClientId>{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}</ClientId>
+  <DisplayName>SF Vault Bridge</DisplayName>
+  <Description>Lets the Simplifyber Vault MCP server work in Vault through this Inventor's signed-in session.</Description>
+  <Assembly>{{ASSEMBLY}}</Assembly>
+  <LoadOnStartUp>1</LoadOnStartUp>
+  <UserUnloadable>1</UserUnloadable>
+  <Hidden>0</Hidden>
+  <SupportedSoftwareVersionEqualTo>30..</SupportedSoftwareVersionEqualTo>
+  <DataVersion>1</DataVersion>
+</Addin>
