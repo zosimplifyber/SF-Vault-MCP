@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 namespace SFVaultBridge.Core;
 
 /// <summary>The per-user settings file: Process values, print materials and recent partner names.</summary>
-public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners)
+public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "")
 {
     public const int MaxRecent = 10;
 
@@ -33,7 +33,8 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         return new BridgeSettings(
             Strings(root, "processValues") ?? DefaultsValue.ProcessValues,
             Strings(root, "printMaterials") ?? DefaultsValue.PrintMaterials,
-            Normalize(Strings(root, "recentPartners") ?? DefaultsValue.RecentPartners));
+            Normalize(Strings(root, "recentPartners") ?? DefaultsValue.RecentPartners),
+            AppKey(root));
     }
 
     public static IReadOnlyList<string> WithRecent(IReadOnlyList<string> recent, string partner)
@@ -61,6 +62,9 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         return names.Where(n => seen.Add(n)).Take(MaxRecent).ToList();
     }
 
+    private static string AppKey(JsonObject root) =>
+        root["dropboxAppKey"] is JsonValue v && v.TryGetValue<string>(out var k) ? k.Trim() : "";
+
     private static List<string>? Strings(JsonObject root, string key)
     {
         if (root[key] is not JsonArray a) return null;
@@ -76,6 +80,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             ["processValues"] = new JsonArray(s.ProcessValues.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
             ["printMaterials"] = new JsonArray(s.PrintMaterials.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
             ["recentPartners"] = new JsonArray(recent.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+            ["dropboxAppKey"] = s.DropboxAppKey,
         }.ToJsonString(Indented);
 
     private static bool TryRead(string path, Action<string> log, out JsonObject? root)
