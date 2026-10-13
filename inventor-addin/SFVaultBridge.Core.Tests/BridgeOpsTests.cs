@@ -168,6 +168,9 @@ public class BridgeOpsTests : IDisposable
         public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file) => Array.Empty<DataCardFileInfo>();
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo file, IReadOnlyList<PropRef> props) => new Dictionary<PropRef, string?>();
         public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) => new(0);
+        public RevisePlan PlanRevise(DataCardFileInfo file) => new("none");
+        public DataCardStateChange ChangeState(DataCardFileInfo file, string toStateName, string comment) => new(toStateName, "");
+        public bool? LinkedToItem(DataCardFileInfo file) => null;
     }
 
     [Fact]

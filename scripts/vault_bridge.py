@@ -133,8 +133,11 @@ def import_step_as_part(step_path: str | Path, out_ipt: str | Path, iproperties:
 
 
 def fix_data_card(files: Iterable[str], design: dict[str, str] | None = None, custom: dict[str, str] | None = None,
-                  part_number_from_file_name: bool = True, dry_run: bool = True, comment: str | None = None) -> dict[str, Any]:
-    """Fix iProperties of existing Vault parts (check out, edit in Inventor, check in). Dry run by default."""
+                  part_number_from_file_name: bool = True, dry_run: bool = True, comment: str | None = None,
+                  revise_released: bool = False) -> dict[str, Any]:
+    """Fix iProperties of existing Vault parts (check out, edit in Inventor, check in). Dry run by default.
+
+    revise_released=True also fixes Released files: Released -> Work in Progress, edit, check in, back to Released."""
     names = [str(f) for f in files]
     if not names:
         raise ValueError("files must not be empty")
@@ -145,6 +148,8 @@ def fix_data_card(files: Iterable[str], design: dict[str, str] | None = None, cu
         body["custom"] = dict(custom)
     if comment:
         body["comment"] = comment
+    if revise_released:
+        body["reviseReleased"] = True
     return _call("fix_data_card", body)
 
 
@@ -169,6 +174,8 @@ def build_parser():
     fix.add_argument("--no-part-number", action="store_true", help="do not set Part Number to the file name")
     fix.add_argument("--apply", action="store_true", help="check out, fix and check in (default is a preview)")
     fix.add_argument("--comment", default=None, help="check-in comment")
+    fix.add_argument("--revise-released", action="store_true",
+                     help="also fix Released files: Released -> Work in Progress, edit, check in, back to Released (never Content Center)")
     return parser
 
 
@@ -176,7 +183,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "fix-data-card":
         result = fix_data_card(args.files, design=_pairs(args.set, "--set"), custom=_pairs(args.custom, "--custom"),
-                               part_number_from_file_name=not args.no_part_number, dry_run=not args.apply, comment=args.comment)
+                               part_number_from_file_name=not args.no_part_number, dry_run=not args.apply, comment=args.comment,
+                               revise_released=args.revise_released)
         print(json.dumps(result, indent=2))
         counts = result.get("counts", {})
         return 1 if counts.get("error") else 0

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace SFVaultBridge.Core;
@@ -11,7 +12,13 @@ public sealed record PropChange(PropRef Prop, string? From, string To);
 /// <summary>What the Vault says about the latest version of one file.</summary>
 public sealed record DataCardFileInfo(string VaultPath, string Name, string Category, string State, bool Released,
                                       bool CheckedOut, string CheckedOutBy, long Version,
-                                      string? Unreadable = null);
+                                      string? Unreadable = null, string Revision = "");
+
+/// <summary>State and revision of a file after a lifecycle change, as Vault reports them.</summary>
+public sealed record DataCardStateChange(string State, string Revision);
+
+/// <summary>Result of looking up the two lifecycle moves a revise needs, by state name. Problem is set when either is missing.</summary>
+public sealed record RevisePlan(string? Problem, string ToWorkInProgress = "", string ToReleased = "");
 
 /// <summary>Result of a successful check-in. Version is -1 when it could not be read back; Warning says why.</summary>
 public sealed record DataCardApplied(long Version, string? Warning = null);
@@ -48,11 +55,21 @@ public interface IDataCardHost
 
     /// <summary>Check out, set, save, check in with the comment. Any failure before the check-in succeeds undoes the checkout; nothing after it does.</summary>
     DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment);
+
+    /// <summary>Looks up, by state NAME in the file's lifecycle definition (never by id), the transitions Released to Work in Progress and
+    /// Work in Progress to Released that the signed-in user may take. Changes nothing. Fails closed (Problem) on any read failure.</summary>
+    RevisePlan PlanRevise(DataCardFileInfo file);
+
+    /// <summary>Moves the file to the state with that name, only along an existing allowed transition. Throws DataCardStepException when it cannot.</summary>
+    DataCardStateChange ChangeState(DataCardFileInfo file, string toStateName, string comment);
+
+    /// <summary>True when the file is linked to an item. Null when that could not be read (never an error).</summary>
+    bool? LinkedToItem(DataCardFileInfo file);
 }
 
 public sealed record DataCardRequest(IReadOnlyList<string> Files, IReadOnlyDictionary<string, string> Design,
                                      IReadOnlyDictionary<string, string> Custom, bool PartNumberFromFileName,
-                                     bool DryRun, string? Comment);
+                                     bool DryRun, string? Comment, bool ReviseReleased = false);
 
 /// <summary>Rules and orchestration for the fix_data_card bridge operation.</summary>
 public static class DataCardFix
@@ -60,6 +77,45 @@ public static class DataCardFix
     public const string PartNumber = "Part Number";
     public const string ContentCenterCategory = "Part - Content Center";
     public const string ContentCenterRoot = "$/Content Center Files";
+    public const string ReleasedState = "Released";
+    public const string WorkInProgressState = "Work in Progress";
+
+    /// <summary>Design Tracking properties Inventor stores as numbers (currency); the request string is converted before assigning.</summary>
+    private static readonly HashSet<string> NumericDesign = new(StringComparer.OrdinalIgnoreCase) { "Cost" };
+
+    public static bool IsNumeric(PropRef p) => p.Set == PropSet.Design && NumericDesign.Contains(p.Name);
+
+    /// <summary>Invariant-culture parse of a numeric property value; false for blanks, text, NaN and infinity.</summary>
+    public static bool TryParseNumber(string? text, out double value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (!double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value)) return false;
+        return !double.IsNaN(value) && !double.IsInfinity(value);
+    }
+
+    /// <summary>Invariant, shortest round-trip form ("12.5"); the same text is shown in previews and compared with the current value.</summary>
+    public static string FormatNumber(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+
+    /// <summary>Normalizes the number-typed targets to invariant text; a non-number is a per-file error ("Cost must be a number").</summary>
+    public static IReadOnlyDictionary<PropRef, string> NormalizeWanted(IReadOnlyDictionary<PropRef, string> wanted)
+    {
+        var o = new Dictionary<PropRef, string>();
+        foreach (var (p, v) in wanted)
+        {
+            if (!IsNumeric(p)) { o[p] = v; continue; }
+            if (!TryParseNumber(v, out var d)) throw new DataCardStepException("set", $"{p.Name} must be a number");
+            o[p] = FormatNumber(d);
+        }
+        return o;
+    }
+
+    private static IReadOnlyDictionary<PropRef, string?> NormalizeCurrent(IReadOnlyDictionary<PropRef, string?> current)
+    {
+        var o = new Dictionary<PropRef, string?>();
+        foreach (var (p, v) in current) o[p] = IsNumeric(p) && TryParseNumber(v, out var d) ? FormatNumber(d) : v;
+        return o;
+    }
 
     public static DataCardFileRef ParseFile(string text)
     {
@@ -75,11 +131,12 @@ public static class DataCardFix
             ? s.Trim() : throw new BridgeException("bad_request", $"'files[{i}]' must be a non-empty string.")).ToList();
         var comment = Args.OptStr(body, "comment", "").Trim();
         return new DataCardRequest(files, Args.StrMap(body, "design"), Args.StrMap(body, "custom"),
-            Args.Bool(body, "partNumberFromFileName", true), Args.Bool(body, "dryRun", true), comment.Length > 0 ? comment : null);
+            Args.Bool(body, "partNumberFromFileName", true), Args.Bool(body, "dryRun", true), comment.Length > 0 ? comment : null,
+            Args.Bool(body, "reviseReleased", false));
     }
 
     /// <summary>Why the file may not be fixed, or null when it may.</summary>
-    public static string? SkipReason(DataCardFileInfo f)
+    public static string? SkipReason(DataCardFileInfo f, bool reviseReleased = false)
     {
         var ext = Path.GetExtension(f.Name);
         if (ext.Equals(".iam", StringComparison.OrdinalIgnoreCase)) return "assemblies are not supported yet";
@@ -88,13 +145,24 @@ public static class DataCardFix
         if (f.Unreadable is not null) return f.Unreadable;
         if (f.CheckedOut)
             return $"{f.Name} is checked out by {(string.IsNullOrWhiteSpace(f.CheckedOutBy) ? "someone" : f.CheckedOutBy)}. Check it in or undo the checkout first.";
-        if (f.Released || string.Equals(f.State, "Released", StringComparison.OrdinalIgnoreCase))
-            return $"{f.Name} is Released. Change its state before fixing it.";
+        // Content Center files are never revised, with or without the opt-in, so this is checked before the Released rule.
         if (string.Equals(f.Category, ContentCenterCategory, StringComparison.OrdinalIgnoreCase)
             || f.VaultPath.StartsWith(ContentCenterRoot, StringComparison.OrdinalIgnoreCase))
             return $"{f.Name} is a Content Center file.";
+        if (IsReleased(f))
+        {
+            if (!reviseReleased) return $"{f.Name} is Released. Change its state before fixing it.";
+            // Only the state literally named Released is revised; any other released-type state (Obsolete, custom) is left alone.
+            if (!string.Equals(f.State, ReleasedState, StringComparison.OrdinalIgnoreCase))
+                return $"{f.Name} is in the released-type state '{f.State}', not '{ReleasedState}'; it is not revised.";
+        }
         return null;
     }
+
+    public static bool IsReleased(DataCardFileInfo f) =>
+        f.Released || string.Equals(f.State, ReleasedState, StringComparison.OrdinalIgnoreCase);
+
+    public static string NoTransition(string from, string to) => $"no transition from {from} to {to}";
 
     public static IReadOnlyList<PropRef> Targets(DataCardRequest r, string fileName, out IReadOnlyDictionary<PropRef, string> wanted)
     {
@@ -172,30 +240,132 @@ public static class DataCardFix
             if (matches.Count > 1)
                 return Error(arg, "resolve", $"{arg} matches {matches.Count} files ({string.Join(", ", matches.Select(m => m.VaultPath))}). Pass the full $/ path.");
             info = matches[0];
-            var skip = SkipReason(info);
+            var skip = SkipReason(info, req.ReviseReleased);
             if (skip is not null) return Skipped(info.VaultPath, skip);
 
-            var props = Targets(req, info.Name, out var wanted);
+            var props = Targets(req, info.Name, out var rawWanted);
+            var wanted = NormalizeWanted(rawWanted);
             IReadOnlyDictionary<PropRef, string?> current;
-            try { current = host.Read(info, props); }
+            try { current = NormalizeCurrent(host.Read(info, props)); }
             catch (Exception ex) when (ex is not DataCardSkipException and not DataCardStepException and not BridgeException)
             { throw new DataCardStepException("read", ex.Message); }
             var changes = ComputeChanges(wanted, current);
             if (changes.Count == 0) return new JsonObject { ["file"] = info.VaultPath, ["status"] = "no_change", ["changes"] = new JsonObject() };
+
+            var revise = IsReleased(info);
+            RevisePlan? plan = null;
+            if (revise)
+            {
+                // Both moves are looked up before anything changes, so a file is never stranded in Work in Progress for want of a way back.
+                plan = host.PlanRevise(info);
+                if (plan.Problem is not null) return Skipped(info.VaultPath, plan.Problem);
+            }
+            var linked = host.LinkedToItem(info);
+
             if (req.DryRun)
-                return new JsonObject { ["file"] = info.VaultPath, ["status"] = "preview", ["changes"] = ChangesJson(changes) };
+            {
+                var preview = new JsonObject { ["file"] = info.VaultPath, ["status"] = "preview", ["changes"] = ChangesJson(changes) };
+                if (revise)
+                {
+                    preview["would_revise"] = true;
+                    preview["transitions"] = new JsonArray(plan!.ToWorkInProgress, plan.ToReleased);
+                }
+                if (linked == true) preview["linked_to_item"] = true;
+                return preview;
+            }
 
             var comment = req.Comment ?? DefaultComment(changes);
-            var applied = host.Apply(info, changes, comment);
-            var fixedResult = new JsonObject { ["file"] = info.VaultPath, ["status"] = "fixed", ["version"] = applied.Version >= 0 ? applied.Version : null, ["changes"] = ChangesJson(changes) };
-            if (applied.Warning is not null) fixedResult["warning"] = applied.Warning;
-            return fixedResult;
+            JsonObject result = revise ? ReviseAndFix(info, changes, comment, host) : FixOnly(info, changes, comment, host);
+            if (linked == true) result["linked_to_item"] = true;
+            return result;
         }
         catch (DataCardSkipException ex) { return Skipped(info?.VaultPath ?? arg, ex.Message); }
         catch (DataCardStepException ex) { return Error(info?.VaultPath ?? arg, ex.Step, ex.Message); }
         catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
         catch (BridgeException ex) { return Error(info?.VaultPath ?? arg, ex.Code, ex.Message); }
         catch (Exception ex) { return Error(info?.VaultPath ?? arg, "unexpected", ex.Message); }
+    }
+
+    private static JsonObject FixOnly(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host)
+    {
+        var applied = host.Apply(info, changes, comment);
+        var fixedResult = new JsonObject { ["file"] = info.VaultPath, ["status"] = "fixed", ["version"] = applied.Version >= 0 ? applied.Version : null, ["changes"] = ChangesJson(changes) };
+        if (applied.Warning is not null) fixedResult["warning"] = applied.Warning;
+        return fixedResult;
+    }
+
+    /// <summary>Released to Work in Progress, the normal checkout/edit/check-in, then back to Released. Once the first move succeeded the way back is
+    /// always attempted, whatever happened in the middle, and a failure to get back is reported loudly with the actual state.</summary>
+    private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host)
+    {
+        var revisionBefore = info.Revision;
+        try { host.ChangeState(info, WorkInProgressState, comment); }
+        catch (Exception ex)
+        {
+            // Nothing is known to have changed, but the real state is read back rather than assumed.
+            var o = Error(info.VaultPath, "revise", ex.Message);
+            o["state_after"] = ActualState(host, info);
+            o["revision_before"] = revisionBefore;
+            return o;
+        }
+
+        // Step 2: edit on the refreshed file (the state change can move the version). Whatever fails is held until the file is back.
+        DataCardApplied? applied = null;
+        string? editStep = null, editError = null;
+        try
+        {
+            var fresh = Refresh(host, info);
+            applied = host.Apply(fresh, changes, comment);
+        }
+        catch (DataCardSkipException ex) { editStep = "skipped"; editError = ex.Message; }
+        catch (DataCardStepException ex) { editStep = ex.Step; editError = ex.Message; }
+        catch (BridgeException ex) { editStep = ex.Code; editError = ex.Message; }
+        catch (Exception ex) { editStep = "unexpected"; editError = ex.Message; }
+
+        // Step 3: back to Released, always.
+        DataCardStateChange? back = null;
+        string? backError = null;
+        try { back = host.ChangeState(Refresh(host, info), ReleasedState, comment); }
+        catch (Exception ex) { backError = ex.Message; }
+
+        var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = ChangesJson(changes), ["revision_before"] = revisionBefore };
+        if (backError is not null)
+        {
+            result["status"] = "error";
+            result["step"] = "re_release";
+            result["message"] = $"Could not return the file to {ReleasedState}: {backError}" + (editError is null ? "" : $" (the edit also failed at {editStep}: {editError})");
+            result["state_after"] = ActualState(host, info);
+            if (editError is not null) result["edit_error"] = editError;
+            if (applied is not null) result["version"] = applied.Version >= 0 ? applied.Version : null;
+            return result;
+        }
+        result["state_after"] = back!.State;
+        result["revision_after"] = back.Revision;
+        if (editError is not null)
+        {
+            result["status"] = "error";
+            result["step"] = editStep;
+            result["message"] = editError + $" (the file was returned to {ReleasedState})";
+            result["re_released"] = true;
+            return result;
+        }
+        result["status"] = "fixed";
+        result["version"] = applied!.Version >= 0 ? applied.Version : null;
+        if (applied.Warning is not null) result["warning"] = applied.Warning;
+        return result;
+    }
+
+    private static DataCardFileInfo Refresh(IDataCardHost host, DataCardFileInfo info)
+    {
+        var m = host.Find(ParseFile(info.VaultPath));
+        if (m.Count != 1) throw new DataCardStepException("resolve", $"{info.VaultPath} could not be re-read from Vault.");
+        return m[0];
+    }
+
+    private static string ActualState(IDataCardHost host, DataCardFileInfo info)
+    {
+        try { return Refresh(host, info).State; }
+        catch (Exception) { return "unknown"; }
     }
 
     private static JsonObject ChangesJson(IEnumerable<PropChange> changes)
