@@ -41,6 +41,25 @@ internal static class BomReader
         return BomSource.Describe(modelState, designView);
     }
 
+    private const string SheetMetalSubType = "{9C464203-9BAE-11D3-8BAD-0060B0CE6BB4}";
+
+    /// <summary>The assembly itself as a childless BOM node (for the package's top-level drawing and quote).</summary>
+    internal static BomNode TopNode(Inv.AssemblyDocument asm, string revision, string state)
+    {
+        string Prop(string set, string name)
+        {
+            try { return Convert.ToString(asm.PropertySets[set][name].Value) ?? ""; } catch { return ""; }
+        }
+        var fullPath = "";
+        try { fullPath = asm.FullFileName ?? ""; } catch { }
+        var fileName = fullPath.Length > 0 ? System.IO.Path.GetFileName(fullPath) : "";
+        var stem = fullPath.Length > 0 ? System.IO.Path.GetFileNameWithoutExtension(fullPath) : "";
+        return new BomNode(stem, Prop("Design Tracking Properties", "Description"), 1, "Each", "Normal", revision,
+            Prop("Design Tracking Properties", "Material"), fileName, fullPath, Array.Empty<BomNode>(), State: state,
+            Process: Prop("Inventor User Defined Properties", "Process"),
+            MaterialFinish: Prop("Inventor User Defined Properties", "Material Finish"));
+    }
+
     private static IReadOnlyList<BomNode> Rows(Inv.BOMRowsEnumerator? rows)
     {
         var list = new List<BomNode>();
@@ -51,6 +70,8 @@ internal static class BomReader
 
     private static BomNode Node(Inv.BOMRow row)
     {
+        string process = "", finish = "";
+        var isSheetMetal = false;
         string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "", vendor = "", vendorNumber = "";
         double qty;
         try { qty = Convert.ToDouble(row.ItemQuantity, System.Globalization.CultureInfo.InvariantCulture); } catch { qty = 0; }
@@ -70,6 +91,7 @@ internal static class BomReader
                 try { fullPath = doc?.FullFileName ?? ""; } catch { }
                 fileName = fullPath.Length > 0 ? System.IO.Path.GetFileName(fullPath) : "";
                 try { sets = doc?.PropertySets; } catch { }
+                try { isSheetMetal = doc is Inv.PartDocument pd && string.Equals(pd.SubType, SheetMetalSubType, StringComparison.OrdinalIgnoreCase); } catch { isSheetMetal = false; }
             }
             string Prop(string set, string name)
             {
@@ -81,6 +103,8 @@ internal static class BomReader
             revision = Prop("Inventor Summary Information", "Revision Number");
             material = Prop("Design Tracking Properties", "Material");
             vendor = Prop("Design Tracking Properties", "Vendor");
+            process = Prop("Inventor User Defined Properties", "Process");
+            finish = Prop("Inventor User Defined Properties", "Material Finish");
             vendorNumber = SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number"));
         }
         catch { }
@@ -92,7 +116,7 @@ internal static class BomReader
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
         try { children = Rows(row.ChildRows); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
-        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber);
+        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal);
     }
 
     private static string Structure(Inv.BOMStructureEnum s) => s switch

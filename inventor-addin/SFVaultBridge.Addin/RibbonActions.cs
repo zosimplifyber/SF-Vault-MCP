@@ -218,19 +218,6 @@ internal sealed class RibbonActions
             var seen = new HashSet<long>();
             var pdfCount = 0;
 
-            // Where-used drawings plus any .idw/.dwg in Vault named like the component, de-duplicated by master id.
-            IReadOnlyList<Autodesk.Connectivity.WebServices.File> Candidates(Autodesk.Connectivity.WebServices.File model)
-            {
-                var list = new List<Autodesk.Connectivity.WebServices.File>(VaultFiles.WhereUsedDrawings(model));
-                try
-                {
-                    foreach (var f in VaultFiles.DrawingsNamed(System.IO.Path.GetFileNameWithoutExtension(model.Name)))
-                        if (list.All(x => x.MasterId != f.MasterId)) list.Add(f);
-                }
-                catch (Exception ex) { _log($"review name search for {model.Name} failed: {ex.Message}"); }
-                return list;
-            }
-
             void Collect(string partNumber, string localModel)
             {
                 try
@@ -238,7 +225,7 @@ internal sealed class RibbonActions
                     var vaultModel = VaultPaths.ToVaultFolder(localModel, root) + "/" + System.IO.Path.GetFileName(localModel);
                     var model = VaultFiles.FindLatest(vaultModel);
                     if (model is null) { missing.Add($"{partNumber} (not in Vault)"); return; }
-                    var candidates = Candidates(model);
+                    var candidates = DrawingFinder.Candidates(model, _log);
                     var picked = ReviewRules.PickDrawings(model.Name, candidates.Select(c => c.Name));
                     if (picked.Count == 0) { missing.Add(partNumber); return; }
                     foreach (var name in picked)
