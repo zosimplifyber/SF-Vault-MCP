@@ -23,8 +23,8 @@ internal sealed class ImportPartForm : Form
     private readonly ComboBox _sub = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _number = new();
     private readonly TextBox _desc = new();
-    private readonly ComboBox _material = new() { DropDownStyle = ComboBoxStyle.DropDown };
-    private readonly TextBox _finish = new();
+    private readonly ComboBox _material = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly TextBox _finish = new() { Text = ImportRules.DefaultFinish };
     private readonly TextBox _designer = new() { ReadOnly = true };
     private readonly TextBox _approved = new() { ReadOnly = true, Text = "NOT REVIEWED" };
     private readonly Label _will = new() { AutoSize = true };
@@ -94,6 +94,9 @@ internal sealed class ImportPartForm : Form
         FillSubfolders();
 
         foreach (var m in materials) _material.Items.Add(m);
+        var preferred = ImportRules.PreferredMaterial(materials);
+        if (preferred is not null) _material.SelectedItem = preferred;
+        else _error.Text = "No materials found in Inventor's active library; Material is required.";
 
         Build(stepFile, pdfFile);
         _vendor.SelectedIndexChanged += (_, _) => Safe(OnVendorChanged);
@@ -250,7 +253,7 @@ internal sealed class ImportPartForm : Form
     }
 
     private ImportPlan CurrentPlan() =>
-        new(_vendorSel, _subSel, _number.Text, _desc.Text, _material.Text.Trim(), _finish.Text.Trim(), _designer.Text);
+        new(_vendorSel, _subSel, _number.Text, _desc.Text, (_material.SelectedItem as string ?? "").Trim(), ImportRules.NormalizeFinish(_finish.Text), _designer.Text);
 
     /// <summary>Shows CD-&lt;next&gt; literally: asking Vault for the real number would consume it.</summary>
     private void UpdateWill()

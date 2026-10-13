@@ -16,7 +16,7 @@ internal sealed class StepImporter : IStepImporter
     public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom)
         => ImportStepAsPart(stepPath, outIpt, design, custom, null, null);
 
-    /// <summary>As above; when material is non-empty it is looked up in the active material library and applied. A missing or unappliable material adds a line to warnings and never fails the import.</summary>
+    /// <summary>As above; when material is non-empty it is looked up in the active material library and applied. A missing or unappliable material throws BridgeException("material") before the part is saved.</summary>
     public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom,
                                    string? material, ICollection<string>? warnings)
     {
@@ -46,8 +46,8 @@ internal sealed class StepImporter : IStepImporter
 
             if (!string.IsNullOrWhiteSpace(material))
             {
-                var warning = TryApplyMaterial((Inv.PartDocument)doc, material.Trim());
-                if (warning is not null) warnings?.Add(warning);
+                var problem = TryApplyMaterial((Inv.PartDocument)doc, material.Trim());
+                if (problem is not null) throw new BridgeException("material", problem);
             }
 
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outIpt)!);
@@ -75,7 +75,7 @@ internal sealed class StepImporter : IStepImporter
                 Inv.Asset? source = null;
                 foreach (Inv.Asset a in _app.ActiveMaterialLibrary.MaterialAssets)
                     if (string.Equals(a.DisplayName, material, StringComparison.OrdinalIgnoreCase)) { source = a; break; }
-                if (source is null) return $"Material '{material}' is not in Inventor's active material library; the part keeps its default material.";
+                if (source is null) return $"Material '{material}' is not in Inventor's active material library; choose another material.";
                 found = source.CopyTo((Inv.Document)part, true);
             }
             part.ActiveMaterial = found;

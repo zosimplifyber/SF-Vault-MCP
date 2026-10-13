@@ -77,6 +77,24 @@ public static class ImportRules
         return path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
     }
 
+    public const string DefaultFinish = "As Finished";
+
+    /// <summary>Material Finish for the data card: empty becomes "As Finished".</summary>
+    public static string NormalizeFinish(string? finish) => string.IsNullOrWhiteSpace(finish) ? DefaultFinish : CleanText(finish);
+
+    /// <summary>"Steel" when the library has it (case-insensitive), else the first name, else null.</summary>
+    public static string? PreferredMaterial(IEnumerable<string> names)
+    {
+        var list = names.ToList();
+        return list.FirstOrDefault(n => string.Equals(n, "Steel", StringComparison.OrdinalIgnoreCase)) ?? list.FirstOrDefault();
+    }
+
+    public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };
+
+    /// <summary>Names of the data-card properties whose value (read through valueOf) is blank.</summary>
+    public static IReadOnlyList<string> EmptyCardProperties(Func<string, string?> valueOf) =>
+        CardProperties.Where(n => string.IsNullOrWhiteSpace(valueOf(n))).ToList();
+
     public static IReadOnlyList<string> Validate(ImportPlan p)
     {
         var errors = new List<string>();
@@ -87,6 +105,7 @@ public static class ImportRules
         if (vn.Length == 0) errors.Add("Vendor Number is required.");
         else if (!SafeFilePart(vn).Any(char.IsLetterOrDigit)) errors.Add("Vendor Number must contain at least one letter or digit.");
         if (string.IsNullOrWhiteSpace(p.Description)) errors.Add("Description is required.");
+        if (string.IsNullOrWhiteSpace(p.Material)) errors.Add("Material is required.");
         return errors;
     }
 

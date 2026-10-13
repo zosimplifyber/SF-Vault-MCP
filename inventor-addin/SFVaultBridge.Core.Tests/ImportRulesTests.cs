@@ -172,4 +172,36 @@ public class ImportRulesTests
         Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "90510A313", "", "90510A314", McMasterFolder));
         Assert.False(ImportRules.IsDuplicate("McMaster-Carr", "", "", "", McMasterFolder));
     }
+
+    [Fact]
+    public void Material_is_required()
+    {
+        var p = Plan() with { Material = "  " };
+        Assert.Contains("Material is required.", ImportRules.Validate(p));
+        Assert.Empty(ImportRules.Validate(Plan()));
+    }
+
+    [Theory]
+    [InlineData(null, "As Finished")]
+    [InlineData("", "As Finished")]
+    [InlineData("   ", "As Finished")]
+    [InlineData(" Black Oxide ", "Black Oxide")]
+    public void Empty_finish_becomes_as_finished(string? finish, string expected) =>
+        Assert.Equal(expected, ImportRules.NormalizeFinish(finish));
+
+    [Fact]
+    public void Preferred_material_is_steel_else_first()
+    {
+        Assert.Equal("steel", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "steel", "Brass" }));
+        Assert.Equal("Aluminum 6061", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "Brass" }));
+        Assert.Null(ImportRules.PreferredMaterial(Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void Empty_card_properties_names_the_blank_ones()
+    {
+        var values = new Dictionary<string, string?> { ["Source"] = "Buy", ["Vendor"] = " ", ["Material"] = null };
+        Assert.Equal(new[] { "Vendor", "Vendor Number", "Material", "Material Finish" },
+            ImportRules.EmptyCardProperties(n => values.GetValueOrDefault(n)));
+    }
 }

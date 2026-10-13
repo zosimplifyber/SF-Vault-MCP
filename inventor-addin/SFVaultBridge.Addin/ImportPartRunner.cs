@@ -66,9 +66,8 @@ internal static class ImportPartRunner
                 ["Source"] = "Buy",
                 ["Engr Approved By"] = "NOT REVIEWED",
             };
-            if (!string.IsNullOrWhiteSpace(plan.MaterialFinish)) custom["Material Finish"] = plan.MaterialFinish.Trim();
-            new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom,
-                string.IsNullOrWhiteSpace(plan.Material) ? null : plan.Material, warnings);
+            custom["Material Finish"] = ImportRules.NormalizeFinish(plan.MaterialFinish);
+            new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings);
             partDone = true;
 
             step = "pdf";
@@ -93,6 +92,12 @@ internal static class ImportPartRunner
                 {
                     if (VaultFiles.CategoryName(back) != PartCategory) warnings.Add($"Read back: category is {VaultFiles.CategoryName(back) ?? "(none)"}, expected {PartCategory}.");
                     state = back.FileLfCyc?.LfCycStateName;
+                    try
+                    {
+                        foreach (var name in ImportRules.EmptyCardProperties(VaultFiles.CardValueReader(back)))
+                            warnings.Add($"{name} is empty on the Vault data card; open the part and check its iProperties.");
+                    }
+                    catch (Exception ex) { warnings.Add($"Could not read the data card back: {ex.Message}"); }
                 }
             }
             catch (Exception ex) { warnings.Add($"Read back failed: {ex.Message}"); }

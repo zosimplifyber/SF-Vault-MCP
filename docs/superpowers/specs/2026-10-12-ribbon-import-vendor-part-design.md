@@ -14,7 +14,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 |---|---|
 | 1 | Build overnight; nothing installed and nothing written to Vault until Zak is back. |
 | 2 | Vendor is a dropdown of the vendor folders under `$/DESIGNS/Simplifyber Library` (today McMaster-Carr, MiSUMi, Kiefel) plus **New vendor...**, which creates the folder. |
-| 3 | Data card fields filled: Vendor, Vendor Number, Description, Material, Material Finish, Designer, Engr Approved By. Source = Buy and category Part - Purchased always. |
+| 3 | Data card fields filled: Vendor, Vendor Number, Description, Material, Material Finish, Designer, Engr Approved By. Source = Buy and category Part - Purchased always. After the add, the runner reads Source, Vendor, Vendor Number, Material and Material Finish back from Vault and warns once per empty property. |
 | 4 | The PDF is checked in beside the part and attached to it. |
 
 ## Flow
@@ -26,8 +26,8 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
    - **Subfolder**: dropdown of the chosen vendor folder's subfolders (one level, plus nested ones as `screws/shoulder screws`), `(vendor folder itself)`, and New subfolder...
    - **Vendor Number**: from the file name (McMaster: the leading part number; other vendors: the text before the first `_`, else empty), editable, required.
    - **Description**: from the file name (McMaster: the text after the first `_`, extension removed), editable, required.
-   - **Material**: dropdown of materials in Inventor's active material library, editable; empty allowed.
-   - **Material Finish**: text, editable; empty allowed.
+   - **Material**: required pick-only dropdown of the active material library, preselected to Steel when present, else the first item. A material that cannot be applied at run time fails step part before anything is added for the part.
+   - **Material Finish**: text, defaults to As Finished, editable; empty becomes As Finished.
    - **Designer**: Inventor's user name (General Options), read-only.
    - **Engr Approved By**: `NOT REVIEWED`, read-only.
    - Shows where it will go: `$/DESIGNS/Simplifyber Library/<Vendor>/<Subfolder>/CD-<next>.ipt` and the PDF name.
@@ -53,7 +53,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 | Vendor Number | custom "Vendor Number" | form |
 | WEB Link | Design Tracking "Catalog Web Link" | Vendor Number (matches existing parts) |
 | Source | custom "Source" | `Buy` |
-| Material | part material | form (only when the material exists in the active library) |
+| Material | part material | form (required) |
 | Material Finish | custom "Material Finish" | form |
 | Designer | Design Tracking "Designer" | Inventor user name |
 | Engr Approved By | custom "Engr Approved By" | `NOT REVIEWED` |
