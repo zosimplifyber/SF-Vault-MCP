@@ -20,7 +20,9 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Buttons
 
-The Purchasing Sheet, Design Review and Assembly Package buttons sit on the SF Vault Bridge panel. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge panel has six action buttons (Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part) plus the status dot. All but Import New Part need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+
+Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow.
 
 - **Purchasing Sheet**: reads the assembly's BOM and builds the purchasing workbook and checks it into the assembly's Vault folder in the Documents category. The file is also saved next to the assembly. Running it again adds a new version of the same file. If anyone (including you) has the file checked out, nothing is written and you are told who has it.
 - **Design Review**: builds a PDF watermarked DRAFT with a cover that lists the assembly, the missing drawings and any drawings that failed to export. It then adds the latest Vault drawing of the assembly and of each component (purchased and standard parts are skipped). The PDF is built in a temp folder, then saved next to the assembly and checked into the same Vault folder (same checkout rule as above). Drawings are downloaded without their references, so Get Latest on the assembly first: a drawing whose models are not in the workspace yet exports with missing views and lands under "Could not export" or shows blanks. Phantom and reference rows are skipped. A drawing that fails is listed on the cover and never stops the package.
@@ -32,6 +34,37 @@ The fifth large button builds the package to hand to whoever assembles the produ
 - Contents: a cover, the BOM, the assembly's own drawing, then the latest drawing of each sub-assembly (one per unique `.iam` row, in BOM order). Parts, purchased and Content Center rows, and phantom and reference rows are skipped. There are no vendor PDFs. Drawing choice, dedupe and Get Latest advice are the same as Design Review.
 - Release marking: each drawing's Vault lifecycle state is read at export. Every page of a drawing whose state is not Released is stamped diagonal red NOT RELEASED. Every page carries the footer `FOR ASSEMBLY | <assembly> Rev <revision> | <date>`; the revision is the assembly's Vault revision (`-` when it has none). No page is stamped DRAFT.
 - Output: `<assembly> Assembly Package.pdf`, saved next to the assembly and checked into the same Vault folder in Documents (a rerun adds a new version, same checkout rule as the other buttons). The finished dialog reads `<pages> pages, <drawings> drawings, <unreleased> not released, <missing> missing, <failed> could not export.` Missing and failed drawings are also listed on the cover.
+
+### Partner Package
+
+Builds a zip for a manufacturing partner and checks it into Vault. It needs an open assembly that is in Vault. A run blocks Inventor like the other package buttons.
+
+Form fields: Partner (required, remembered in the recent list), Parts, and the For quote only checkbox (never remembered). The preview line shows the file counts for the chosen Parts.
+
+- Parts, and the files each gives:
+  - All Make parts: STEP for every Make part and Make sub-assembly plus the top assembly, the PDF drawing where one exists, and DXF for sheet metal.
+  - CNC: STEP + PDF.
+  - Sheet metal: DXF + PDF.
+- Selection: the Process property decides when it is set (`CNC`, `Sheet Metal`, `3D Print`; any other value counts as Other make). When Process is blank the fallback is: sheet metal part -> sheet metal; material in the print list -> print; `.ipt` -> machined (CNC); `.iam` -> other make. Fallback picks are listed on the cover and in the BOM Process column as `guessed: <kind>`.
+- Skipped: Buy, Phantom, Reference, Content Center and virtual rows, and every child of a purchased sub-assembly.
+- Qty is the total in the assembly (all occurrences summed).
+- Release gate: the build stops before exporting anything unless every included part's model and drawing are Released on the latest Vault version, and none is checked out or open with unsaved edits. The message lists every blocker. Nothing is written. Tick For quote only to build anyway: every PDF page is stamped `FOR QUOTE - NOT FOR PRODUCTION`, and the zip name, cover and BOM title say Quote.
+- NOT RELEASED stamp: a drawing whose state is not Released, or that is open or checked out, is stamped diagonal red NOT RELEASED (only reachable in quote mode, where the quote stamp replaces it).
+- File names: `<CD> Rev <rev>.stp`, `.pdf`, `.dxf` (`-` when there is no revision), unique within each folder.
+- Zip: `<assembly> <Partner> <Mode> Package.zip` (Mode is Make, CNC or Sheet Metal; `Quote` is added before `Package` in quote mode). Folders `STEP/`, `PDF/`, `DXF/` (empty ones omitted), plus `BOM.xlsx` and `00 Cover.pdf` at the root.
+- Cover lists: Process not set (guessed), Missing drawings, No flat pattern, Could not export (with the reason).
+- Output: checked into the assembly's Vault folder in Documents (a rerun adds a new version; any checkout blocks), and always copied to `Downloads\SF Vault Bridge\`. The partner name is added to the recent list in the settings file.
+
+### 3D Print Package
+
+Builds a zip of print files for the 3D printed parts of the open assembly. There is no form and no release gate (internal use).
+
+- Selection: parts with Process = `3D Print`, or with Process blank and a material in the print list.
+- Format: 3MF when Inventor has a 3MF translator, otherwise binary high-resolution STL.
+- Names: `<CD> Rev <rev> x<qty>.3mf` (or `.stl`), in one folder per material (`No material` when blank).
+- `Print List.xlsx` at the root: Part Number, Description, Qty, Material, Process, REV, State, File; unreleased rows yellow.
+- Zip `<assembly> 3D Print Package.zip`, checked into Vault and copied to `Downloads\SF Vault Bridge\` like the Partner Package.
+- With nothing to print the message is "No 3D print parts found (Process = 3D Print or a print material)." and nothing is exported or written.
 
 ### Import New Part
 
@@ -61,13 +94,38 @@ Repairs iProperties of parts already in Vault (for example a Part Number that ho
 ```
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --set Vendor=McMASTER-CARR --custom Source=Buy
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --apply --comment "Data card fix"
+py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt --custom Process=CNC
+py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt --custom Process=CNC --apply
 ```
+
+Setting `Process` this way works for `.ipt` only (assemblies are not supported yet).
 
 Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, an assembly (.iam is not supported yet), not an .ipt, a local copy that differs from Vault, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
 
 Numeric Design properties (`Cost`) are converted with the invariant culture (`--set Cost=12.50`); a non-number is a per-file error, "Cost must be a number".
 
 Released files are skipped unless you pass `--revise-released`. Then, for a file in the state named `Released`, the add-in moves it to `Work in Progress`, does the normal checkout, edit and check-in, and moves it back to `Released`, looking each transition up by state name in the file's lifecycle definition (via `DocumentServiceExtensions.UpdateFileLifeCycleStates`). Both transitions are checked before anything changes, and the dry run shows `would_revise: true` and the transition names. If the edit fails the file is still returned to `Released`; if it cannot be returned the result is `status: "error", step: "re_release"` with the actual `state_after`. Content Center files are never revised. Results carry `revision_before`, `revision_after`, `state_after`, and `linked_to_item: true` for files linked to an item (the item is not touched).
+
+### Process property
+
+Inventor custom property `Process` says how a Make part is made. Values: `CNC`, `3D Print`, `Sheet Metal`, `Weldment`, `In-house`, `Other`. Matching is case-insensitive and trimmed. It drives part selection in the Partner and 3D Print Packages.
+
+Settings file: `%APPDATA%\Simplifyber\VaultBridge\settings.json`, created with defaults on first use. Keys:
+
+- `processValues`: the allowed Process values (default the six above).
+- `printMaterials`: material names that mean "print this part", each matched as a whole word, case-insensitive (default `PLA`, `PETG`, `ABS`, `ASA`, `PA11`, `PA12`, `Nylon`, `TPU`, `PC`, `Resin`, `CF`).
+- `recentPartners`: the Partner Package recent list (ten at most, newest first).
+
+A missing key falls back to its default. A file that is not valid JSON, or not a JSON object, is logged to bridge.log and defaults are used for that run; the file is not overwritten.
+
+Vault: the `Process` property already exists in Vault (Text, list values as above, Enforce List on, assigned to Part - Engineering and Assembly - Engineering, mapped both ways to the Inventor property `Process` with Create). Steps for reference or to redo it: Vault Explorer > Tools > Administration > Vault Settings > Behaviors > Properties > New.
+
+1. Name `Process`, Type Text, List values `CNC`, `3D Print`, `Sheet Metal`, `Weldment`, `In-house`, `Other` (tick Enforce List).
+2. Associations: categories Part - Engineering and Assembly - Engineering.
+3. Mapping: Provider Inventor, file types `.ipt` and `.iam`, property `Process` (User Defined), Mapping Direction Read and Write (bidirectional), Create ticked.
+4. OK. No re-index is needed for new check-ins.
+
+The Vault `Cost` property is mapped to Inventor's Estimated Cost.
 
 ## Dropbox upload (Partner Packages)
 

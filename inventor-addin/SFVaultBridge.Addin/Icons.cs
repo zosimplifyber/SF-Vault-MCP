@@ -175,6 +175,34 @@ internal static class Icons
         return bmp;
     }
 
+    /// <summary>Printer nozzle (ink-outlined trapezoid hot end with an orange tip) above a block of three stacked layers in the BoxDown greys.</summary>
+    public static Bitmap PrintNozzle(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            // Hot end: wide at the top, narrowing to the tip.
+            var body = new[] { new PointF(S(9), S(2)), new PointF(S(23), S(2)), new PointF(S(23), S(8)), new PointF(S(18), S(14)), new PointF(S(14), S(14)), new PointF(S(9), S(8)) };
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, body);
+            g.DrawPolygon(pen, body);
+            var tip = new[] { new PointF(S(14), S(14)), new PointF(S(18), S(14)), new PointF(S(16.8f), S(17.5f)), new PointF(S(15.2f), S(17.5f)) };
+            using (var b = new SolidBrush(Color.FromArgb(255, 0xEF, 0x6C, 0x00))) g.FillPolygon(b, tip);
+            using (var tp = new Pen(Color.FromArgb(255, 0xB8, 0x4F, 0x00), big ? 1f : 0.75f) { LineJoin = LineJoin.Round }) g.DrawPolygon(tp, tip);
+            // Three stacked layers, the top one lighter.
+            var greys = new[] { Color.FromArgb(255, 207, 216, 220), Color.FromArgb(255, 176, 190, 197), Color.FromArgb(255, 144, 164, 174) };
+            for (var i = 0; i < 3; i++)
+            {
+                var layer = new RectangleF(S(4), S(19 + i * 4), S(24), S(4));
+                using (var b = new SolidBrush(greys[i])) g.FillRectangle(b, layer);
+                g.DrawRectangle(pen, layer.X, layer.Y, layer.Width, layer.Height);
+            }
+        }
+        return bmp;
+    }
+
     /// <summary>Clipboard: dark board, paper sheet, metal clip and a green check mark.</summary>
     public static Bitmap ClipboardCheck(int size)
     {

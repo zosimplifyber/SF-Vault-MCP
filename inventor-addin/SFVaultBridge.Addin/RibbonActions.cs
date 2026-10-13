@@ -4,7 +4,7 @@ using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, Import New Part and the Status button (see RibbonStatus).</summary>
+/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part and the Status button (see RibbonStatus).</summary>
 internal sealed class RibbonActions
 {
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
@@ -26,6 +26,7 @@ internal sealed class RibbonActions
         Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
         Add("Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
         Add("Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
+        Add("3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
         Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
     }
 
@@ -221,6 +222,19 @@ internal sealed class RibbonActions
         }
         var parts = builder.Parts(ctx, mode);
         ShowOutcome(builder.Build(ctx, mode, partner, parts, quote));
+    }
+
+    private void PrintPackage(Inv.AssemblyDocument asm)
+    {
+        var builder = new PackageBuilder(_app, _log);
+        var ctx = builder.Prepare(asm);
+        var parts = builder.Parts(ctx, ManufacturingMode.Print);
+        if (parts.Count == 0)
+        {
+            Msg("No 3D print parts found (Process = 3D Print or a print material).", "3D Print Package");
+            return;
+        }
+        ShowOutcome(builder.Build(ctx, ManufacturingMode.Print, "", parts));
     }
 
     private void ShowOutcome(PackageOutcome o)
