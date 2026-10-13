@@ -288,7 +288,7 @@ def _state_bom(path: Path) -> Path:
 
 
 def test_bom_table_has_state_after_rev_and_yellow_unreleased_rows(tmp_path):
-    data, yellow = rp.bom_table_data(str(_state_bom(tmp_path / "bom.txt")))
+    data, yellow, _ = rp.bom_table_data(str(_state_bom(tmp_path / "bom.txt")))
     assert data[0] == ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
     assert [r[-1].strip() for r in data[1:]] == ["Released", "Work in Progress", "", "released"]
     assert yellow == [2, 3]
@@ -300,7 +300,7 @@ def test_bom_yellow_only_for_normal_rows_not_released(tmp_path):
     lines = [STATE_HEADER] + [f"{i}\tCD-00002{i}\t{bs}\tEach\t1\tpart {i}\tA\t{st}\tSteel\t\tCD-00002{i}.ipt\t\t\r\n" for i, bs, st in rows]
     p = tmp_path / "bom.txt"
     p.write_text("".join(lines), encoding="utf-8")
-    _, yellow = rp.bom_table_data(str(p))
+    _, yellow, _o = rp.bom_table_data(str(p))
     assert yellow == [1, 4]
 
 
@@ -321,7 +321,7 @@ def test_bom_table_fits_the_page_width(tmp_path):
 
 
 def test_bom_without_state_column_has_no_yellow_rows(tmp_path):
-    data, yellow = rp.bom_table_data(str(_bom(tmp_path / "bom.txt", 3)))
+    data, yellow, _ = rp.bom_table_data(str(_bom(tmp_path / "bom.txt", 3)))
     assert "State" not in data[0] and yellow == []
 
 
@@ -330,3 +330,16 @@ def test_review_pdf_bom_page_shows_state(tmp_path):
     res = rp.run_review(str(_state_bom(tmp_path / "bom.txt")), str(_manifest(tmp_path, [])), str(out))
     assert res["ok"] is True
     assert "State" in (PdfReader(str(out)).pages[1].extract_text() or "")
+
+
+def test_bom_orange_for_purchased_rows_without_vendor_drawing(tmp_path):
+    rows = [("1", "CD-000031", "Purchased", "Work in Progress"), ("2", "CD-000032", "Purchased", ""),
+            ("3", "CD-000033", "Normal", "Work in Progress")]
+    lines = [STATE_HEADER] + [f"{i}\t{pn}\t{bs}\tEach\t1\tpart {i}\tA\t{st}\tSteel\t\t{pn}.ipt\t\t\r\n" for i, pn, bs, st in rows]
+    p = tmp_path / "bom.txt"
+    p.write_text("".join(lines), encoding="utf-8")
+    _, yellow, orange = rp.bom_table_data(str(p), {"cd-000032 ", "CD-000033"})
+    assert orange == [2, 3]
+    assert yellow == []
+    _, yellow, orange = rp.bom_table_data(str(p))
+    assert orange == [] and yellow == [3]

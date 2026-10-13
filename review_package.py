@@ -116,12 +116,13 @@ def _purchased_title(p: dict[str, Any]) -> str:
     return f"Purchased: {p.get('part_number', '')}" + (f" ({detail})" if detail else "")
 
 
-def bom_table_data(bom: str) -> tuple[list[list[str]], list[int]]:
+def bom_table_data(bom: str, no_vendor: set[str] | None = None) -> tuple[list[list[str]], list[int], list[int]]:
     """BOM table rows (header first) and the table row indices to paint yellow.
 
     Yellow marks parts we make that are not released: BOM Structure Normal and State not
     Released (blank included). Purchased, Phantom, Reference and Content Center rows are
-    never flagged (Zak, 2026-10-13).
+    never flagged (Zak, 2026-10-13). Orange marks purchased rows whose Part Number has no
+    vendor drawing in the package (`no_vendor`); orange wins over yellow.
     """
     df = bp.read_bom_file(bom).fillna("")
     cols = [c for c in BOM_COLUMNS if c in df.columns]
@@ -132,7 +133,13 @@ def bom_table_data(bom: str) -> tuple[list[list[str]], list[int]]:
             return "BOM Structure" not in df.columns or str(row["BOM Structure"]).strip().lower() == "normal"
         yellow = [i for i, (_, row) in enumerate(df.iterrows(), start=1)
                   if normal(row) and not bp.is_released(row["State"])]
-    return data, yellow
+    orange: list[int] = []
+    if no_vendor and "Part Number" in df.columns:
+        wanted = {str(x).strip().lower() for x in no_vendor if str(x).strip()}
+        orange = [i for i, (_, row) in enumerate(df.iterrows(), start=1)
+                  if str(row["Part Number"]).strip().lower() in wanted]
+        yellow = [r for r in yellow if r not in orange]
+    return data, yellow, orange
 
 
 # Relative column weights; the table is scaled to the page's frame width (landscape letter, 0.5 in margins).
@@ -141,8 +148,8 @@ _COL_WEIGHTS = {"Item": 4, "Part Number": 20, "Description": 30, "QTY": 5, "BOM 
 _FRAME_WIDTH = landscape(letter)[0] - 72
 
 
-def _bom_table(bom: str) -> bytes:
-    data, yellow = bom_table_data(bom)
+def _bom_table(bom: str, no_vendor: set[str] | None = None) -> bytes:
+    data, yellow, orange = bom_table_data(bom, no_vendor)
     cols = data[0]
     total = sum(_COL_WEIGHTS.get(c, 10) for c in cols)
     widths = [_FRAME_WIDTH * _COL_WEIGHTS.get(c, 10) / total for c in cols]
@@ -159,6 +166,7 @@ def _bom_table(bom: str) -> bytes:
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
     ]
     style += [("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFF59D")) for r in yellow]
+    style += [("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFCC80")) for r in orange]
     table.setStyle(TableStyle(style))
     return _doc([Paragraph("Bill of materials", getSampleStyleSheet()["Heading2"]), table])
 
@@ -191,7 +199,12 @@ def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
 
     cover = _assembly_cover(m, usable, failed) if mode == "assembly" else _cover(m, len(usable), failed)
     add("Cover", PdfReader(BytesIO(cover)))
-    add("BOM", PdfReader(BytesIO(_bom_table(bom))))
+    no_vendor: set[str] = set()
+    if mode != "assembly":
+        no_vendor = {str(x) for x in (m.get("no_vendor_drawing") or [])}
+        loaded = {str(p.get("part_number", "")) for p, _ in purchased}
+        no_vendor |= {str(p.get("part_number", "")) for p in (m.get("purchased") or [])} - loaded
+    add("BOM", PdfReader(BytesIO(_bom_table(bom, no_vendor))))
     unreleased_pages: set[int] = set()
     unreleased = 0
     for d, reader in usable:
