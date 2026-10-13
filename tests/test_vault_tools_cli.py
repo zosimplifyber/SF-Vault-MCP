@@ -107,3 +107,48 @@ def test_name_column_is_filled_from_an_addin_bom(tmp_path):
     headers = [c.value for c in ws[3]]
     col = headers.index("Name") + 1
     assert [ws.cell(row=r, column=col).value for r in (4, 5)] == ["CD-001882", "CD-000001"]
+
+
+YELLOW = "FFF59D"
+
+
+def _fill(ws, row):
+    return (ws.cell(row=row, column=1).fill.fgColor.rgb or "")[-6:].upper()
+
+
+def test_unreleased_rows_are_yellow_and_unmatched_stays_orange(tmp_path):
+    import openpyxl
+    hdr = ("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\t"
+           "File Name\tVendor\tVendor Number")
+    rows = [
+        "1\tCD-990010\tNormal\tEach\t1\tPlate\tA\tReleased\tSteel\t\tCD-990010.ipt\t\t",
+        "2\tCD-990011\tNormal\tEach\t1\tBracket\tA\tWork in Progress\tSteel\t\tCD-990011.ipt\t\t",
+        "3\tCD-990012\tNormal\tEach\t1\tSpacer\t\t\tSteel\t\tCD-990012.ipt\t\t",
+        "4\tCD-990013\tNormal\tEach\t1\tShim\tA\t released \tSteel\t\tCD-990013.ipt\t\t",
+        "5\tCD-990014\tNormal\tEach\t1\tSub\tA\tWork in Progress\t\t\tCD-990014.iam\t\t",
+        "5.1\tCD-990015\tNormal\tEach\t1\tSub part\tA\tReleased\tSteel\t\tCD-990015.ipt\t\t",
+        "6\tCD-990016\tPurchased\tEach\t1\tWidget\t\t\t\t\tCD-990016.ipt\t\t",
+    ]
+    bom = tmp_path / "bom.txt"
+    bom.write_text(hdr + "\r\n" + "\r\n".join(rows) + "\r\n", encoding="utf-8")
+    code = cli.main(["purchasing", "--bom", str(bom), "--assembly", "CD-990000", "--out", str(tmp_path),
+                     "--name", "P.xlsx", "--result", str(tmp_path / "r.json")])
+    assert code == 0, (tmp_path / "r.json").read_text(encoding="utf-8")
+    ws = openpyxl.load_workbook(tmp_path / "P.xlsx")["Purchasing"]
+    by_number = {}
+    name_col = [c.value for c in ws[3]].index("Name") + 1
+    for r in range(4, 4 + len(rows)):
+        by_number[ws.cell(row=r, column=name_col).value] = _fill(ws, r)
+    assert by_number["CD-990010"] != YELLOW
+    assert by_number["CD-990011"] == YELLOW
+    assert by_number["CD-990012"] == YELLOW
+    assert by_number["CD-990013"] != YELLOW
+    assert by_number["CD-990014"] == YELLOW          # yellow beats the olive assembly fill
+    assert by_number["CD-990015"] != YELLOW
+    assert by_number["CD-990016"] == "FCE4D6"        # unmatched orange beats yellow
+
+
+def test_blank_state_rows_from_addin_bom_are_yellow(tmp_path):
+    ws = _purchasing_sheet(tmp_path)   # existing helper: State column present, values blank
+    assert _fill(ws, 4) == YELLOW      # CD-001882, Make, blank state
+    assert _fill(ws, 5) == "FCE4D6"    # purchased bolt with no vendor: unmatched orange wins

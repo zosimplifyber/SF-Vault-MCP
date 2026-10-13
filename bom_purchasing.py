@@ -38,6 +38,14 @@ DARK_GRAY = "888888"
 WHITE = "FFFFFF"
 OLIVE_GREEN = "D8E4BC"
 UNMATCHED_FILL = "FCE4D6"  # light orange — a Buy part with no price found
+UNRELEASED_FILL = "FFF59D"  # light yellow — a row whose Vault state is not Released
+
+
+def is_released(value: Any) -> bool:
+    """True only when the state reads "Released" (None, NaN, blanks and non-strings are not)."""
+    if value is None or not isinstance(value, str):
+        return False
+    return value.strip().lower() == "released"
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +560,8 @@ def build_purchasing_sheet(
     DOLLAR_FMT = '"$"#,##0.00'
     DOLLAR_COLS = {"Cost Per", "Shipping", "Tax/Tariff", "Sub Total"}
     unmatched_nums: list[str] = []
+    has_state = "State" in df.columns
+    unreleased_fill = PatternFill("solid", fgColor=UNRELEASED_FILL)
 
     for ri, (df_idx, row) in enumerate(df.iterrows(), start=FIRST_DATA_ROW):
         category = str(row.get("Category Name", "")).strip().lower()
@@ -564,6 +574,8 @@ def build_purchasing_sheet(
             fill = olive_fill
         else:
             fill = alt_fill if (ri - HDR_ROW) % 2 == 0 else white_fill
+        if has_state and not is_released(row.get("State")):
+            fill = unreleased_fill
 
         vendor = row.get("Vendor")
         vendor_blank = pd.isna(vendor) or str(vendor).strip() == ""

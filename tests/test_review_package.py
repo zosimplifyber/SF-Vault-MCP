@@ -274,3 +274,33 @@ def test_watermark_honours_mediabox_origin(tmp_path):
     _, cm, tm = seen[0]
     # the watermark is rotated about the page centre: (100 + 612, 100 + 396), not (612, 396)
     assert abs(cm[4] - 712) < 1 and abs(cm[5] - 496) < 1, (cm[4], cm[5])
+
+
+STATE_HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\r\n"
+
+
+def _state_bom(path: Path) -> Path:
+    rows = [("1", "CD-000010", "Released"), ("2", "CD-000011", "Work in Progress"),
+            ("3", "CD-000012", ""), ("4", "CD-000013", " released ")]
+    lines = [STATE_HEADER] + [f"{i}\t{pn}\tNormal\tEach\t1\tpart {i}\tA\t{st}\tSteel\t\t{pn}.ipt\t\t\r\n" for i, pn, st in rows]
+    path.write_text("".join(lines), encoding="utf-8")
+    return path
+
+
+def test_bom_table_has_state_after_rev_and_yellow_unreleased_rows(tmp_path):
+    data, yellow = rp.bom_table_data(str(_state_bom(tmp_path / "bom.txt")))
+    assert data[0] == ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
+    assert [r[-1].strip() for r in data[1:]] == ["Released", "Work in Progress", "", "released"]
+    assert yellow == [2, 3]
+
+
+def test_bom_without_state_column_has_no_yellow_rows(tmp_path):
+    data, yellow = rp.bom_table_data(str(_bom(tmp_path / "bom.txt", 3)))
+    assert "State" not in data[0] and yellow == []
+
+
+def test_review_pdf_bom_page_shows_state(tmp_path):
+    out = tmp_path / "r.pdf"
+    res = rp.run_review(str(_state_bom(tmp_path / "bom.txt")), str(_manifest(tmp_path, [])), str(out))
+    assert res["ok"] is True
+    assert "State" in (PdfReader(str(out)).pages[1].extract_text() or "")

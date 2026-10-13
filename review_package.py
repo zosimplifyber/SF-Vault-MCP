@@ -29,7 +29,7 @@ UNRELEASED_TEXT = "NOT RELEASED"
 FOOTER_COLOR = "#666666"
 FOOTER_SIZE = 7
 FOOTER_BOTTOM = 18
-BOM_COLUMNS = ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV"]
+BOM_COLUMNS = ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
 
 
 def _doc(story) -> bytes:
@@ -116,17 +116,28 @@ def _purchased_title(p: dict[str, Any]) -> str:
     return f"Purchased: {p.get('part_number', '')}" + (f" ({detail})" if detail else "")
 
 
-def _bom_table(bom: str) -> bytes:
+def bom_table_data(bom: str) -> tuple[list[list[str]], list[int]]:
+    """BOM table rows (header first) and the table row indices to paint yellow (unreleased)."""
     df = bp.read_bom_file(bom).fillna("")
     cols = [c for c in BOM_COLUMNS if c in df.columns]
     data = [cols] + [[str(row[c]) for c in cols] for _, row in df.iterrows()]
+    yellow: list[int] = []
+    if "State" in df.columns:
+        yellow = [i for i, (_, row) in enumerate(df.iterrows(), start=1) if not bp.is_released(row["State"])]
+    return data, yellow
+
+
+def _bom_table(bom: str) -> bytes:
+    data, yellow = bom_table_data(bom)
     table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
+    style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F3864")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-    ]))
+    ]
+    style += [("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFF59D")) for r in yellow]
+    table.setStyle(TableStyle(style))
     return _doc([Paragraph("Bill of materials", getSampleStyleSheet()["Heading2"]), table])
 
 
