@@ -81,4 +81,12 @@ public class ReleaseGateTests
         Assert.Equal("CD-001882 Acme Machining CNC Quote Package.zip", PackageRules.PartnerZipName("CD-001882", "Acme Machining", ManufacturingMode.Cnc, true));
         Assert.Equal("CD-001882 Acme Machining Make Package.zip", PackageRules.PartnerZipName("CD-001882", "Acme Machining", ManufacturingMode.AllMake, false));
     }
+
+    [Theory]
+    [InlineData(false, false, LocalCopyAction.Refresh)]
+    [InlineData(true, false, LocalCopyAction.KeepOpenCopy)]
+    [InlineData(true, true, LocalCopyAction.KeepOpenCopy)]
+    [InlineData(false, true, LocalCopyAction.KeepCheckedOutCopy)]
+    public void Local_copy_refresh_decision(bool open, bool checkedOut, LocalCopyAction expected) =>
+        Assert.Equal(expected, LocalCopy.Decide(open, checkedOut));
 }

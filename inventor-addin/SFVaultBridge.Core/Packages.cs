@@ -279,3 +279,18 @@ public static class ReleaseGate
 
     private const string NL = "\n";
 }
+
+public enum LocalCopyAction { Refresh, KeepOpenCopy, KeepCheckedOutCopy }
+
+/// <summary>What to do with a model or drawing's local workspace copy before exporting it.</summary>
+public static class LocalCopy
+{
+    /// <summary>
+    /// Anything Inventor has open or the user has checked out is exported as it is (those are gate blockers in normal mode);
+    /// every other copy is made the latest Vault version first, so the package matches what the gate checked.
+    /// </summary>
+    public static LocalCopyAction Decide(bool openInInventor, bool checkedOut) =>
+        openInInventor ? LocalCopyAction.KeepOpenCopy
+        : checkedOut ? LocalCopyAction.KeepCheckedOutCopy
+        : LocalCopyAction.Refresh;
+}

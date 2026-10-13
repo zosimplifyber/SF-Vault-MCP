@@ -212,6 +212,22 @@ internal static class VaultFiles
         return results.FileResults.Select(r => r.LocalPath.FullPath).ToList();
     }
 
+    /// <summary>Makes the workspace copy of each file the latest Vault version (like Get Latest, overwriting; never touches children). Only for files not open in Inventor and not checked out.</summary>
+    public static void GetLatestOverwrite(IEnumerable<WsFile> files)
+    {
+        var conn = Conn;
+        var settings = new VDF.Vault.Settings.AcquireFilesSettings(conn, false);
+        settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = false;
+        settings.OptionsRelationshipGathering.FileRelationshipSettings.RecurseChildren = false;
+        settings.OptionsRelationshipGathering.FileRelationshipSettings.VersionGatheringOption = VDF.Vault.Currency.VersionGatheringOption.Latest;
+        settings.OptionsResolution.OverwriteOption = VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.ForceOverwriteAll;
+        foreach (var f in files)
+            settings.AddFileToAcquire(new VDF.Vault.Currency.Entities.FileIteration(conn, f), VDF.Vault.Settings.AcquireFilesSettings.AcquisitionOption.Download);
+        var results = conn.FileManager.AcquireFiles(settings);
+        var bad = results.FileResults.FirstOrDefault(r => r.Status is not (VDF.Vault.Results.FileAcquisitionResult.AcquisitionStatus.Success or VDF.Vault.Results.FileAcquisitionResult.AcquisitionStatus.Skipped));
+        if (bad is not null) throw new BridgeException("download_failed", $"{bad.File?.EntityName ?? "A file"} could not be downloaded: {bad.Exception?.Message ?? "unknown error"}");
+    }
+
     // ---- Import New Part support ----
 
     private static Folder? FolderAt(string vaultPath)

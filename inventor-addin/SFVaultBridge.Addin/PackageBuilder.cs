@@ -1,3 +1,4 @@
+using System.Windows.Forms;
 using SFVaultBridge.Core;
 using Inv = Inventor;
 using WsFile = Autodesk.Connectivity.WebServices.File;
@@ -10,7 +11,8 @@ internal sealed record PackageContext(Inv.AssemblyDocument Assembly, string Fold
                                       BridgeSettings Settings, PrintMaterials Materials);
 
 internal sealed record PackageOutcome(string ZipName, string? VaultPath, int? Version, string? DownloadsCopy,
-                                      string Summary, IReadOnlyList<string> Warnings);
+                                      string Summary, IReadOnlyList<string> Warnings,
+                                      string? DropboxPath = null, string? ShareUrl = null, string? Visibility = null, bool LinkCopied = false);
 
 /// <summary>Builds the Partner Package and 3D Print Package zips: export loop, manifest, SFVaultTools.exe, Downloads copy, Vault check-in.</summary>
 internal sealed class PackageBuilder
@@ -54,16 +56,20 @@ internal sealed class PackageBuilder
         public bool DrawingSearched;
         public WsFile? Drawing;
         public string? DrawingLocal;
-        public bool ModelAcquired;
     }
 
     /// <param name="quote">Partner packages only: skip the release gate, stamp every PDF FOR QUOTE and name the zip Quote.</param>
-    public PackageOutcome Build(PackageContext ctx, ManufacturingMode mode, string partner, IReadOnlyList<PackagePart> parts, bool quote = false)
+    public PackageOutcome Build(PackageContext ctx, ManufacturingMode mode, string partner, IReadOnlyList<PackagePart> parts, bool quote = false, bool upload = false)
     {
         var print = mode == ManufacturingMode.Print;
         if (print) quote = false;
         var prefix = print ? "3D Print Package" : "Partner Package";
         partner = (partner ?? "").Trim();
+        if (!print)
+        {
+            var partnerError = PackageRules.PartnerError(partner);
+            if (partnerError is not null) throw new BridgeException("bad_partner", partnerError);
+        }
         var root = VaultFiles.WorkingFolderRoot();
         var resolved = new Dictionary<string, Resolved>(StringComparer.OrdinalIgnoreCase);
 
@@ -90,9 +96,9 @@ internal sealed class PackageBuilder
         var previousStatus = StatusText();
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         var exportDir = System.IO.Path.Combine(temp, "export");
-        System.IO.Directory.CreateDirectory(exportDir);
         try
         {
+            System.IO.Directory.CreateDirectory(exportDir);
             var files = new List<PackageFile>();
             var rows = new List<PackageRow>();
             var failed = new List<PackageFailure>();
@@ -102,6 +108,40 @@ internal sealed class PackageBuilder
             var usedDests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var printFormat = print && parts.Count > 0 ? ModelExporter.ResolvePrintFormat(_app, _log) : null;
             var counter = 0;
+            var localCopies = new List<string>();
+            var refreshFailed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Make every closed, not checked-out model and drawing the latest Vault version, so the package matches what the gate checked.
+            SetStatus($"{prefix}: getting latest from Vault");
+            var refreshed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in parts)
+            {
+                var pn = part.Node.PartNumber;
+                if (!refreshed.Add(part.Node.FullPath)) continue;
+                try
+                {
+                    var r = Resolve(part);
+                    if (r.Model is null) continue;
+                    if (part.Files.HasFlag(PackageFiles.Pdf)) FindDrawing(r);
+                    var toGet = new List<WsFile>();
+                    void Consider(WsFile? f, string? local, string what)
+                    {
+                        if (f is null || local is null) return;
+                        var open = DocumentOpener.FindOpen(_app, local) is not null;
+                        if (LocalCopy.Decide(open, f.CheckedOut) == LocalCopyAction.Refresh) toGet.Add(f);
+                        else localCopies.Add($"{pn} {what}");
+                    }
+                    Consider(r.Model, r.ModelLocal, "model");
+                    Consider(r.Drawing, r.DrawingLocal, "drawing");
+                    if (toGet.Count > 0) VaultFiles.GetLatestOverwrite(toGet);
+                }
+                catch (Exception ex)
+                {
+                    _log($"package get latest for {pn} failed: {ex}");
+                    failed.Add(new PackageFailure(pn, $"could not get the latest version from Vault: {ex.Message}"));
+                    refreshFailed.Add(part.Node.FullPath);
+                }
+            }
 
             string Unique(string dest)
             {
@@ -120,6 +160,7 @@ internal sealed class PackageBuilder
                 SetStatus($"{prefix}: exporting {index} of {parts.Count}: {node.PartNumber}");
                 var partFiles = new List<string>();
                 if (part.Class.Guessed) guessed.Add(PackageRules.GuessedEntry(part));
+                if (refreshFailed.Contains(node.FullPath)) { AddRow(); continue; }
 
                 Resolved r;
                 try
@@ -135,17 +176,9 @@ internal sealed class PackageBuilder
                     continue;
                 }
 
-                void AcquireModel()
-                {
-                    if (r.ModelAcquired) return;
-                    if (DocumentOpener.FindOpen(_app, r.ModelLocal!) is null) VaultFiles.AcquireLatest(new[] { r.Model! });
-                    r.ModelAcquired = true;
-                }
-
                 if (part.Files.HasFlag(PackageFiles.Step))
                     Step("STEP", () =>
                     {
-                        AcquireModel();
                         var dest = Unique(PackageRules.Dest(PackageFiles.Step, part));
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}.stp");
                         ModelExporter.Step(_app, r.ModelLocal!, src, _log);
@@ -154,7 +187,6 @@ internal sealed class PackageBuilder
                 if (part.Files.HasFlag(PackageFiles.Dxf))
                     Step("DXF", () =>
                     {
-                        AcquireModel();
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}.dxf");
                         if (!ModelExporter.FlatPatternDxf(_app, r.ModelLocal!, src, _log)) { noFlatPattern.Add(node.PartNumber); return; }
                         var dest = Unique(PackageRules.Dest(PackageFiles.Dxf, part));
@@ -168,7 +200,6 @@ internal sealed class PackageBuilder
                         if (drawing is null) { missingDrawings.Add(node.PartNumber); return; }
                         var local = r.DrawingLocal!;
                         var open = DocumentOpener.FindOpen(_app, local) is not null;
-                        if (!open) VaultFiles.AcquireLatest(new[] { drawing });
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}.pdf");
                         DrawingExporter.Export(_app, local, src);
                         var stamp = open || drawing.CheckedOut || !PackageRules.IsReleased(VaultFiles.StateOf(drawing));
@@ -178,7 +209,6 @@ internal sealed class PackageBuilder
                 if (part.Files.HasFlag(PackageFiles.Print) && printFormat is not null)
                     Step("print", () =>
                     {
-                        AcquireModel();
                         var dest = Unique(PackageRules.PrintDest(part, printFormat.Extension));
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}{printFormat.Extension}");
                         ModelExporter.Print(_app, printFormat, r.ModelLocal!, src, _log);
@@ -204,10 +234,12 @@ internal sealed class PackageBuilder
             SetStatus($"{prefix}: building BOM and cover");
             var user = "";
             try { user = VaultSession.Connection.UserName ?? ""; } catch (Exception ex) { _log($"user name unavailable: {ex.Message}"); }
+            var quoteLocal = quote && localCopies.Count > 0;
+            var source = quoteLocal ? ctx.Source + " | Local copy (open in Inventor or checked out): " + string.Join(", ", localCopies) : ctx.Source;
             var manifest = System.IO.Path.Combine(temp, "manifest.json");
             System.IO.File.WriteAllText(manifest, PackageManifest.ToJson(new PackageManifestData(
                 print ? "print" : "partner", ctx.Stem, ctx.Top.Description, VaultFiles.RevisionOf(ctx.AssemblyFile),
-                ctx.AssemblyFile is null ? "" : VaultFiles.StateOf(ctx.AssemblyFile), partner, PackageRules.ModeName(mode), ctx.Source,
+                ctx.AssemblyFile is null ? "" : VaultFiles.StateOf(ctx.AssemblyFile), partner, PackageRules.ModeName(mode), source,
                 user, DateTime.Now, rows, files, guessed, missingDrawings, noFlatPattern, failed, quote)));
 
             var zipName = print ? PackageRules.PrintZipName(ctx.Stem) : PackageRules.PartnerZipName(ctx.Stem, partner, mode, quote);
@@ -228,8 +260,33 @@ internal sealed class PackageBuilder
             var warnings = new List<string>();
             var downloadsCopy = Downloads.Keep(tempZip, zipName, _log);
 
-            var upload = UploadStep(tempZip, partner, _log);
-            if (upload is not null) warnings.Add(upload);
+            if (quoteLocal) warnings.Add("Exported from the local copy (open in Inventor or checked out): " + string.Join(", ", localCopies));
+
+            string? dropboxPath = null, shareUrl = null, visibility = null;
+            var linkCopied = false;
+            if (upload && !print)
+            {
+                try
+                {
+                    var up = UploadStep(ctx, tempZip, partner);
+                    if (up is not null)
+                    {
+                        warnings.AddRange(up.Warnings);
+                        if (!string.IsNullOrEmpty(up.DropboxPath)) dropboxPath = up.DropboxPath;
+                        shareUrl = up.ShareUrl; visibility = up.Visibility;
+                        if (shareUrl is not null)
+                        {
+                            try { Clipboard.SetText(shareUrl); linkCopied = true; }
+                            catch (Exception ex) { _log($"clipboard failed: {ex.Message}"); warnings.Add("Could not copy the Dropbox link to the clipboard."); }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log($"dropbox step failed: {ex}");
+                    warnings.Add("Dropbox upload failed: " + ex.Message);
+                }
+            }
 
             SetStatus($"{prefix}: checking in");
             string? vaultPath = null;
@@ -260,7 +317,7 @@ internal sealed class PackageBuilder
             var summary = print
                 ? $"{C("rows")} parts: {C("print")} print files ({(printFormat?.Extension ?? ".3mf").TrimStart('.').ToUpperInvariant()}). {C("guessed")} guessed, {C("failed")} could not export."
                 : $"{C("rows")} parts: {C("step")} STEP, {C("pdf")} PDF, {C("dxf")} DXF. {C("guessed")} guessed, {C("missing")} missing drawings, {C("no_flat_pattern")} no flat pattern, {C("failed")} could not export.";
-            return new PackageOutcome(zipName, vaultPath, version, downloadsCopy, summary, warnings);
+            return new PackageOutcome(zipName, vaultPath, version, downloadsCopy, summary, warnings, dropboxPath, shareUrl, visibility, linkCopied);
         }
         finally
         {
@@ -332,12 +389,51 @@ internal sealed class PackageBuilder
         catch { return false; }
     }
 
+    private sealed class Owner : IWin32Window
+    {
+        public Owner(IntPtr h) { Handle = h; }
+        public IntPtr Handle { get; }
+    }
+
     /// <summary>
-    /// Hook for the Dropbox upload (task 7): after the Downloads copy, independent of the Vault check-in. Will call
-    /// DropboxClient.UploadAndShareAsync(localZip, partner, ct) and return a note for the result dialog (share link, warnings).
-    /// Not implemented yet: does nothing.
+    /// Uploads the finished zip to Dropbox and makes a share link. Runs the client on a worker thread and keeps the UI pumping
+    /// behind a small Cancel dialog, so Inventor stays responsive (the first run opens a browser for sign-in).
+    /// Returns null when no app key is set. Callers wrap it so it can never block the Vault check-in.
     /// </summary>
-    private static string? UploadStep(string localZip, string partner, Action<string> log) => null;
+    private DropboxUploadResult? UploadStep(PackageContext ctx, string localZip, string partner)
+    {
+        var key = ctx.Settings.DropboxAppKey;
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        SetStatus("Partner Package: uploading to Dropbox");
+        using var http = DropboxClient.NewHttpClient();
+        var client = new DropboxClient(new DropboxAuth(key, http), http);
+        using var cts = new CancellationTokenSource();
+        var task = Task.Run(() => client.UploadAndShareAsync(localZip, partner, cts.Token));
+        IWin32Window? owner = null;
+        try { var h = _app.MainFrameHWND; if (h != 0) owner = new Owner(new IntPtr(h)); } catch { }
+        using var dlg = new Form
+        {
+            Text = "Dropbox", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            ShowInTaskbar = false, StartPosition = FormStartPosition.CenterParent, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            AutoScaleMode = AutoScaleMode.Dpi, AutoScaleDimensions = new System.Drawing.SizeF(96F, 96F),
+            Font = System.Drawing.SystemFonts.MessageBoxFont ?? System.Drawing.SystemFonts.DefaultFont,
+        };
+        var cancel = new Button { Text = "Cancel", AutoSize = true, MinimumSize = new System.Drawing.Size(80, 0), Anchor = AnchorStyles.Right };
+        cancel.Click += (_, _) => { try { cts.Cancel(); } catch { } cancel.Enabled = false; };
+        var panel = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(12) };
+        panel.Controls.Add(new Label { Text = "Uploading to Dropbox...\nIf this is your first time, finish the sign-in in your browser.", AutoSize = true, Margin = new Padding(0, 0, 0, 8) });
+        panel.Controls.Add(cancel);
+        dlg.Controls.Add(panel);
+        dlg.CancelButton = cancel;
+        if (owner is null) dlg.Show(); else dlg.Show(owner);
+        try
+        {
+            while (!task.Wait(30)) Application.DoEvents();
+        }
+        finally { dlg.Close(); }
+        try { return task.GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { return new DropboxUploadResult("", null, null, new[] { "Dropbox upload cancelled." }); }
+    }
 
     private string StatusText()
     {

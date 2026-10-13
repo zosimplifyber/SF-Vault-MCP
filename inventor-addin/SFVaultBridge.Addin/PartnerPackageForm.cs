@@ -16,10 +16,14 @@ internal sealed class PartnerPackageForm : Form
     };
 
     private readonly Func<ManufacturingMode, IReadOnlyList<PackagePart>> _partsFor;
-    private readonly Dictionary<ManufacturingMode, (string Text, int Count)> _preview = new();
+    private readonly Dictionary<ManufacturingMode, (string Text, int Count, string Error)> _preview = new();
+    private readonly string _dropboxAppKey;
     private readonly ComboBox _partner = new() { DropDownStyle = ComboBoxStyle.DropDown };
     private readonly ComboBox _parts = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly CheckBox _quote = new() { Text = "For quote only (allow unreleased)", AutoSize = true, Checked = false };
+    private readonly CheckBox _upload = new() { Text = "Upload to Dropbox /Suppliers/<Partner>/", AutoSize = true };
+    private readonly Label _uploadHint = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+    private readonly Button _signOut = new() { Text = "Sign out of Dropbox", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Label _previewLabel = new() { AutoSize = true };
     private readonly Label _error = new() { AutoSize = true, ForeColor = Color.Firebrick };
     private readonly Button _build = new() { Text = "Build", DialogResult = DialogResult.None };
@@ -29,10 +33,13 @@ internal sealed class PartnerPackageForm : Form
     public ManufacturingMode Mode { get; private set; } = ManufacturingMode.AllMake;
     /// <summary>"For quote only" ticked. Never remembered between runs.</summary>
     public bool Quote { get; private set; }
+    /// <summary>"Upload to Dropbox" ticked (only possible when a dropboxAppKey is set).</summary>
+    public bool Upload { get; private set; }
 
-    public PartnerPackageForm(IReadOnlyList<string> recentPartners, Func<ManufacturingMode, IReadOnlyList<PackagePart>> partsFor)
+    public PartnerPackageForm(IReadOnlyList<string> recentPartners, Func<ManufacturingMode, IReadOnlyList<PackagePart>> partsFor, string dropboxAppKey = "")
     {
         _partsFor = partsFor;
+        _dropboxAppKey = (dropboxAppKey ?? "").Trim();
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Partner Package";
@@ -49,6 +56,12 @@ internal sealed class PartnerPackageForm : Form
         foreach (var m in Modes) _parts.Items.Add(m.Label);
         _parts.SelectedIndex = 0;
 
+        var keySet = _dropboxAppKey.Length > 0;
+        _upload.Enabled = keySet;
+        _upload.Checked = keySet;
+        _uploadHint.Text = keySet ? "" : "Set dropboxAppKey in settings.json to turn this on.";
+        _signOut.Enabled = keySet && SafeSignedIn();
+        _signOut.Click += (_, _) => Safe(OnSignOut);
         BuildLayout();
         _parts.SelectedIndexChanged += (_, _) => Safe(UpdatePreview);
         _build.Click += (_, _) => Safe(OnBuild);
@@ -101,6 +114,17 @@ internal sealed class PartnerPackageForm : Form
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(new Label { AutoSize = true, Margin = Padding.Empty });
         table.Controls.Add(_quote);
+        _upload.TabIndex = 3; _upload.Margin = new Padding(0, 3, 0, 3);
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        table.Controls.Add(new Label { AutoSize = true, Margin = Padding.Empty });
+        table.Controls.Add(_upload);
+        _uploadHint.MaximumSize = new Size(InputWidth, 0);
+        if (_uploadHint.Text.Length > 0)
+        {
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            table.Controls.Add(new Label { AutoSize = true, Margin = Padding.Empty });
+            table.Controls.Add(_uploadHint);
+        }
         new ToolTip().SetToolTip(_quote, "Builds the package even when parts or drawings are not Released. Every PDF page is stamped FOR QUOTE - NOT FOR PRODUCTION and the zip is named Quote.");
 
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -117,9 +141,11 @@ internal sealed class PartnerPackageForm : Form
             b.AutoSize = true; b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             b.MinimumSize = new Size(80, 0); b.Margin = new Padding(6, 3, 6, 3);
         }
-        _cancel.TabIndex = 4; _build.TabIndex = 3;
+        _signOut.MinimumSize = new Size(80, 0); _signOut.Margin = new Padding(6, 3, 6, 3); _signOut.TabIndex = 6;
+        _cancel.TabIndex = 5; _build.TabIndex = 4;
         buttons.Controls.Add(_cancel);
         buttons.Controls.Add(_build);
+        buttons.Controls.Add(_signOut);
         var root = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Location = Point.Empty };
         root.Controls.Add(table);
         root.Controls.Add(buttons);
@@ -134,18 +160,34 @@ internal sealed class PartnerPackageForm : Form
             try
             {
                 var parts = _partsFor(mode);
-                p = (PackageRules.PreviewText(parts, mode), parts.Count);
-                _error.Text = "";
+                p = (PackageRules.PreviewText(parts, mode), parts.Count, "");
             }
             catch (Exception ex)
             {
-                p = ("", 0);
-                _error.Text = "Could not read the parts: " + ex.Message;
+                p = ("", 0, "Could not read the parts: " + ex.Message);
             }
             _preview[mode] = p;
         }
+        _error.Text = p.Error;
         _previewLabel.Text = p.Text;
         _build.Enabled = p.Count > 0;
+    }
+
+    private static bool SafeSignedIn()
+    {
+        try { return System.IO.File.Exists(DropboxAuth.DefaultTokenPath); } catch { return false; }
+    }
+
+    private void OnSignOut()
+    {
+        try
+        {
+            using var http = DropboxClient.NewHttpClient();
+            new DropboxAuth(_dropboxAppKey, http).SignOut();
+            _signOut.Enabled = false;
+            _error.Text = "Signed out of Dropbox.";
+        }
+        catch (Exception ex) { _error.Text = "Could not sign out of Dropbox: " + ex.Message; }
     }
 
     private void OnBuild()
@@ -157,6 +199,7 @@ internal sealed class PartnerPackageForm : Form
         Partner = _partner.Text.Trim();
         Mode = mode;
         Quote = _quote.Checked;
+        Upload = _upload.Enabled && _upload.Checked;
         DialogResult = DialogResult.OK;
         Close();
     }

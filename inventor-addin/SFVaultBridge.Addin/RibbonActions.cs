@@ -208,20 +208,20 @@ internal sealed class RibbonActions
         var ctx = builder.Prepare(asm);
         string partner;
         ManufacturingMode mode;
-        bool quote;
+        bool quote, upload;
         using (var form = new PartnerPackageForm(ctx.Settings.RecentPartners, m =>
         {
             try { return builder.Parts(ctx, m); }
             catch (Exception ex) { _log($"partner package parts for {m} failed: {ex}"); throw; }
-        }))
+        }, ctx.Settings.DropboxAppKey))
         {
             var owner = OwnerWindow();
             var r = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
             if (r != DialogResult.OK || form.Partner is null) return;
-            partner = form.Partner; mode = form.Mode; quote = form.Quote;
+            partner = form.Partner; mode = form.Mode; quote = form.Quote; upload = form.Upload;
         }
         var parts = builder.Parts(ctx, mode);
-        ShowOutcome(builder.Build(ctx, mode, partner, parts, quote));
+        ShowOutcome(builder.Build(ctx, mode, partner, parts, quote, upload));
     }
 
     private void PrintPackage(Inv.AssemblyDocument asm)
@@ -243,6 +243,8 @@ internal sealed class RibbonActions
         var text = o.ZipName + nl
                    + (o.VaultPath is null ? "" : $"Vault: {o.VaultPath}{(o.Version is null ? "" : $" (version {o.Version})")}{nl}")
                    + (o.DownloadsCopy is null ? "" : $"Copy: {o.DownloadsCopy}{nl}")
+                   + (o.DropboxPath is null ? "" : $"Dropbox: {o.DropboxPath}{nl}")
+                   + (o.ShareUrl is null ? "" : $"Link ({o.Visibility ?? "view only"}{(o.LinkCopied ? ", copied to the clipboard" : "")}): {o.ShareUrl}{nl}")
                    + o.Summary + (o.Warnings.Count > 0 ? nl + string.Join(nl, o.Warnings) : "")
                    + nl + nl + "Open folder?";
         if (Msg(text, "SF Vault Bridge", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
