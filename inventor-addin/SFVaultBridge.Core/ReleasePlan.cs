@@ -4,8 +4,9 @@ namespace SFVaultBridge.Core;
 
 public enum ReleaseKind { Part, SubAssembly, Top, Drawing }
 
-/// <summary>Ready, AlreadyReleased, Blocked and HeldBack come from the preview; Released, Failed and NotAttempted from the run.</summary>
-public enum ReleaseStatus { Ready, AlreadyReleased, Blocked, HeldBack, Released, Failed, NotAttempted }
+/// <summary>Ready, Revise (a Released drawing whose model changes: revise and re-release), AlreadyReleased, Blocked and HeldBack come from
+/// the preview; Released, Failed and NotAttempted from the run.</summary>
+public enum ReleaseStatus { Ready, Revise, AlreadyReleased, Blocked, HeldBack, Released, Failed, NotAttempted }
 
 /// <summary>How the lifecycle transition to Released bumps the revision (Vault's BumpRevisionEnum); Unknown when it could not be read.</summary>
 public enum RevisionBump { None, Primary, Secondary, Tertiary, Unknown }
@@ -17,12 +18,25 @@ public sealed record ReleaseModel(string Key, string FileName, string PartNumber
 /// <summary>The drawing picked for a model (DrawingFinder / ReviewRules.PickDrawings first pick). Key is its workspace path.</summary>
 public sealed record ReleaseDrawingRef(string Key, string FileName);
 
-/// <summary>One row of the release: a model, or a drawing placed after the last of the models it documents.</summary>
+/// <summary>One row of the release: a model, or a drawing placed after the last of the models it documents. Drawing is a model's drawing key.</summary>
 public sealed record ReleaseRowSpec(string Key, string FileName, string PartNumber, ReleaseKind Kind,
-                                    IReadOnlyList<string> Models, IReadOnlyList<string> Below, ReleaseModel? Model, bool NoDrawing);
+                                    IReadOnlyList<string> Models, IReadOnlyList<string> Below, ReleaseModel? Model, bool NoDrawing,
+                                    string? Drawing = null);
 
-/// <summary>A Vault child (file dependency) of a row that is not itself a row of this release. Released is null when its state could not be read.</summary>
-public sealed record ReleaseChild(string Name, bool? Released);
+/// <summary>A Vault child (file dependency) of a row that is not itself a row of this release. Released is null when its state could not be read.
+/// Category is its Vault category (engineering children block whatever the child check says).</summary>
+public sealed record ReleaseChild(string Name, bool? Released, string Category = "");
+
+/// <summary>One Vault version of a child file: id, Vault checksum (File.Cksum) and size.</summary>
+public sealed record ChildVersion(long Id, long Cksum, long Size);
+
+/// <summary>
+/// A parent's Dependency child as it is on disk. Touched: this run signed or released it (use LatestId). LocalCksum/LocalSize are the local
+/// file's CRC-32 and length (null when there is no local file). LocalEqualsLatest is asked only when no version checksum matches: a byte
+/// compare with a fresh download of the latest version.
+/// </summary>
+public sealed record ChildOnDisk(string Name, bool Touched, long LatestId, IReadOnlyList<ChildVersion> Versions,
+                                 long? LocalCksum, long? LocalSize, Func<bool>? LocalEqualsLatest = null);
 
 /// <summary>
 /// What Vault and Inventor say about one row's file. Released is the state's released flag (Vault LfCycState.ReleasedState).
@@ -36,7 +50,7 @@ public sealed record ReleaseFacts(
     bool OpenDirty = false, bool OpenOlder = false, bool LocalEdits = false, bool ControlledByChangeOrder = false,
     string? TransitionProblem = null, string Lifecycle = "", bool? ChildCheck = null, string RevisionAfter = "",
     IReadOnlyList<ReleaseChild>? OtherChildren = null, string? Compliance = null, string? Designer = null,
-    string? Problem = null);
+    string? Problem = null, IReadOnlyList<string>? RowDependencies = null, string? ReviseProblem = null, bool SyncProps = false);
 
 /// <summary>A previewed row: its status, why it is skipped (Blockers), notes (Warnings) and, when held back, the child that holds it.</summary>
 public sealed record ReleaseRow(ReleaseRowSpec Spec, ReleaseFacts Facts, ReleaseStatus Status,
@@ -144,7 +158,8 @@ public static class ReleasePlan
         foreach (var m in models)
         {
             var d = DrawingOf(m);
-            rows.Add(new ReleaseRowSpec(m.Key, m.FileName, m.PartNumber, m.Kind, Array.Empty<string>(), m.Below, m, d is null));
+            rows.Add(new ReleaseRowSpec(m.Key, m.FileName, m.PartNumber, m.Kind, Array.Empty<string>(), m.Below, m, d is null,
+                                        d is null || modelKeys.Contains(d.Key) ? null : d.Key));
             if (d is null || !modelsOf.TryGetValue(d.Key, out var owners) || !ReferenceEquals(owners[^1], m)) continue;
             rows.Add(new ReleaseRowSpec(d.Key, d.FileName, owners[0].PartNumber, ReleaseKind.Drawing, owners.Select(o => o.Key).ToList(),
                                         Array.Empty<string>(), null, false));
@@ -189,22 +204,28 @@ public static class ReleasePlan
         }
         if (IsCompliant(f.Compliance) == false) b.Add($"Property Compliance is {f.Compliance!.Trim()}");
         if (f.TransitionProblem is not null) b.Add(f.TransitionProblem);
-        else if (f.ChildCheck == true)
-        {
-            var notReleased = (f.OtherChildren ?? Array.Empty<ReleaseChild>()).Where(c => c.Released != true).ToList();
-            foreach (var c in notReleased.Take(MaxChildrenListed))
-                b.Add(c.Released is null
-                    ? $"could not read the state of {c.Name} (Vault's child check is on for this lifecycle)"
-                    : $"{c.Name} must be Released first (Vault's child check is on for this lifecycle)");
-            if (notReleased.Count > MaxChildrenListed)
-                b.Add($"and {notReleased.Count - MaxChildrenListed} more children must be Released first");
-        }
+        var kids = f.OtherChildren ?? Array.Empty<ReleaseChild>();
+        // Engineering files the row depends on but that are not rows (skeletons, derived bases, BOM-excluded components): never release over them.
+        var engineering = kids.Where(c => IsEngineeringCategory(c.Category) && c.Released != true).ToList();
+        var library = f.TransitionProblem is null && f.ChildCheck == true
+            ? kids.Where(c => !IsEngineeringCategory(c.Category) && c.Released != true).ToList() : new List<ReleaseChild>();
+        var lines = engineering.Select(c => c.Released is null ? $"depends on {c.Name} (state unreadable)" : $"depends on {c.Name} (not Released)")
+            .Concat(library.Select(c => c.Released is null
+                ? $"could not read the state of {c.Name} (Vault's child check is on for this lifecycle)"
+                : $"{c.Name} must be Released first (Vault's child check is on for this lifecycle)")).ToList();
+        b.AddRange(lines.Take(MaxChildrenListed));
+        if (lines.Count > MaxChildrenListed) b.Add($"and {lines.Count - MaxChildrenListed} more children must be Released first");
         return b;
     }
+
+    public static bool IsEngineeringCategory(string? category) => Is(category, PartCategory) || Is(category, AssemblyCategory);
+
+    public const string ReviseText = "revise and re-release (model changes)";
 
     public static IReadOnlyList<string> Warnings(ReleaseRowSpec s, ReleaseFacts f, string approver)
     {
         var w = new List<string>();
+        if (f.SyncProps) w.Add("the transition to Released syncs properties (Vault may add a version later)");
         if (f.Designer is not null)
         {
             if (f.Designer.Trim().Length == 0) w.Add("Designer is blank");
@@ -249,41 +270,64 @@ public static class ReleasePlan
     public static bool CountsAsReleased(ReleaseStatus s) => s is ReleaseStatus.AlreadyReleased or ReleaseStatus.Released;
 
     /// <summary>
-    /// The part number of the first engineering model under the row (all levels for an assembly, the documented models for a drawing) that is not
-    /// released, or null. Unknown keys count as not released (fail closed).
+    /// Why the row must wait: the first dependency that is not released, or null. Dependencies: a drawing's models, an assembly's engineering
+    /// models (all levels) and each of their drawings, plus the row's Vault dependencies that are rows (RowDependencies). statusOf is null for a
+    /// row not decided yet: that fails closed for models and dependencies; a drawing placed later (a drawing shared with a parent) is not waited for.
+    /// preview counts Ready and Revise rows as released (what a run would do).
     /// </summary>
-    public static string? HeldBackBy(ReleaseRowSpec s, Func<string, bool?> released, Func<string, string> nameOf)
+    public static string? HeldBackBy(ReleaseRowSpec s, ReleaseFacts f, Func<string, ReleaseStatus?> statusOf, bool preview,
+                                     Func<string, string> nameOf, Func<string, string?> drawingOf)
     {
-        var deps = s.Kind == ReleaseKind.Drawing ? s.Models : s.Below;
-        var not = deps.Where(k => released(k) != true).Select(nameOf).ToList();
+        bool Ok(ReleaseStatus? st) => st is ReleaseStatus v && (CountsAsReleased(v) || (preview && v is ReleaseStatus.Ready or ReleaseStatus.Revise));
+        var deps = (s.Kind == ReleaseKind.Drawing ? s.Models : s.Below).Concat(f.RowDependencies ?? Array.Empty<string>())
+                   .Where(k => !Keys.Equals(k, s.Key)).Distinct(Keys).ToList();
+        var not = deps.Where(k => !Ok(statusOf(k))).Select(nameOf).ToList();
+        if (s.Kind != ReleaseKind.Drawing)
+            foreach (var k in s.Below)
+            {
+                var d = drawingOf(k);
+                if (d is null) continue;
+                var st = statusOf(d);
+                if (st is not null && !Ok(st)) not.Add(nameOf(d));
+            }
+        not = not.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (not.Count == 0) return null;
         return not.Count == 1 ? not[0] : $"{not[0]} and {not.Count - 1} more";
     }
 
     public static string HeldBackText(string by) => $"held back: {by} is not Released";
 
-    /// <summary>Preview: status, blockers and warnings per row, then the hold-back a run would apply if every Ready row were released.</summary>
+    /// <summary>
+    /// Preview: status, blockers and warnings per row, then the hold-back a run would apply if every Ready row were released. A drawing that is
+    /// already Released while one of its models is Ready is revised (Released, Work in Progress, signed, Released) with the revise plan as its
+    /// transition check.
+    /// </summary>
     public static IReadOnlyList<ReleaseRow> Evaluate(IReadOnlyList<ReleaseRowSpec> specs, Func<ReleaseRowSpec, ReleaseFacts> facts, string approver)
     {
         var rows = new List<ReleaseRow>();
         var statusOf = new Dictionary<string, ReleaseStatus>(Keys);
-        var names = specs.GroupBy(s => s.Key, Keys).ToDictionary(g => g.Key, g => g.First().PartNumber, Keys);
-        string NameOf(string k) => names.TryGetValue(k, out var n) && !string.IsNullOrWhiteSpace(n) ? n : Path.GetFileName(k);
+        var names = NamesOf(specs);
+        var drawings = DrawingsOf(specs);
+        ReleaseStatus? St(string k) => statusOf.TryGetValue(k, out var v) ? v : null;
         foreach (var s in specs)
         {
             var f = facts(s);
             ReleaseRow row;
-            if (f.Found && f.Problem is null && f.LifecycleUnreadable is null && f.Released)
+            var readable = f.Found && f.Problem is null && f.LifecycleUnreadable is null;
+            if (readable && f.Released && !(s.Kind == ReleaseKind.Drawing && s.Models.Any(k => St(k) == ReleaseStatus.Ready)))
                 row = new ReleaseRow(s, f, ReleaseStatus.AlreadyReleased, Array.Empty<string>(), Array.Empty<string>(), null);
             else
             {
-                var blockers = Blockers(s, f);
+                var revise = readable && f.Released;
+                var blockers = Blockers(s, revise ? f with { TransitionProblem = f.ReviseProblem } : f);
                 var warnings = Warnings(s, f, approver);
                 if (blockers.Count > 0) row = new ReleaseRow(s, f, ReleaseStatus.Blocked, blockers, warnings, null);
                 else
                 {
-                    var by = HeldBackBy(s, k => statusOf.TryGetValue(k, out var st) ? st is ReleaseStatus.Ready || CountsAsReleased(st) : null, NameOf);
-                    row = new ReleaseRow(s, f, by is null ? ReleaseStatus.Ready : ReleaseStatus.HeldBack, blockers, warnings, by);
+                    var by = HeldBackBy(s, f, St, true, k => names.TryGetValue(k, out var n) ? n : Path.GetFileName(k),
+                                        k => drawings.TryGetValue(k, out var d) ? d : null);
+                    row = new ReleaseRow(s, f, by is not null ? ReleaseStatus.HeldBack : revise ? ReleaseStatus.Revise : ReleaseStatus.Ready,
+                                         blockers, warnings, by);
                 }
             }
             statusOf[s.Key] = row.Status;
@@ -292,11 +336,24 @@ public static class ReleasePlan
         return rows;
     }
 
+    /// <summary>Display name per row key: the part number for models, the file name for drawings.</summary>
+    internal static Dictionary<string, string> NamesOf(IEnumerable<ReleaseRowSpec> specs) =>
+        specs.GroupBy(s => s.Key, Keys).ToDictionary(g => g.Key, g =>
+        {
+            var s = g.First();
+            return s.Kind == ReleaseKind.Drawing || string.IsNullOrWhiteSpace(s.PartNumber) ? s.FileName : s.PartNumber;
+        }, Keys);
+
+    internal static Dictionary<string, string> DrawingsOf(IEnumerable<ReleaseRowSpec> specs) =>
+        specs.Where(s => s.Drawing is not null).GroupBy(s => s.Key, Keys).ToDictionary(g => g.Key, g => g.First().Drawing!, Keys);
+
     // ---- Texts ----
 
-    public static (int Release, int Skipped, int HeldBack, int AlreadyReleased) Counts(IReadOnlyList<ReleaseRow> rows) =>
-        (rows.Count(r => r.Status == ReleaseStatus.Ready), rows.Count(r => r.Status == ReleaseStatus.Blocked),
-         rows.Count(r => r.Status == ReleaseStatus.HeldBack), rows.Count(r => r.Status == ReleaseStatus.AlreadyReleased));
+    /// <summary>Release counts Ready and Revise rows; Revise is also given on its own.</summary>
+    public static (int Release, int Revise, int Skipped, int HeldBack, int AlreadyReleased) Counts(IReadOnlyList<ReleaseRow> rows) =>
+        (rows.Count(r => r.Status is ReleaseStatus.Ready or ReleaseStatus.Revise), rows.Count(r => r.Status == ReleaseStatus.Revise),
+         rows.Count(r => r.Status == ReleaseStatus.Blocked), rows.Count(r => r.Status == ReleaseStatus.HeldBack),
+         rows.Count(r => r.Status == ReleaseStatus.AlreadyReleased));
 
     private static string Files(int n) => n == 1 ? "1 file" : $"{n} files";
 
@@ -304,7 +361,9 @@ public static class ReleasePlan
     {
         var c = Counts(rows);
         return $"Release {Files(c.Release)} as {approver}? {c.Skipped} will be skipped, {c.HeldBack} held back."
-               + "\n\nEach file is checked out, signed (Engr Approved By), checked in and changed to Released, bottom up.";
+               + "\n\nEach file is checked out, signed (Engr Approved By), checked in and changed to Released, bottom up."
+               + (c.Revise == 0 ? "" : $"\n\n{c.Revise} Released {(c.Revise == 1 ? "drawing is" : "drawings are")} revised and re-released because the model changes: "
+                                      + "moved to Work in Progress (new revision), signed and returned to Released.");
     }
 
     /// <summary>The preview's one line about Vault's child check, per lifecycle that the rows use.</summary>
@@ -324,6 +383,7 @@ public static class ReleasePlan
     public static string StatusText(ReleaseStatus s) => s switch
     {
         ReleaseStatus.Ready => "Ready",
+        ReleaseStatus.Revise => "revise",
         ReleaseStatus.AlreadyReleased => "already Released",
         ReleaseStatus.Blocked => "skipped",
         ReleaseStatus.HeldBack => "held back",
@@ -338,6 +398,7 @@ public static class ReleasePlan
         ReleaseStatus.Blocked => string.Join("; ", r.Blockers),
         ReleaseStatus.HeldBack => HeldBackText(r.HeldBackBy ?? "a child"),
         ReleaseStatus.AlreadyReleased => "already Released",
+        ReleaseStatus.Revise => ReviseText,
         _ => "Ready",
     };
 
@@ -345,6 +406,7 @@ public static class ReleasePlan
     {
         ReleaseStatus.Released => $"released ({Dash(r.Row.Facts.Revision)} -> {Dash(r.RevisionAfter)})" + (r.Detail.Length > 0 ? "; " + r.Detail : ""),
         ReleaseStatus.Ready => "Ready",
+        ReleaseStatus.Revise => ReviseText,
         ReleaseStatus.AlreadyReleased => "already Released",
         ReleaseStatus.Blocked => "skipped: " + r.Detail,
         ReleaseStatus.HeldBack => r.Detail,
@@ -402,15 +464,104 @@ public static class ReleasePlan
     }
 
     /// <summary>
-    /// On the sign-off check-in, a Dependency child whose latest version has the same content (Vault checksum) as the referenced one is pointed
-    /// at that latest version, so a parent checked in after its children were released references the Released versions. Everything else is
-    /// passed on unchanged. latest maps a referenced child file id to (latest id, referenced checksum, latest checksum).
+    /// On a parent's sign-off check-in, the version of each Dependency child is chosen from what is on disk: a child this run signed or
+    /// released is referenced at its latest version; any other child at the newest version whose checksum and size match the local file, else
+    /// at the latest version when the local file is byte-identical to it. A child with no matching version (or no local file) is a problem, and
+    /// the parent is not checked in. Attachments pass unchanged.
     /// </summary>
-    public static IReadOnlyList<AssocRow> RemapToLatest(IReadOnlyList<AssocRow> rows, IReadOnlyDictionary<long, (long LatestId, long RefCksum, long LatestCksum)> latest) =>
-        rows.Select(r => r.Type == "Dependency" && latest.TryGetValue(r.CldFileId, out var l) && l.LatestId > 0 && l.RefCksum == l.LatestCksum
-            ? r with { CldFileId = l.LatestId } : r).ToList();
+    public static (IReadOnlyList<AssocRow> Rows, IReadOnlyList<string> Problems) ChooseChildVersions(IReadOnlyList<AssocRow> rows, Func<long, ChildOnDisk?> childOf)
+    {
+        var problems = new List<string>();
+        var result = new List<AssocRow>();
+        foreach (var r in rows)
+        {
+            if (r.Type != "Dependency") { result.Add(r); continue; }
+            var c = childOf(r.CldFileId);
+            if (c is null) { problems.Add($"could not read child file {r.CldFileId} from Vault"); result.Add(r); continue; }
+            long? id = null;
+            if (c.Touched) id = c.LatestId > 0 ? c.LatestId : null;
+            else if (c.LocalCksum is null) problems.Add($"{c.Name} is not in the workspace");
+            else
+            {
+                var match = c.Versions.Where(v => v.Cksum == c.LocalCksum && (c.LocalSize is null || v.Size == c.LocalSize)).OrderByDescending(v => v.Id).FirstOrDefault();
+                if (match is not null) id = match.Id;
+                else if (c.LatestId > 0 && c.LocalEqualsLatest?.Invoke() == true) id = c.LatestId;
+                else problems.Add($"{c.Name} on disk matches no Vault version (local edits or another copy)");
+            }
+            if (c.Touched && id is null) problems.Add($"could not read the latest version of {c.Name}");
+            result.Add(id is long v2 ? r with { CldFileId = v2 } : r);
+        }
+        return (result, problems);
+    }
 
-    public static string SignOffComment(string approver) => $"Approved by {approver}";
+    /// <summary>Standard CRC-32 (IEEE, reflected 0xEDB88320) of a stream, as a signed 32-bit value like Vault's File.Cksum.</summary>
+    public static int Crc32(Stream stream)
+    {
+        var table = CrcTable.Value;
+        var crc = 0xFFFFFFFFu;
+        var buf = new byte[81920];
+        int n;
+        while ((n = stream.Read(buf, 0, buf.Length)) > 0)
+            for (var i = 0; i < n; i++) crc = table[(crc ^ buf[i]) & 0xFF] ^ (crc >> 8);
+        return unchecked((int)(crc ^ 0xFFFFFFFFu));
+    }
+
+    private static readonly Lazy<uint[]> CrcTable = new(() =>
+    {
+        var t = new uint[256];
+        for (uint i = 0; i < 256; i++)
+        {
+            var c = i;
+            for (var k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            t[i] = c;
+        }
+        return t;
+    });
+
+    public const string ReReleaseStep = "re_release";
+
+    /// <summary>
+    /// The revise path for a Released drawing whose model changed, with DataCardFix's rules: move to Work in Progress, sign off, and always try
+    /// the way back to Released once the file is found in Work in Progress (even after a failed sign-off). A failed return is step re_release.
+    /// A lost session (BridgeException not_signed_in) on the first move propagates; later ones are reported and the host rethrows.
+    /// </summary>
+    public static ReleaseOutcome ReviseAndRelease(Action toWorkInProgress, Func<string> actualState, Action signOff, Func<string> toReleased)
+    {
+        string? first = null;
+        try { toWorkInProgress(); }
+        catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
+        catch (Exception ex) { first = ex.Message; }
+        if (first is not null)
+        {
+            string actual;
+            try { actual = actualState(); } catch (Exception) { actual = "unknown"; }
+            if (!string.Equals(actual, DataCardFix.WorkInProgressState, StringComparison.OrdinalIgnoreCase))
+                return ReleaseOutcome.Fail("revise", $"{first} (the drawing is still {actual})");
+        }
+        string? signError = null;
+        if (first is null)
+        {
+            try { signOff(); }
+            catch (Exception ex) { signError = ex.Message; }
+        }
+        else signError = first + $" (the drawing was found in {DataCardFix.WorkInProgressState} and was not signed)";
+        string revision;
+        try { revision = toReleased(); }
+        catch (Exception ex)
+        {
+            string actual;
+            try { actual = actualState(); } catch (Exception) { actual = "unknown"; }
+            return ReleaseOutcome.Fail(ReReleaseStep, $"Could not return the drawing to {DataCardFix.ReleasedState}: {ex.Message}"
+                + (signError is null ? "" : $" (the sign-off also failed: {signError})")
+                + $" It is in {actual}; change it to {DataCardFix.ReleasedState} in Vault by hand.");
+        }
+        if (signError is not null) return ReleaseOutcome.Fail("sign off", signError + $" (the drawing was returned to {DataCardFix.ReleasedState}, revision {revision})");
+        return ReleaseOutcome.Done(revision);
+    }
+
+    /// <summary>Check-in and state-change comment: the sign-off name, plus the Vault login that clicked when known.</summary>
+    public static string SignOffComment(string approver, string? vaultUser = null) =>
+        $"Approved by {approver}" + (string.IsNullOrWhiteSpace(vaultUser) ? "" : $" (Vault user {vaultUser.Trim()})");
 
     /// <summary>Message for a save failure on a document the user had open in Inventor (it is read-only or refused the save).</summary>
     public static string OpenDocumentSaveFailure(string detail, string undone) =>
@@ -429,15 +580,18 @@ public sealed class ReleaseRun
     private readonly ReleaseResult?[] _results;
     private readonly Dictionary<string, ReleaseStatus> _statusOf = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _names = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _drawings;
     private bool _gotLatest;
     private bool _stop;
+    private bool _reviseStopped;
     private int _next;
 
     public ReleaseRun(IReadOnlyList<ReleaseRow> rows, string approver, IReleaseWriter writer)
     {
         _rows = rows; _approver = approver; _writer = writer;
         _results = new ReleaseResult?[rows.Count];
-        foreach (var r in rows) _names.TryAdd(r.Spec.Key, string.IsNullOrWhiteSpace(r.Spec.PartNumber) ? r.Spec.FileName : r.Spec.PartNumber);
+        foreach (var (k, n) in ReleasePlan.NamesOf(rows.Select(r => r.Spec))) _names[k] = n;
+        _drawings = ReleasePlan.DrawingsOf(rows.Select(r => r.Spec));
     }
 
     public bool Done { get; private set; }
@@ -492,18 +646,30 @@ public sealed class ReleaseRun
         var i = _next++;
         var row = _rows[i];
         if (row.Status is ReleaseStatus.AlreadyReleased or ReleaseStatus.Blocked) { Set(i, Initial(row, "")); return i; }
-        var by = ReleasePlan.HeldBackBy(row.Spec, k => _statusOf.TryGetValue(k, out var s) ? ReleasePlan.CountsAsReleased(s) : null,
-                                        k => _names.TryGetValue(k, out var n) ? n : Path.GetFileName(k));
-        if (by is not null) { Set(i, new ReleaseResult(row, ReleaseStatus.HeldBack, ReleasePlan.HeldBackText(by))); return i; }
+        var by = ReleasePlan.HeldBackBy(row.Spec, row.Facts, k => _statusOf.TryGetValue(k, out var s) ? s : null, false,
+                                        k => _names.TryGetValue(k, out var n) ? n : Path.GetFileName(k),
+                                        k => _drawings.TryGetValue(k, out var d) ? d : null);
+        if (by is not null)
+        {
+            var text = ReleasePlan.HeldBackText(by) + (row.Status == ReleaseStatus.Revise ? " (the drawing stays Released at its current revision)" : "");
+            Set(i, new ReleaseResult(row, ReleaseStatus.HeldBack, text));
+            return i;
+        }
         if (row.Status == ReleaseStatus.HeldBack)
         {
             // Defensive: the preview predicted a hold-back that the results no longer show; never release what the preview did not offer.
             Set(i, new ReleaseResult(row, ReleaseStatus.NotAttempted, "held back in the preview; run Preview again"));
             return i;
         }
+        if (row.Status == ReleaseStatus.Revise && _reviseStopped)
+        {
+            Set(i, new ReleaseResult(row, ReleaseStatus.NotAttempted, "stopped: an earlier drawing could not be returned to Released"));
+            return i;
+        }
         try
         {
             var o = _writer.Release(row, _approver);
+            if (!o.Ok && o.Step == ReleasePlan.ReReleaseStep) _reviseStopped = true;
             Set(i, o.Ok
                 ? new ReleaseResult(row, ReleaseStatus.Released, o.Warning ?? "", o.RevisionAfter)
                 : new ReleaseResult(row, ReleaseStatus.Failed, $"{o.Step}: {o.Message}"));

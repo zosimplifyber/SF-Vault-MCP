@@ -138,7 +138,7 @@ public class ReleasePlanTests
     {
         var rows = Eval(Specs(A("S1", N("P1"))));
         Assert.All(rows, r => Assert.Equal(ReleaseStatus.Ready, r.Status));
-        Assert.Equal((6, 0, 0, 0), ReleasePlan.Counts(rows));
+        Assert.Equal((6, 0, 0, 0, 0), ReleasePlan.Counts(rows));
     }
 
     [Theory]
@@ -293,7 +293,7 @@ public class ReleasePlanTests
         Assert.Equal(ReleaseStatus.AlreadyReleased, Row(rows, "P1.ipt").Status);
         Assert.Equal(ReleaseStatus.AlreadyReleased, Row(rows, "P1.idw").Status);
         Assert.Equal(ReleaseStatus.Ready, Row(rows, "S1.iam").Status);
-        Assert.Equal((4, 0, 0, 2), ReleasePlan.Counts(rows));
+        Assert.Equal((4, 0, 0, 0, 2), ReleasePlan.Counts(rows));
     }
 
     [Fact]
@@ -317,16 +317,32 @@ public class ReleasePlanTests
         Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "TOP.iam").Status);
         Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "S2.idw").Status);
         Assert.Equal(ReleaseStatus.Ready, Row(rows, "P2.ipt").Status);
-        Assert.Equal("held back: P1 and 1 more is not Released", ReleasePlan.PreviewText(Row(rows, "S1.iam")));
+        Assert.Equal("held back: P1 and 3 more is not Released", ReleasePlan.PreviewText(Row(rows, "S1.iam")));
     }
 
     [Fact]
-    public void Blocked_drawing_does_not_hold_back_its_model_or_parent()
+    public void Blocked_drawing_releases_its_model_but_holds_back_the_parents()
     {
         var rows = Eval(Specs(A("S1", N("P1"))), s => s.FileName == "P1.idw" ? Ok(s) with { OpenDirty = true } : Ok(s));
         Assert.Equal(ReleaseStatus.Blocked, Row(rows, "P1.idw").Status);
         Assert.Equal(ReleaseStatus.Ready, Row(rows, "P1.ipt").Status);
-        Assert.Equal(ReleaseStatus.Ready, Row(rows, "S1.iam").Status);
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "S1.iam").Status);
+        Assert.Equal("P1.idw", Row(rows, "S1.iam").HeldBackBy);
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "TOP.iam").Status);
+    }
+
+    [Fact]
+    public void Shared_drawing_placed_after_a_parent_does_not_deadlock_it()
+    {
+        var models = Models(A("S1", N("P1")));
+        var shared = new ReleaseDrawingRef(K("SHEET.idw"), "SHEET.idw");
+        var drawings = new Dictionary<string, ReleaseDrawingRef?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [K("P1.ipt")] = shared, [K("S1.iam")] = shared, [K("TOP.iam")] = new ReleaseDrawingRef(K("TOP.idw"), "TOP.idw"),
+        };
+        var specs = ReleasePlan.Order(models, drawings);
+        Assert.Equal(new[] { "P1.ipt", "S1.iam", "SHEET.idw", "TOP.iam", "TOP.idw" }, specs.Select(s => s.FileName));
+        Assert.All(Eval(specs), r => Assert.Equal(ReleaseStatus.Ready, r.Status));
     }
 
     [Fact]
@@ -341,7 +357,166 @@ public class ReleasePlanTests
     [Fact]
     public void Unknown_dependency_counts_as_not_released() =>
         Assert.Equal("X", ReleasePlan.HeldBackBy(new ReleaseRowSpec("k", "a.iam", "A", ReleaseKind.SubAssembly, Array.Empty<string>(), new[] { "x" }, null, false),
-                                                  _ => null, _ => "X"));
+                                                  new ReleaseFacts(), _ => null, false, _ => "X", _ => null));
+
+    // ---- Vault dependencies that are not BOM rows ----
+
+    [Fact]
+    public void Unreleased_engineering_dependency_blocks_even_with_the_child_check_off()
+    {
+        var rows = Eval(Specs(N("P1")), s => s.FileName == "P1.ipt"
+            ? Ok(s) with { ChildCheck = false, OtherChildren = new[] { new ReleaseChild("BASE.ipt", false, ReleasePlan.PartCategory), new ReleaseChild("CC1.ipt", false, "Part - Content Center") } }
+            : Ok(s));
+        Assert.Equal(new[] { "depends on BASE.ipt (not Released)" }, Row(rows, "P1.ipt").Blockers);
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "TOP.iam").Status);
+    }
+
+    [Fact]
+    public void Released_engineering_dependency_passes()
+    {
+        var rows = Eval(Specs(N("P1")), s => Ok(s) with { OtherChildren = new[] { new ReleaseChild("SKEL.ipt", true, ReleasePlan.PartCategory) } });
+        Assert.All(rows, r => Assert.Equal(ReleaseStatus.Ready, r.Status));
+    }
+
+    [Fact]
+    public void Row_dependency_later_in_the_order_holds_back()
+    {
+        var specs = Specs(N("P1"), N("P2"));
+        var rows = Eval(specs, s => s.FileName == "P1.ipt" ? Ok(s) with { RowDependencies = new[] { K("P2.ipt") } } : Ok(s));
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "P1.ipt").Status);
+        Assert.Equal("P2", Row(rows, "P1.ipt").HeldBackBy);
+        var rows2 = Eval(specs, s => s.FileName == "P2.ipt" ? Ok(s) with { RowDependencies = new[] { K("P1.ipt") } } : Ok(s));
+        Assert.Equal(ReleaseStatus.Ready, Row(rows2, "P2.ipt").Status);
+    }
+
+    [Fact]
+    public void Sync_properties_is_a_warning() =>
+        Assert.Contains("the transition to Released syncs properties (Vault may add a version later)",
+                        Row(Eval(Specs(N("P1")), s => Ok(s) with { SyncProps = true }), "P1.ipt").Warnings);
+
+    // ---- Released drawing whose model changes ----
+
+    private static ReleaseFacts ReleasedDrawing(ReleaseRowSpec s, string? reviseProblem = null) =>
+        s.FileName == "P1.idw" ? Ok(s) with { Released = true, State = "Released", ReviseProblem = reviseProblem } : Ok(s);
+
+    [Fact]
+    public void Released_drawing_of_a_changing_model_is_revised()
+    {
+        var rows = Eval(Specs(N("P1")), s => ReleasedDrawing(s));
+        Assert.Equal(ReleaseStatus.Revise, Row(rows, "P1.idw").Status);
+        Assert.Equal("revise and re-release (model changes)", ReleasePlan.PreviewText(Row(rows, "P1.idw")));
+        Assert.Equal(ReleaseStatus.Ready, Row(rows, "TOP.iam").Status);
+        Assert.Equal((4, 1, 0, 0, 0), ReleasePlan.Counts(rows));
+        Assert.Contains("1 Released drawing is revised and re-released", ReleasePlan.ConfirmText(rows, "Zak O."));
+    }
+
+    [Fact]
+    public void Released_drawing_of_a_released_model_stays_released()
+    {
+        var rows = Eval(Specs(N("P1")), s => s.FileName.StartsWith("P1") ? Ok(s) with { Released = true } : Ok(s));
+        Assert.Equal(ReleaseStatus.AlreadyReleased, Row(rows, "P1.idw").Status);
+    }
+
+    [Fact]
+    public void Drawing_that_cannot_be_revised_blocks_the_models_parents()
+    {
+        var rows = Eval(Specs(N("P1")), s => ReleasedDrawing(s, "no transition from Released to Work in Progress"));
+        Assert.Equal(ReleaseStatus.Blocked, Row(rows, "P1.idw").Status);
+        Assert.Equal(new[] { "no transition from Released to Work in Progress" }, Row(rows, "P1.idw").Blockers);
+        Assert.Equal(ReleaseStatus.Ready, Row(rows, "P1.ipt").Status);
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "TOP.iam").Status);
+    }
+
+    [Fact]
+    public void Revise_drawing_is_held_back_when_its_model_fails()
+    {
+        var rows = Eval(Specs(N("P1")), s => ReleasedDrawing(s));
+        var w = new Writer { OnRelease = r => r.Spec.FileName == "P1.ipt" ? ReleaseOutcome.Fail("release", "no") : ReleaseOutcome.Done("B") };
+        var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
+        var d = run.Results.Single(r => r.Row.Spec.FileName == "P1.idw");
+        Assert.Equal(ReleaseStatus.HeldBack, d.Status);
+        Assert.Equal("held back: P1 is not Released (the drawing stays Released at its current revision)", d.Detail);
+        Assert.DoesNotContain("P1.idw/Zak O.", w.Calls);
+    }
+
+    [Fact]
+    public void Failed_re_release_stops_later_revisions_and_holds_back_parents()
+    {
+        var rows = Eval(Specs(N("P1"), N("P2")), s => s.FileName is "P1.idw" or "P2.idw" ? Ok(s) with { Released = true } : Ok(s));
+        var w = new Writer { OnRelease = r => r.Spec.FileName == "P1.idw" ? ReleaseOutcome.Fail(ReleasePlan.ReReleaseStep, "stuck") : ReleaseOutcome.Done("B") };
+        var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
+        ReleaseResult R(string f) => run.Results.Single(r => r.Row.Spec.FileName == f);
+        Assert.Equal(ReleaseStatus.Failed, R("P1.idw").Status);
+        Assert.Equal(ReleaseStatus.NotAttempted, R("P2.idw").Status);
+        Assert.Equal("stopped: an earlier drawing could not be returned to Released", R("P2.idw").Detail);
+        Assert.DoesNotContain("P2.idw/Zak O.", w.Calls);
+        Assert.Equal(ReleaseStatus.HeldBack, R("TOP.iam").Status);
+    }
+
+    [Fact]
+    public void Drawing_failing_in_the_run_holds_back_the_parent()
+    {
+        var rows = Eval(Specs(N("P1")));
+        var w = new Writer { OnRelease = r => r.Spec.FileName == "P1.idw" ? ReleaseOutcome.Fail("release", "no") : ReleaseOutcome.Done("A") };
+        var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
+        Assert.Equal(ReleaseStatus.Released, run.Results[0].Status);
+        Assert.Equal("held back: P1.idw is not Released", run.Results.Single(r => r.Row.Spec.FileName == "TOP.iam").Detail);
+    }
+
+    private static ReleaseOutcome Revise(List<string> log, string state = "Work in Progress", bool wipFails = false, bool signFails = false, bool backFails = false) =>
+        ReleasePlan.ReviseAndRelease(
+            () => { log.Add("wip"); if (wipFails) throw new InvalidOperationException("wip refused"); },
+            () => state,
+            () => { log.Add("sign"); if (signFails) throw new InvalidOperationException("save refused"); },
+            () => { log.Add("released"); if (backFails) throw new InvalidOperationException("criteria"); return "B"; });
+
+    [Fact]
+    public void Revise_path_happy()
+    {
+        var log = new List<string>();
+        Assert.Equal(ReleaseOutcome.Done("B"), Revise(log));
+        Assert.Equal(new[] { "wip", "sign", "released" }, log);
+    }
+
+    [Fact]
+    public void Revise_first_move_refused_changes_nothing()
+    {
+        var log = new List<string>();
+        var o = Revise(log, state: "Released", wipFails: true);
+        Assert.Equal("revise", o.Step);
+        Assert.Equal(new[] { "wip" }, log);
+    }
+
+    [Fact]
+    public void Revise_first_move_that_committed_is_brought_back()
+    {
+        var log = new List<string>();
+        var o = Revise(log, wipFails: true);
+        Assert.Equal("sign off", o.Step);
+        Assert.Equal(new[] { "wip", "released" }, log);
+        Assert.Contains("returned to Released, revision B", o.Message);
+    }
+
+    [Fact]
+    public void Revise_failed_sign_off_still_returns_to_released()
+    {
+        var log = new List<string>();
+        var o = Revise(log, signFails: true);
+        Assert.Equal("sign off", o.Step);
+        Assert.Equal(new[] { "wip", "sign", "released" }, log);
+    }
+
+    [Fact]
+    public void Revise_failed_return_is_re_release()
+    {
+        var o = Revise(new List<string>(), backFails: true);
+        Assert.Equal(ReleasePlan.ReReleaseStep, o.Step);
+        Assert.Contains("It is in Work in Progress; change it to Released in Vault by hand.", o.Message);
+    }
+
+    [Fact]
+    public void Revise_lost_session_on_first_move_propagates() =>
+        Assert.Throws<BridgeException>(() => ReleasePlan.ReviseAndRelease(() => throw new BridgeException("not_signed_in", "x"), () => "", () => { }, () => ""));
 
     // ---- Warnings and approver ----
 
@@ -455,20 +630,75 @@ public class ReleasePlanTests
         Assert.Equal("assemblies are not supported yet", DataCardFix.SkipReason(Info("a.iam")));
     }
 
-    [Fact]
-    public void Remap_points_same_content_dependencies_at_the_latest_version()
+    private static readonly ChildVersion[] Versions = { new(10, 100, 5), new(11, 200, 6), new(12, 300, 6) };
+
+    private static (IReadOnlyList<AssocRow> Rows, IReadOnlyList<string> Problems) Choose(ChildOnDisk? child)
     {
-        var rows = new[]
-        {
-            new AssocRow(1, 10, "Dependency", "r1", "s", "$/a.ipt"),
-            new AssocRow(1, 20, "Dependency", "r2", "s", "$/b.ipt"),
-            new AssocRow(1, 30, "Attachment", null, null, null),
-            new AssocRow(1, 40, "Dependency", "r4", "s", "$/d.ipt"),
-        };
-        var latest = new Dictionary<long, (long, long, long)> { [10] = (11, 5, 5), [20] = (21, 5, 6), [30] = (31, 7, 7) };
-        var mapped = ReleasePlan.RemapToLatest(rows, latest);
-        Assert.Equal(new long[] { 11, 20, 30, 40 }, mapped.Select(m => m.CldFileId));
-        Assert.Equal("r1", mapped[0].RefId);
+        var rows = new[] { new AssocRow(1, 10, "Dependency", "r1", "s", "$/a.ipt"), new AssocRow(1, 30, "Attachment", null, null, null) };
+        return ReleasePlan.ChooseChildVersions(rows, id => id == 10 ? child : null);
+    }
+
+    [Fact]
+    public void Signed_child_is_referenced_at_its_latest_version()
+    {
+        // Referenced checksum 100, signed and released content 300: the old checksum rule would have kept version 10.
+        var (rows, problems) = Choose(new ChildOnDisk("a.ipt", true, 12, Versions, 999, 6));
+        Assert.Empty(problems);
+        Assert.Equal(new long[] { 12, 30 }, rows.Select(r => r.CldFileId));
+        Assert.Equal("r1", rows[0].RefId);
+    }
+
+    [Fact]
+    public void Untouched_child_is_referenced_at_the_version_on_disk()
+    {
+        var (rows, problems) = Choose(new ChildOnDisk("a.ipt", false, 12, Versions, 200, 6));
+        Assert.Empty(problems);
+        Assert.Equal(11, rows[0].CldFileId);
+    }
+
+    [Fact]
+    public void Untouched_child_byte_identical_to_latest_uses_latest_when_no_checksum_matches()
+    {
+        var asked = 0;
+        var (rows, problems) = Choose(new ChildOnDisk("a.ipt", false, 12, Versions, 777, 6, () => { asked++; return true; }));
+        Assert.Empty(problems);
+        Assert.Equal(12, rows[0].CldFileId);
+        Assert.Equal(1, asked);
+    }
+
+    [Fact]
+    public void Untouched_child_matching_no_version_fails_the_parent()
+    {
+        var (_, problems) = Choose(new ChildOnDisk("a.ipt", false, 12, Versions, 777, 6, () => false));
+        Assert.Equal(new[] { "a.ipt on disk matches no Vault version (local edits or another copy)" }, problems);
+    }
+
+    [Fact]
+    public void Checksum_match_with_another_size_does_not_count()
+    {
+        var (_, problems) = Choose(new ChildOnDisk("a.ipt", false, 12, Versions, 200, 99));
+        Assert.Single(problems);
+    }
+
+    [Fact]
+    public void Missing_local_child_or_unreadable_child_fails_the_parent()
+    {
+        Assert.Equal(new[] { "a.ipt is not in the workspace" }, Choose(new ChildOnDisk("a.ipt", false, 12, Versions, null, null)).Problems);
+        Assert.Equal(new[] { "could not read child file 10 from Vault" }, Choose(null).Problems);
+    }
+
+    [Fact]
+    public void Crc32_matches_the_standard_check_value()
+    {
+        using var ms = new MemoryStream(System.Text.Encoding.ASCII.GetBytes("123456789"));
+        Assert.Equal(unchecked((int)0xCBF43926u), ReleasePlan.Crc32(ms));
+    }
+
+    [Fact]
+    public void Sign_off_comment_names_the_vault_user()
+    {
+        Assert.Equal("Approved by Zak O. (Vault user zolech)", ReleasePlan.SignOffComment("Zak O.", "zolech"));
+        Assert.Equal("Approved by Zak O.", ReleasePlan.SignOffComment("Zak O.", " "));
     }
 
     // ---- Run ----
@@ -512,7 +742,7 @@ public class ReleasePlanTests
         Assert.Equal("release: Vault refused", R("P1.ipt").Detail);
         Assert.Equal(ReleaseStatus.HeldBack, R("P1.idw").Status);
         Assert.Equal(ReleaseStatus.HeldBack, R("S2.iam").Status);
-        Assert.Equal("held back: P1 is not Released", R("S2.iam").Detail);
+        Assert.Equal("held back: P1 and 1 more is not Released", R("S2.iam").Detail);
         Assert.Equal(ReleaseStatus.HeldBack, R("S1.iam").Status);
         Assert.Equal(ReleaseStatus.HeldBack, R("TOP.iam").Status);
         Assert.Equal(ReleaseStatus.Released, R("P2.ipt").Status);
@@ -529,7 +759,7 @@ public class ReleasePlanTests
                                                   : s.FileName == "P2.idw" ? Ok(s) with { CheckedOut = true } : Ok(s));
         var w = new Writer();
         var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
-        Assert.Equal(new[] { "latest", "P1.idw/Zak O.", "P2.ipt/Zak O.", "TOP.iam/Zak O.", "TOP.idw/Zak O." }, w.Calls);
+        Assert.Equal(new[] { "latest", "P1.idw/Zak O.", "P2.ipt/Zak O." }, w.Calls); // the blocked P2 drawing holds back the top
         Assert.Equal(ReleaseStatus.Blocked, run.Results.Single(r => r.Row.Spec.FileName == "P2.idw").Status);
         Assert.Equal("skipped: checked out by someone", ReleasePlan.ResultLine(run.Results.Single(r => r.Row.Spec.FileName == "P2.idw")));
     }
@@ -582,7 +812,7 @@ public class ReleasePlanTests
         var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
         Assert.Equal("unexpected: boom", run.Results[1].Detail);
         Assert.Equal(ReleaseStatus.Released, run.Results.Single(r => r.Row.Spec.FileName == "P2.ipt").Status);
-        Assert.Equal(ReleaseStatus.Released, run.Results.Single(r => r.Row.Spec.FileName == "TOP.iam").Status);
+        Assert.Equal(ReleaseStatus.HeldBack, run.Results.Single(r => r.Row.Spec.FileName == "TOP.iam").Status);
     }
 
     [Fact]
@@ -592,7 +822,7 @@ public class ReleasePlanTests
         var w = new Writer();
         var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
         Assert.Equal(new[] { "latest" }, w.Calls);
-        Assert.Equal("held back: P1 is not Released", run.Results.Single(r => r.Row.Spec.FileName == "S1.iam").Detail);
+        Assert.Equal("held back: P1 and 1 more is not Released", run.Results.Single(r => r.Row.Spec.FileName == "S1.iam").Detail);
         Assert.Equal("0 released, 0 already Released, 1 skipped, 5 held back, 0 failed, 0 not attempted.", ReleasePlan.Summary(run.Results));
     }
 }
