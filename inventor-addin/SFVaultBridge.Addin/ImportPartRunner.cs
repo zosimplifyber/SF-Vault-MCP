@@ -94,8 +94,11 @@ internal static class ImportPartRunner
                     state = back.FileLfCyc?.LfCycStateName;
                     try
                     {
-                        foreach (var name in ImportRules.EmptyCardProperties(VaultFiles.CardValueReader(back)))
-                            warnings.Add($"{name} is empty on the Vault data card; open the part and check its iProperties.");
+                        var reader = VaultFiles.CardValueReader(back, out var missingDefs);
+                        foreach (var name in missingDefs)
+                            warnings.Add($"Vault has no property named {name}.");
+                        foreach (var name in ImportRules.EmptyCardProperties(reader).Where(n => !missingDefs.Contains(n)))
+                            warnings.Add($"{name} is not visible on the Vault data card yet; check the part's iProperties.");
                     }
                     catch (Exception ex) { warnings.Add($"Could not read the data card back: {ex.Message}"); }
                 }

@@ -339,17 +339,19 @@ internal static class VaultFiles
         return null;
     }
 
-    /// <summary>Reads the data-card values of the file (by property display name) in one call; a property Vault does not define reads as empty.</summary>
-    public static Func<string, string?> CardValueReader(WsFile f)
+    /// <summary>Reads the data-card values of the file (by property display name) in one call; a property Vault does not define reads as empty and is listed in missingDefinitions.</summary>
+    public static Func<string, string?> CardValueReader(WsFile f, out IReadOnlyList<string> missingDefinitions)
     {
         var ps = Conn.WebServiceManager.PropertyService;
         var defs = ps.GetPropertyDefinitionsByEntityClassId("FILE") ?? Array.Empty<PropDef>();
         var byName = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var missing = new List<string>();
         foreach (var name in ImportRules.CardProperties)
         {
             var d = defs.FirstOrDefault(x => string.Equals(x.DispName, name, StringComparison.OrdinalIgnoreCase));
-            if (d is not null) byName[name] = d.Id;
+            if (d is not null) byName[name] = d.Id; else missing.Add(name);
         }
+        missingDefinitions = missing;
         var props = ps.GetProperties("FILE", new[] { f.Id }, byName.Values.ToArray()) ?? Array.Empty<PropInst>();
         return name => byName.TryGetValue(name, out var id) ? props.FirstOrDefault(p => p.PropDefId == id)?.Val?.ToString() : null;
     }
