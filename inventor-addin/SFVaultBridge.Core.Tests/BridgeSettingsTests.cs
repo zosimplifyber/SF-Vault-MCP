@@ -92,4 +92,23 @@ public class BridgeSettingsTests : IDisposable
         Assert.Equal("[1,2", File.ReadAllText(P));
         Assert.Single(log);
     }
+
+    [Fact]
+    public void DropboxAppKey_defaults_empty_and_is_written()
+    {
+        Assert.Equal("", BridgeSettings.Defaults.DropboxAppKey);
+        var s = BridgeSettings.Load(P, _ => { });
+        Assert.Equal("", s.DropboxAppKey);
+        Assert.Equal("", JsonNode.Parse(File.ReadAllText(P))!["dropboxAppKey"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DropboxAppKey_is_read_and_survives_remember_partner()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(P)!);
+        File.WriteAllText(P, "{ \"dropboxAppKey\": \" abc123 \" }");
+        Assert.Equal("abc123", BridgeSettings.Load(P, _ => { }).DropboxAppKey);
+        BridgeSettings.RememberPartner(P, "Acme", _ => { });
+        Assert.Equal("abc123", BridgeSettings.Load(P, _ => { }).DropboxAppKey);
+    }
 }
