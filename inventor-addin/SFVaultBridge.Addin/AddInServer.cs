@@ -63,7 +63,8 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             var router = new Router(token);
             var roots = AllowedRoots(_app).ToList();
             _vault = NewVaultSession();
-            BridgeOps.RegisterAll(router, _vault, new StepImporter(_app), new PathGuard(roots), Version, RunOnUi);
+            BridgeOps.RegisterAll(router, _vault, new StepImporter(_app), new PathGuard(roots), Version, RunOnUi,
+                new DataCardHost(_app), _log.Write);
             _host = new HttpHost(Prefix, router, _log.Write);
             _host.Start();
             _log.Write($"started {Version} on {Prefix}; vault assembly: {DescribeVaultAssembly()}; roots: {string.Join(" | ", roots)}");
