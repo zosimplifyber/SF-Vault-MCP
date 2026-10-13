@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Buttons
 
-The SF Vault Bridge tab has six panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review, Assembly Package), Manufacturing (Partner Package, 3D Print Package) and Release (I Approve!). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge tab has six panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review), Manufacturing (Assembly Package for the in-house assemblers and maintenance, Partner Package, 3D Print Package) and Release (I Approve!). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 
