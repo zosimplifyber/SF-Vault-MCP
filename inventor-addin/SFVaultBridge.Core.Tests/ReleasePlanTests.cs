@@ -144,7 +144,7 @@ public class ReleasePlanTests
     [Theory]
     [InlineData("checkedout", "checked out by jsmith")]
     [InlineData("dirty", "open in Inventor with unsaved changes")]
-    [InlineData("older", "open in Inventor at an older version; close it or Get Latest")]
+    [InlineData("older", "open in Inventor at an older version; close and reopen the assembly")]
     [InlineData("local", "local edits without checkout; check it out or discard the edits")]
     [InlineData("co", "controlled by a change order")]
     [InlineData("transition", "no transition from For Review to Released")]
@@ -384,7 +384,7 @@ public class ReleasePlanTests
         var specs = Specs(N("P1"), N("P2"));
         var rows = Eval(specs, s => s.FileName == "P1.ipt" ? Ok(s) with { RowDependencies = new[] { K("P2.ipt") } } : Ok(s));
         Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "P1.ipt").Status);
-        Assert.Equal("P2", Row(rows, "P1.ipt").HeldBackBy);
+        Assert.Equal("P2 (later in the order; run I Approve! again)", Row(rows, "P1.ipt").HeldBackBy);
         var rows2 = Eval(specs, s => s.FileName == "P2.ipt" ? Ok(s) with { RowDependencies = new[] { K("P1.ipt") } } : Ok(s));
         Assert.Equal(ReleaseStatus.Ready, Row(rows2, "P2.ipt").Status);
     }
@@ -468,7 +468,8 @@ public class ReleasePlanTests
             () => { log.Add("wip"); if (wipFails) throw new InvalidOperationException("wip refused"); },
             () => state,
             () => { log.Add("sign"); if (signFails) throw new InvalidOperationException("save refused"); },
-            () => { log.Add("released"); if (backFails) throw new InvalidOperationException("criteria"); return "B"; });
+            () => { log.Add("released"); if (backFails) throw new InvalidOperationException("criteria"); return "B"; },
+            () => "B");
 
     [Fact]
     public void Revise_path_happy()
@@ -488,22 +489,37 @@ public class ReleasePlanTests
     }
 
     [Fact]
-    public void Revise_first_move_that_committed_is_brought_back()
+    public void Revise_first_move_that_reached_work_in_progress_is_left_there()
     {
         var log = new List<string>();
         var o = Revise(log, wipFails: true);
-        Assert.Equal("sign off", o.Step);
-        Assert.Equal(new[] { "wip", "released" }, log);
-        Assert.Contains("returned to Released, revision B", o.Message);
+        Assert.Equal("revise", o.Step);
+        Assert.Equal(new[] { "wip" }, log);
+        Assert.Contains("The drawing is left in Work in Progress at B; fix and re-run.", o.Message);
     }
 
     [Fact]
-    public void Revise_failed_sign_off_still_returns_to_released()
+    public void Revise_failed_sign_off_leaves_the_drawing_in_work_in_progress()
     {
         var log = new List<string>();
         var o = Revise(log, signFails: true);
+        Assert.False(o.Ok);
         Assert.Equal("sign off", o.Step);
-        Assert.Equal(new[] { "wip", "sign", "released" }, log);
+        Assert.Equal(new[] { "wip", "sign" }, log);
+        Assert.Equal("save refused. The drawing is left in Work in Progress at B; fix and re-run.", o.Message);
+        Assert.NotEqual(ReleasePlan.ReReleaseStep, o.Step);
+    }
+
+    [Fact]
+    public void Revise_drawing_left_in_work_in_progress_holds_back_the_models_parents()
+    {
+        var rows = Eval(Specs(A("S1", N("P1"))), s => s.FileName == "P1.idw" ? Ok(s) with { Released = true } : Ok(s));
+        var w = new Writer { OnRelease = r => r.Spec.FileName == "P1.idw" ? ReleaseOutcome.Fail("sign off", "x. The drawing is left in Work in Progress at B; fix and re-run.") : ReleaseOutcome.Done("B") };
+        var run = RunAll(new ReleaseRun(rows, "Zak O.", w));
+        ReleaseResult R(string f) => run.Results.Single(r => r.Row.Spec.FileName == f);
+        Assert.Equal(ReleaseStatus.Released, R("P1.ipt").Status);
+        Assert.Equal(ReleaseStatus.Failed, R("P1.idw").Status);
+        Assert.Equal("held back: P1.idw is not Released", R("S1.iam").Detail);
     }
 
     [Fact]
@@ -569,15 +585,45 @@ public class ReleasePlanTests
         Assert.Equal(expected, ReleasePlan.RevisionAfter(bump, current, next));
 
     [Fact]
-    public void After_release_builds_only_when_the_top_is_released()
+    public void After_release_builds_only_when_the_top_and_its_drawing_are_released()
     {
         var rows = Eval(Specs(N("P1")));
         var top = rows.Single(r => r.Spec.Kind == ReleaseKind.Top);
-        Assert.True(ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.Released, "", "A") }).Build);
-        Assert.True(ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.AlreadyReleased, "") }).Build);
-        var no = ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.HeldBack, "held back: P1 is not Released") });
+        var topDrawing = rows.Single(r => r.Spec.FileName == "TOP.idw");
+        ReleaseResult D(ReleaseStatus s) => new(topDrawing, s, s == ReleaseStatus.Failed ? "release: refused" : "", "A");
+        Assert.True(ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.Released, "", "A"), D(ReleaseStatus.Released) }).Build);
+        Assert.True(ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.AlreadyReleased, ""), D(ReleaseStatus.AlreadyReleased) }).Build);
+        var no = ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.HeldBack, "held back: P1 is not Released"), D(ReleaseStatus.HeldBack) });
         Assert.False(no.Build);
         Assert.Contains("TOP.iam is not Released (held back: P1 is not Released)", no.Message);
+        var noDrawing = ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.Released, "", "A"), D(ReleaseStatus.Failed) });
+        Assert.False(noDrawing.Build);
+        Assert.Contains("drawing TOP.idw is not Released (failed: release: refused)", noDrawing.Message);
+        Assert.False(ReleasePlan.AfterRelease(new[] { new ReleaseResult(top, ReleaseStatus.Released, "", "A") }).Build);
+    }
+
+    [Fact]
+    public void Already_released_row_open_at_an_older_version_blocks_and_holds_back_parents()
+    {
+        var rows = Eval(Specs(A("S1", N("P1"))), s => s.FileName == "P1.ipt" ? Ok(s) with { Released = true, OpenOlder = true } : Ok(s));
+        Assert.Equal(ReleaseStatus.Blocked, Row(rows, "P1.ipt").Status);
+        Assert.Equal(new[] { "open in Inventor at an older version; close and reopen the assembly" }, Row(rows, "P1.ipt").Blockers);
+        Assert.Equal(ReleaseStatus.HeldBack, Row(rows, "S1.iam").Status);
+    }
+
+    [Fact]
+    public void Open_child_at_an_older_version_blocks_the_parent()
+    {
+        var rows = Eval(Specs(N("P1")), s => s.FileName == "TOP.iam"
+            ? Ok(s) with { OtherChildren = new[] { new ReleaseChild("CC1.ipt", true, "Part - Content Center", OpenOlder: true) } } : Ok(s));
+        Assert.Equal(new[] { "CC1.ipt is open in Inventor at an older version; close and reopen the assembly" }, Row(rows, "TOP.iam").Blockers);
+    }
+
+    [Fact]
+    public void Row_dependency_later_in_the_order_says_run_again()
+    {
+        var rows = Eval(Specs(N("P1"), N("P2")), s => s.FileName == "P1.ipt" ? Ok(s) with { RowDependencies = new[] { K("P2.ipt") } } : Ok(s));
+        Assert.Equal("held back: P2 (later in the order; run I Approve! again) is not Released", ReleasePlan.PreviewText(Row(rows, "P1.ipt")));
     }
 
     [Fact]
@@ -670,7 +716,7 @@ public class ReleasePlanTests
     public void Untouched_child_matching_no_version_fails_the_parent()
     {
         var (_, problems) = Choose(new ChildOnDisk("a.ipt", false, 12, Versions, 777, 6, () => false));
-        Assert.Equal(new[] { "a.ipt on disk matches no Vault version (local edits or another copy)" }, problems);
+        Assert.Equal(new[] { "your copy of a.ipt differs from Vault (Content Center parts regenerated locally do this); Get Latest or check it in, then re-run" }, problems);
     }
 
     [Fact]
@@ -683,7 +729,7 @@ public class ReleasePlanTests
     [Fact]
     public void Missing_local_child_or_unreadable_child_fails_the_parent()
     {
-        Assert.Equal(new[] { "a.ipt is not in the workspace" }, Choose(new ChildOnDisk("a.ipt", false, 12, Versions, null, null)).Problems);
+        Assert.Equal(new[] { "a.ipt is not in the workspace where Vault maps it; Get Latest, then re-run" }, Choose(new ChildOnDisk("a.ipt", false, 12, Versions, null, null)).Problems);
         Assert.Equal(new[] { "could not read child file 10 from Vault" }, Choose(null).Problems);
     }
 

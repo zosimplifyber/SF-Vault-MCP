@@ -25,7 +25,7 @@ public sealed record ReleaseRowSpec(string Key, string FileName, string PartNumb
 
 /// <summary>A Vault child (file dependency) of a row that is not itself a row of this release. Released is null when its state could not be read.
 /// Category is its Vault category (engineering children block whatever the child check says).</summary>
-public sealed record ReleaseChild(string Name, bool? Released, string Category = "");
+public sealed record ReleaseChild(string Name, bool? Released, string Category = "", bool OpenOlder = false);
 
 /// <summary>One Vault version of a child file: id, Vault checksum (File.Cksum) and size.</summary>
 public sealed record ChildVersion(long Id, long Cksum, long Size);
@@ -192,7 +192,7 @@ public static class ReleasePlan
         }
         if (f.CheckedOut) b.Add("checked out by " + (string.IsNullOrWhiteSpace(f.CheckedOutBy) ? "someone" : f.CheckedOutBy.Trim()));
         if (f.OpenDirty) b.Add("open in Inventor with unsaved changes");
-        else if (f.OpenOlder) b.Add("open in Inventor at an older version; close it or Get Latest");
+        else if (f.OpenOlder) b.Add(OpenOlderText);
         if (f.LocalEdits) b.Add("local edits without checkout; check it out or discard the edits");
         if (f.ControlledByChangeOrder) b.Add("controlled by a change order");
         if (s.Model is not null && s.NoDrawing) b.Add("no drawing");
@@ -213,10 +213,14 @@ public static class ReleasePlan
             .Concat(library.Select(c => c.Released is null
                 ? $"could not read the state of {c.Name} (Vault's child check is on for this lifecycle)"
                 : $"{c.Name} must be Released first (Vault's child check is on for this lifecycle)")).ToList();
+        // A child loaded in Inventor at an older version would be referenced at that older version on the check-in.
+        lines.InsertRange(0, kids.Where(c => c.OpenOlder).Select(c => $"{c.Name} is {OpenOlderText}"));
         b.AddRange(lines.Take(MaxChildrenListed));
         if (lines.Count > MaxChildrenListed) b.Add($"and {lines.Count - MaxChildrenListed} more children must be Released first");
         return b;
     }
+
+    public const string OpenOlderText = "open in Inventor at an older version; close and reopen the assembly";
 
     public static bool IsEngineeringCategory(string? category) => Is(category, PartCategory) || Is(category, AssemblyCategory);
 
@@ -281,7 +285,10 @@ public static class ReleasePlan
         bool Ok(ReleaseStatus? st) => st is ReleaseStatus v && (CountsAsReleased(v) || (preview && v is ReleaseStatus.Ready or ReleaseStatus.Revise));
         var deps = (s.Kind == ReleaseKind.Drawing ? s.Models : s.Below).Concat(f.RowDependencies ?? Array.Empty<string>())
                    .Where(k => !Keys.Equals(k, s.Key)).Distinct(Keys).ToList();
-        var not = deps.Where(k => !Ok(statusOf(k))).Select(nameOf).ToList();
+        var rowDeps = new HashSet<string>(f.RowDependencies ?? Array.Empty<string>(), Keys);
+        // A Vault dependency on a row later in the order waits for it; it is released by this run, so a second run releases this row.
+        var not = deps.Where(k => !Ok(statusOf(k)))
+                      .Select(k => statusOf(k) is null && rowDeps.Contains(k) ? $"{nameOf(k)} (later in the order; run I Approve! again)" : nameOf(k)).ToList();
         if (s.Kind != ReleaseKind.Drawing)
             foreach (var k in s.Below)
             {
@@ -314,8 +321,12 @@ public static class ReleasePlan
             var f = facts(s);
             ReleaseRow row;
             var readable = f.Found && f.Problem is null && f.LifecycleUnreadable is null;
-            if (readable && f.Released && !(s.Kind == ReleaseKind.Drawing && s.Models.Any(k => St(k) == ReleaseStatus.Ready)))
-                row = new ReleaseRow(s, f, ReleaseStatus.AlreadyReleased, Array.Empty<string>(), Array.Empty<string>(), null);
+            var reviseCase = readable && f.Released && s.Kind == ReleaseKind.Drawing && s.Models.Any(k => St(k) == ReleaseStatus.Ready);
+            if (readable && f.Released && !reviseCase)
+                // An already-Released file loaded in Inventor at an older version would be what its parents are checked in against.
+                row = f.OpenOlder
+                    ? new ReleaseRow(s, f, ReleaseStatus.Blocked, new[] { OpenOlderText }, Array.Empty<string>(), null)
+                    : new ReleaseRow(s, f, ReleaseStatus.AlreadyReleased, Array.Empty<string>(), Array.Empty<string>(), null);
             else
             {
                 var revise = readable && f.Released;
@@ -436,13 +447,17 @@ public static class ReleasePlan
                + $"{C(ReleaseStatus.HeldBack)} held back, {C(ReleaseStatus.Failed)} failed, {C(ReleaseStatus.NotAttempted)} not attempted.";
     }
 
-    /// <summary>After the run: build the packages only when the top assembly is Released; otherwise the reason they were not built.</summary>
+    /// <summary>After the run: build the packages only when the top assembly and its drawing are Released; otherwise the reason they were not built.</summary>
     public static (bool Build, string Message) AfterRelease(IReadOnlyList<ReleaseResult> results)
     {
+        const string notBuilt = "so the Purchasing Sheet, Assembly Package and Partner Package were not built.";
         var top = results.FirstOrDefault(r => r.Row.Spec.Kind == ReleaseKind.Top);
-        if (top is null) return (false, "The top assembly was not in the release, so the Purchasing Sheet, Assembly Package and Partner Package were not built.");
-        if (CountsAsReleased(top.Status)) return (true, "");
-        return (false, $"The top assembly {top.Row.Spec.FileName} is not Released ({ResultLine(top)}), so the Purchasing Sheet, Assembly Package and Partner Package were not built.");
+        if (top is null) return (false, "The top assembly was not in the release, " + notBuilt);
+        if (!CountsAsReleased(top.Status)) return (false, $"The top assembly {top.Row.Spec.FileName} is not Released ({ResultLine(top)}), {notBuilt}");
+        var drawing = results.FirstOrDefault(r => r.Row.Spec.Kind == ReleaseKind.Drawing && r.Row.Spec.Models.Contains(top.Row.Spec.Key, Keys));
+        if (drawing is null) return (false, $"The top assembly {top.Row.Spec.FileName} has no drawing in the release, {notBuilt}");
+        if (!CountsAsReleased(drawing.Status)) return (false, $"The top assembly's drawing {drawing.Row.Spec.FileName} is not Released ({ResultLine(drawing)}), {notBuilt}");
+        return (true, "");
     }
 
     // ---- Host rules ----
@@ -480,13 +495,13 @@ public static class ReleasePlan
             if (c is null) { problems.Add($"could not read child file {r.CldFileId} from Vault"); result.Add(r); continue; }
             long? id = null;
             if (c.Touched) id = c.LatestId > 0 ? c.LatestId : null;
-            else if (c.LocalCksum is null) problems.Add($"{c.Name} is not in the workspace");
+            else if (c.LocalCksum is null) problems.Add($"{c.Name} is not in the workspace where Vault maps it; Get Latest, then re-run");
             else
             {
                 var match = c.Versions.Where(v => v.Cksum == c.LocalCksum && (c.LocalSize is null || v.Size == c.LocalSize)).OrderByDescending(v => v.Id).FirstOrDefault();
                 if (match is not null) id = match.Id;
                 else if (c.LatestId > 0 && c.LocalEqualsLatest?.Invoke() == true) id = c.LatestId;
-                else problems.Add($"{c.Name} on disk matches no Vault version (local edits or another copy)");
+                else problems.Add($"your copy of {c.Name} differs from Vault (Content Center parts regenerated locally do this); Get Latest or check it in, then re-run");
             }
             if (c.Touched && id is null) problems.Add($"could not read the latest version of {c.Name}");
             result.Add(id is long v2 ? r with { CldFileId = v2 } : r);
@@ -521,12 +536,21 @@ public static class ReleasePlan
     public const string ReReleaseStep = "re_release";
 
     /// <summary>
-    /// The revise path for a Released drawing whose model changed, with DataCardFix's rules: move to Work in Progress, sign off, and always try
-    /// the way back to Released once the file is found in Work in Progress (even after a failed sign-off). A failed return is step re_release.
-    /// A lost session (BridgeException not_signed_in) on the first move propagates; later ones are reported and the host rethrows.
+    /// The revise path for a Released drawing whose model changed: move to Work in Progress, sign off, and only after a successful sign-off
+    /// return to Released. The drawing is supposed to change, so a sign-off that fails (or a first move that reported failure but reached
+    /// Work in Progress) leaves it in Work in Progress at its new revision: the row fails and the model's parents are held back. A failed
+    /// return to Released is step re_release. A lost session (BridgeException not_signed_in) on the first move propagates; later ones are
+    /// reported and the host rethrows. revisionNow reads the current revision for the message.
     /// </summary>
-    public static ReleaseOutcome ReviseAndRelease(Action toWorkInProgress, Func<string> actualState, Action signOff, Func<string> toReleased)
+    public static ReleaseOutcome ReviseAndRelease(Action toWorkInProgress, Func<string> actualState, Action signOff, Func<string> toReleased,
+                                                  Func<string>? revisionNow = null)
     {
+        string Rev()
+        {
+            try { var r = revisionNow?.Invoke() ?? ""; return string.IsNullOrWhiteSpace(r) ? "its new revision" : r.Trim(); }
+            catch (Exception) { return "its new revision"; }
+        }
+        string LeftInWip(string why) => $"{why}. The drawing is left in {DataCardFix.WorkInProgressState} at {Rev()}; fix and re-run.";
         string? first = null;
         try { toWorkInProgress(); }
         catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
@@ -538,24 +562,19 @@ public static class ReleasePlan
             if (!string.Equals(actual, DataCardFix.WorkInProgressState, StringComparison.OrdinalIgnoreCase))
                 return ReleaseOutcome.Fail("revise", $"{first} (the drawing is still {actual})");
         }
-        string? signError = null;
-        if (first is null)
-        {
-            try { signOff(); }
-            catch (Exception ex) { signError = ex.Message; }
-        }
-        else signError = first + $" (the drawing was found in {DataCardFix.WorkInProgressState} and was not signed)";
+        if (first is not null) return ReleaseOutcome.Fail("revise", LeftInWip(first.TrimEnd('.') + " (the drawing reached Work in Progress anyway and was not signed)"));
+        try { signOff(); }
+        catch (BridgeException ex) when (ex.Code == "not_signed_in") { return ReleaseOutcome.Fail("sign off", LeftInWip(ex.Message.TrimEnd('.'))); }
+        catch (Exception ex) { return ReleaseOutcome.Fail("sign off", LeftInWip(ex.Message.TrimEnd('.'))); }
         string revision;
         try { revision = toReleased(); }
         catch (Exception ex)
         {
             string actual;
             try { actual = actualState(); } catch (Exception) { actual = "unknown"; }
-            return ReleaseOutcome.Fail(ReReleaseStep, $"Could not return the drawing to {DataCardFix.ReleasedState}: {ex.Message}"
-                + (signError is null ? "" : $" (the sign-off also failed: {signError})")
+            return ReleaseOutcome.Fail(ReReleaseStep, $"Could not return the signed drawing to {DataCardFix.ReleasedState}: {ex.Message}"
                 + $" It is in {actual}; change it to {DataCardFix.ReleasedState} in Vault by hand.");
         }
-        if (signError is not null) return ReleaseOutcome.Fail("sign off", signError + $" (the drawing was returned to {DataCardFix.ReleasedState}, revision {revision})");
         return ReleaseOutcome.Done(revision);
     }
 
