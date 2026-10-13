@@ -28,14 +28,23 @@ public class BomTests : IDisposable
     }
 
     [Fact]
+    public void Writes_process_after_material()
+    {
+        var path = Path.Combine(_dir, "bom-process.txt");
+        var node = new BomNode("CD-4", "plate", 1, "Each", "Normal", "A", "Aluminum", "CD-4.ipt", @"C:\x\CD-4.ipt", Array.Empty<BomNode>(), Process: " CNC ");
+        BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
+        Assert.Contains("\tAluminum\tCNC\tCD-4.ipt\t", File.ReadAllText(path));
+    }
+
+    [Fact]
     public void Writes_headers_and_escapes_fields()
     {
         var path = Path.Combine(_dir, "bom.txt");
         var node = new BomNode("CD-1", "1/2\" bolt\twith tab", 2.5, "Each", "Purchased", "", "Steel", "CD-1.ipt", @"C:\x\CD-1.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tFile Name\tVendor\tVendor Number\r\n", text);
-        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\tCD-1.ipt\t\t\r\n", text);
+        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\r\n", text);
+        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\t\tCD-1.ipt\t\t\r\n", text);
     }
 
     [Fact]

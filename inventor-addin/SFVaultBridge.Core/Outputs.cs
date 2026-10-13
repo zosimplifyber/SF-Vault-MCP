@@ -148,20 +148,20 @@ public sealed record ToolResult(bool Ok, string? Output, int Count, IReadOnlyLis
 
 public static class ToolResults
 {
-    private const string NoResult = "SFVaultTools gave no usable result. See bridge.log.";
+    public const string NoResultMessage = "SFVaultTools gave no usable result. See bridge.log.";
 
     public static ToolResult Parse(string? json, string outputKey, string countKey)
     {
-        if (string.IsNullOrWhiteSpace(json)) return new ToolResult(false, null, 0, Array.Empty<string>(), NoResult);
+        if (string.IsNullOrWhiteSpace(json)) return new ToolResult(false, null, 0, Array.Empty<string>(), NoResultMessage);
         JsonObject? o;
         try { o = JsonNode.Parse(json) as JsonObject; }
         catch (JsonException) { o = null; }
-        if (o is null) return new ToolResult(false, null, 0, Array.Empty<string>(), NoResult);
+        if (o is null) return new ToolResult(false, null, 0, Array.Empty<string>(), NoResultMessage);
         var ok = o["ok"] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
         var unmatched = o["unmatched"] is JsonArray a ? a.Select(x => x?.ToString() ?? "").ToList() : new List<string>();
         var count = o[countKey] is JsonValue c && c.TryGetValue<int>(out var n) ? n : 0;
         return new ToolResult(ok, o[outputKey]?.GetValue<string>(), count, unmatched,
-                              ok ? null : (o["error"]?.ToString() ?? NoResult),
+                              ok ? null : (o["error"]?.ToString() ?? NoResultMessage),
                               o["reference_note"] is JsonValue nv && nv.TryGetValue<string>(out var note) && note.Length > 0 ? note : null,
                               o["unreleased"] is JsonValue uv && uv.TryGetValue<int>(out var un) ? un : 0,
                               o["mode"] is JsonValue mv && mv.TryGetValue<string>(out var mode) ? mode : null);
@@ -172,6 +172,23 @@ public static class ToolResults
         var args = new List<string> { "purchasing", "--bom", bom, "--assembly", assembly, "--out", outDir, "--name", name, "--result", resultPath };
         if (!string.IsNullOrWhiteSpace(source)) { args.Add("--source"); args.Add(source); }
         return args;
+    }
+
+    public static IReadOnlyList<string> PackageArgs(string manifest, string outZip, string resultPath) =>
+        new[] { "package", "--manifest", manifest, "--out", outZip, "--result", resultPath };
+
+    /// <summary>Every top-level integer field of a tool result; empty when the text is not a JSON object.</summary>
+    public static IReadOnlyDictionary<string, int> Counts(string? json)
+    {
+        var counts = new Dictionary<string, int>();
+        if (string.IsNullOrWhiteSpace(json)) return counts;
+        JsonObject? o;
+        try { o = JsonNode.Parse(json) as JsonObject; }
+        catch (JsonException) { return counts; }
+        if (o is null) return counts;
+        foreach (var kv in o)
+            if (kv.Value is JsonValue v && v.TryGetValue<int>(out var n)) counts[kv.Key] = n;
+        return counts;
     }
 
     public static IReadOnlyList<string> ReviewArgs(string bom, string manifest, string outPdf, string resultPath) =>

@@ -5,7 +5,8 @@ namespace SFVaultBridge.Core;
 
 public sealed record BomNode(string PartNumber, string Description, double Quantity, string UnitQuantity, string BomStructure,
                              string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children,
-                             string Vendor = "", string VendorNumber = "", string State = "");
+                             string Vendor = "", string VendorNumber = "", string State = "",
+                             string Process = "", string MaterialFinish = "", bool IsSheetMetal = false);
 
 public sealed record BomLine(string Item, BomNode Node, int Depth);
 
@@ -45,7 +46,7 @@ public static class BomSource
 /// <summary>Tab-delimited BOM in the layout bom_purchasing.read_bom_file reads.</summary>
 public static class BomFile
 {
-    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "State", "Material", "File Name", "Vendor", "Vendor Number" };
+    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "State", "Material", "Process", "File Name", "Vendor", "Vendor Number" };
 
     public static void Write(string path, IReadOnlyList<BomLine> lines)
     {
@@ -58,7 +59,7 @@ public static class BomFile
             {
                 Field(l.Item), Field(n.PartNumber), Field(n.BomStructure), Field(n.UnitQuantity),
                 Field(n.Quantity.ToString("G", CultureInfo.InvariantCulture)), Field(n.Description),
-                Field(n.Revision), Field(n.State), Field(n.Material), Field(n.FileName), Field(n.Vendor), Field(n.VendorNumber),
+                Field(n.Revision), Field(n.State), Field(n.Material), Field(n.Process), Field(n.FileName), Field(n.Vendor), Field(n.VendorNumber),
             })).Append("\r\n");
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);

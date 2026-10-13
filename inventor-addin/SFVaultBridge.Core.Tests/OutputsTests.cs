@@ -228,4 +228,23 @@ public class OutputsTests
         Assert.Equal("Model state: (none) | Design view: (none) | BOM view: Structured", BomSource.Describe(null, "  "));
         Assert.Equal("Model state: [Primary] | Design view: (none) | BOM view: Structured", BomSource.Describe(" [Primary] ", ""));
     }
+
+    [Fact]
+    public void PackageArgs_order() =>
+        Assert.Equal(new[] { "package", "--manifest", "m.json", "--out", "o.zip", "--result", "r.json" }, ToolResults.PackageArgs("m.json", "o.zip", "r.json"));
+
+    [Fact]
+    public void Counts_reads_integers()
+    {
+        var c = ToolResults.Counts("{\"ok\":true,\"step\":3,\"pdf\":2,\"zip\":\"x\"}");
+        Assert.Equal(3, c["step"]);
+        Assert.Equal(2, c["pdf"]);
+        Assert.False(c.ContainsKey("zip"));
+        Assert.Empty(ToolResults.Counts(null));
+        Assert.Empty(ToolResults.Counts("\"nope\""));
+    }
+
+    [Fact]
+    public void Parse_no_result_uses_public_message() =>
+        Assert.Equal(ToolResults.NoResultMessage, ToolResults.Parse(null, "zip", "files").Error);
 }
