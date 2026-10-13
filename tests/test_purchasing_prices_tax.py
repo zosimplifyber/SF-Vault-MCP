@@ -173,3 +173,18 @@ def test_cli_default_rate_is_seven_percent():
     args = cli._parser().parse_args(["purchasing", "--bom", "b", "--assembly", "a", "--out", "o",
                                      "--name", "n", "--result", "r"])
     assert args.sales_tax_rate == pytest.approx(0.07)
+
+
+def test_text_prices_with_dollar_signs_are_read(tmp_path, monkeypatch):
+    ref = _ref(Number=["P1"], Vendor=["V"],
+               **{"Cost Per": ["$9.00"], "HS/HTS Code": ["7318"], "Tax/Tariff": ["$12.50"]})
+    r = _row(_sheet(tmp_path, [{"Number": "P1", "Cost": "$4.50"}, ], monkeypatch, ref), 1)
+    assert (r["Cost Per"].value, r["Price source"].value) == (4.5, "File")
+    assert r["Tax/Tariff"].value == 12.5
+
+
+@pytest.mark.parametrize("bad", ["-0.1", "7", "abc"])
+def test_cli_rejects_a_bad_sales_tax_rate(bad):
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(["purchasing", "--bom", "b", "--assembly", "a", "--out", "o",
+                                  "--name", "n", "--result", "r", "--sales-tax-rate", bad])

@@ -35,6 +35,13 @@ def reference_note(source: str, signin_needed: bool) -> str:
     return "No purchasing list found; vendor and cost columns are blank."
 
 
+def _rate(text: str) -> float:
+    value = float(text)
+    if not 0 <= value < 1:
+        raise argparse.ArgumentTypeError("sales tax rate must be from 0 up to (not including) 1, e.g. 0.07")
+    return value
+
+
 def run_purchasing(bom: str, assembly: str, out_dir: str, name: str,
                    source: str | None = None,
                    sales_tax_rate: float = bp.DEFAULT_SALES_TAX_RATE) -> dict[str, Any]:
@@ -72,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
     pur.add_argument("--name", required=True)
     pur.add_argument("--result", required=True)
     pur.add_argument("--source", default=None)
-    pur.add_argument("--sales-tax-rate", type=float, default=bp.DEFAULT_SALES_TAX_RATE)
+    pur.add_argument("--sales-tax-rate", type=_rate, default=bp.DEFAULT_SALES_TAX_RATE)
     rev = sub.add_parser("review")
     rev.add_argument("--bom", required=True)
     rev.add_argument("--manifest", required=True)

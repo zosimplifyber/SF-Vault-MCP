@@ -622,7 +622,7 @@ def build_purchasing_sheet(
                     c.value = (f"={cost_col}{ri}*{qty_col}{ri}"
                                f"*{float(sales_tax_rate)!r}")
                 else:
-                    entered = pd.to_numeric(row.get("Tax/Tariff"), errors="coerce")
+                    entered = parse_money(row.get("Tax/Tariff"))
                     if pd.notna(entered):
                         c.value = float(entered)
                     else:
@@ -1058,6 +1058,13 @@ def _build_assembly_costs_tab(
     ws.freeze_panes = "A3"
 
 
+def parse_money(value: Any) -> float:
+    """A number from a cell, tolerating "$4.50" and "1,234"; NaN when not a number."""
+    if isinstance(value, str):
+        value = value.strip().replace("$", "").replace(",", "")
+    return pd.to_numeric(value, errors="coerce")
+
+
 def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> pd.DataFrame:
     """Set Cost Per and Price source on every row.
 
@@ -1070,10 +1077,10 @@ def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> 
         df["Cost Per"] = None
     df["Cost Per"] = df["Cost Per"].astype(object)
     df["Price source"] = pd.Series([None] * len(df), index=df.index, dtype=object)
-    listed = pd.to_numeric(df["Cost Per"], errors="coerce")
+    listed = df["Cost Per"].map(parse_money)
     df.loc[listed.notna(), "Price source"] = "List"
     if file_cost is not None:
-        own = pd.to_numeric(file_cost, errors="coerce")
+        own = file_cost.map(parse_money)
         use = own.notna() & (own > 0)
         df.loc[use, "Cost Per"] = own[use]
         df.loc[use, "Price source"] = "File"

@@ -187,3 +187,92 @@ def test_main_report_and_apply(tmp_path):
 
 def test_report_and_apply_together_is_refused(tmp_path):
     assert m.main(["--report", "x.csv", "--apply"], list_loader=lambda: [], lookup_factory=lambda: lookup) == 2
+
+
+# ---- fix round 1 ----
+
+def test_lookup_error_is_not_no_file_and_fatal_stops():
+    def flaky(number):
+        if number == "CD-2":
+            raise m.VaultLookupError("Vault search for CD-2.ipt failed: 500")
+        if number == "CD-3":
+            raise m.VaultLookupError("Vault search for CD-3.ipt failed: 401 session expired", fatal=True)
+        return FILES.get(number)
+
+    rows = [{"Number": f"CD-{i}", "Cost Per": 5} for i in (1, 2, 3, 4)]
+    with pytest.raises(m.RunStopped) as stopped:
+        m.plan_rows(rows, flaky)
+    plan = stopped.value.plan
+    assert [r.number for r in plan] == ["CD-1", "CD-2", "CD-3"]  # CD-4 never looked up
+    assert plan[1].action == "lookup error" and "500" in plan[1].detail
+    assert plan[2].action == "lookup error"
+
+
+def test_auth_failure_detection():
+    assert m.is_auth_failure("File search failed: 401 Unauthorized")
+    assert m.is_auth_failure("session expired")
+    assert not m.is_auth_failure("File search failed: 500 server error")
+
+
+def test_pick_latest_takes_highest_version_not_first():
+    recs = [{"name": "CD-1.ipt", "version": 2}, {"name": "cd-1.IPT", "version": 7},
+            {"name": "CD-10.ipt", "version": 99}, {"name": "CD-1.ipt", "version": 3}]
+    assert m.pick_latest(recs, "CD-1.ipt")["version"] == 7
+    assert m.pick_latest(recs, "CD-9.ipt") is None
+    assert m.pick_latest([{"name": "A.ipt"}, {"name": "A.ipt"}], "A.ipt") is not None
+
+
+def test_dry_run_error_result_surfaces_as_error_action():
+    plan = m.plan_rows([{"Number": "CD-1", "Cost Per": 3.5}, {"Number": "CD-4", "Cost Per": 9}], lookup)
+
+    def fix(files, **kw):
+        return {"results": [
+            {"file": "$/D/CD-1.ipt", "status": "error", "step": "read", "message": "cannot open"},
+            {"file": "$/D/CD-4.ipt", "status": "preview", "changes": {"Cost": {"from": "2.50", "to": "9.00"}}}]}
+    m.fill_current_costs(plan, fix)
+    assert plan[0].action == "error" and "cannot open" in plan[0].detail
+    assert plan[1].action == "update"
+    # and apply never queues the errored row
+    fake = FakeBridge()
+    m.apply_updates(plan, fake)
+    assert [f for c in fake.calls for f in c["files"]] == ["$/D/CD-4.ipt"]
+
+
+def test_dry_run_sign_in_error_stops_the_run(tmp_path):
+    calls = []
+
+    def fix(files, **kw):
+        calls.append(files)
+        return {"results": [{"file": f, "status": "error", "step": "sign_in", "message": "dropped"} for f in files]}
+    out = tmp_path / "r.csv"
+    code = m.main(["--report", str(out), "--batch", "1"], list_loader=lambda: LIST_ROWS,
+                  lookup_factory=lambda: lookup, fix=fix)
+    assert code == 1 and len(calls) == 1
+    rows = list(csv.DictReader(out.open(encoding="utf-8-sig")))
+    assert any(r["action"] == "error" and "sign_in" in r["detail"] for r in rows)
+
+
+def test_dry_run_bridge_unavailable_stops():
+    plan = m.plan_rows([{"Number": "CD-1", "Cost Per": 3.5}], lookup)
+
+    def fix(files, **kw):
+        raise BridgeUnavailable("not running")
+    with pytest.raises(m.RunStopped) as stopped:
+        m.fill_current_costs(plan, fix)
+    assert stopped.value.plan[0].action == "error"
+
+
+def test_apply_stops_after_a_timeout_that_may_have_landed():
+    class Timeout(RuntimeError):
+        code = "timeout"
+    rows = [{"Number": f"CD-{i}", "Cost Per": 20 + i} for i in range(1, 4)]
+    files = {f"CD-{i}": {"name": f"CD-{i}.ipt", "path": f"$/D/CD-{i}.ipt", "state": "WIP", "category": "P"}
+             for i in range(1, 4)}
+    plan = m.plan_rows(rows, files.get)
+    calls = []
+
+    def fix(files_, **kw):
+        calls.append(files_)
+        raise Timeout("slow")
+    m.apply_updates(plan, fix, batch=1)
+    assert len(calls) == 1
