@@ -221,12 +221,8 @@ def bridge_fix(files: list[str], *, dry_run: bool, revise_released: bool = False
                cost: str = "") -> dict[str, Any]:
     """fix_data_card through the bridge client (kept local so the flag is optional)."""
     import vault_bridge
-    body: dict[str, Any] = {"files": files, "partNumberFromFileName": False, "dryRun": dry_run}
-    if cost:
-        body["design"] = {"Cost": cost}
-    if revise_released:
-        body["reviseReleased"] = True
-    return vault_bridge._call("fix_data_card", body)
+    return vault_bridge.fix_data_card(files, design={"Cost": cost} if cost else None, part_number_from_file_name=False,
+                                      dry_run=dry_run, revise_released=revise_released)
 
 
 def fill_current_costs(plan: list[PlanRow], fix: FixFn, batch: int = 20) -> None:
