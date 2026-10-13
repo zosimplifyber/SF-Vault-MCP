@@ -181,13 +181,13 @@ internal sealed class DataCardHost : IDataCardHost
         {
             try
             {
-                var set = doc.PropertySets[p.Set == PropSet.Design ? "Design Tracking Properties" : "Inventor User Defined Properties"];
+                var set = doc.PropertySets[DataCardFix.SetName(p.Set)];
                 result[p] = ValueText(set[p.Name].Value);
             }
             catch (Exception ex) when (ex is COMException or ArgumentException)
             {
                 // A custom property that does not exist yet reads as missing; an unknown Design property is a typo, so fail before any checkout.
-                if (p.Set == PropSet.Design) throw new DataCardStepException("read", $"Design Tracking property '{p.Name}' could not be read: {ex.Message}");
+                if (p.Set != PropSet.Custom) throw new DataCardStepException("read", $"{DataCardFix.SetName(p.Set)} property '{p.Name}' could not be read: {ex.Message}");
                 result[p] = null;
             }
         }
@@ -440,6 +440,11 @@ internal sealed class DataCardHost : IDataCardHost
 
     private static void SetProp(Inv.Document doc, PropChange c)
     {
+        if (c.Prop.Set == PropSet.Summary)
+        {
+            doc.PropertySets[DataCardFix.SetName(PropSet.Summary)][c.Prop.Name].Value = c.To;
+            return;
+        }
         if (c.Prop.Set == PropSet.Design)
         {
             var prop = doc.PropertySets["Design Tracking Properties"][c.Prop.Name];

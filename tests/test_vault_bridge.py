@@ -239,3 +239,13 @@ def test_fix_data_card_revise_released_flag(server):
     assert server.seen[0][1]["design"] == {"Cost": "12.5"}
     assert server.seen[1][1]["reviseReleased"] is True
     assert server.seen[2][1]["reviseReleased"] is True and server.seen[2][1]["dryRun"] is True
+
+
+def test_fix_data_card_summary_title(server):
+    server.replies["fix_data_card"] = (200, {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    vb.fix_data_card(["a.ipt"])
+    vb.fix_data_card(["a.ipt"], summary={"Title": "CD-1-Washer"})
+    assert vb.main(["fix-data-card", "a.ipt", "--summary", "Title=CD-1-Steel=Washer"]) == 0
+    assert "summary" not in server.seen[0][1]
+    assert server.seen[1][1]["summary"] == {"Title": "CD-1-Washer"}
+    assert server.seen[2][1]["summary"] == {"Title": "CD-1-Steel=Washer"}

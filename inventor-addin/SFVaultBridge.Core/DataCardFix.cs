@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace SFVaultBridge.Core;
 
-public enum PropSet { Design, Custom }
+public enum PropSet { Design, Custom, Summary }
 
 public sealed record PropRef(PropSet Set, string Name);
 
@@ -70,9 +70,11 @@ public interface IDataCardHost
     string? ReadPropertyCompliance(DataCardFileInfo file);
 }
 
+/// <summary>Summary holds Summary Information properties (for example Title), applied with the same dry-run, compare and apply rules as Design.</summary>
 public sealed record DataCardRequest(IReadOnlyList<string> Files, IReadOnlyDictionary<string, string> Design,
                                      IReadOnlyDictionary<string, string> Custom, bool PartNumberFromFileName,
-                                     bool DryRun, string? Comment, bool ReviseReleased = false);
+                                     bool DryRun, string? Comment, bool ReviseReleased = false,
+                                     IReadOnlyDictionary<string, string>? Summary = null);
 
 /// <summary>Rules and orchestration for the fix_data_card bridge operation.</summary>
 public static class DataCardFix
@@ -85,6 +87,14 @@ public static class DataCardFix
 
     /// <summary>Design Tracking properties Inventor stores as numbers (currency); the request string is converted before assigning.</summary>
     private static readonly HashSet<string> NumericDesign = new(StringComparer.OrdinalIgnoreCase) { "Cost" };
+
+    /// <summary>The Inventor property set name for each set.</summary>
+    public static string SetName(PropSet set) => set switch
+    {
+        PropSet.Design => "Design Tracking Properties",
+        PropSet.Summary => "Inventor Summary Information",
+        _ => "Inventor User Defined Properties",
+    };
 
     public static bool IsNumeric(PropRef p) => p.Set == PropSet.Design && NumericDesign.Contains(p.Name);
 
@@ -139,7 +149,7 @@ public static class DataCardFix
         var comment = Args.OptStr(body, "comment", "").Trim();
         return new DataCardRequest(files, Args.StrMap(body, "design"), Args.StrMap(body, "custom"),
             Args.Bool(body, "partNumberFromFileName", true), Args.Bool(body, "dryRun", true), comment.Length > 0 ? comment : null,
-            Args.Bool(body, "reviseReleased", false));
+            Args.Bool(body, "reviseReleased", false), Args.StrMap(body, "summary"));
     }
 
     /// <summary>Why the file may not be fixed, or null when it may.</summary>
@@ -176,6 +186,7 @@ public static class DataCardFix
         var w = new Dictionary<PropRef, string>();
         foreach (var (k, v) in r.Design) w[new PropRef(PropSet.Design, k)] = v;
         foreach (var (k, v) in r.Custom) w[new PropRef(PropSet.Custom, k)] = v;
+        if (r.Summary is not null) foreach (var (k, v) in r.Summary) w[new PropRef(PropSet.Summary, k)] = v;
         var pn = new PropRef(PropSet.Design, PartNumber);
         if (r.PartNumberFromFileName && !w.ContainsKey(pn)) w[pn] = Path.GetFileNameWithoutExtension(fileName);
         wanted = w;
@@ -204,10 +215,13 @@ public static class DataCardFix
     public static string DefaultComment(IEnumerable<PropChange> changes) =>
         "Data card fix: " + string.Join(", ", changes.Select(c => c.Prop.Name).Distinct());
 
-    public static JsonObject Run(DataCardRequest req, IDataCardHost host, Action<string>? log = null)
+    public static JsonObject Run(DataCardRequest req, IDataCardHost host, Action<string>? log = null) => Run(req, host, log, new RunState());
+
+    /// <summary>Same run, but the revise stop is shared: a caller that runs one request per file (the ribbon form) passes one RunState so a failed
+    /// return to Released still stops every later Released file.</summary>
+    public static JsonObject Run(DataCardRequest req, IDataCardHost host, Action<string>? log, RunState run)
     {
         var results = new JsonArray();
-        var run = new RunState();
         var counts = new Dictionary<string, int> { ["preview"] = 0, ["fixed"] = 0, ["no_change"] = 0, ["skipped"] = 0, ["error"] = 0 };
         foreach (var arg in req.Files.Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -238,7 +252,7 @@ public static class DataCardFix
         };
     }
 
-    private sealed class RunState { public bool ReviseStopped; }
+    public sealed class RunState { public bool ReviseStopped; }
 
     public const string ReviseStoppedReason = "stopped: an earlier file could not be returned to Released";
 
