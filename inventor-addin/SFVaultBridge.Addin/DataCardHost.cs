@@ -57,7 +57,7 @@ internal sealed class DataCardHost : IDataCardHost
         }
         var released = IsReleased(f, out var unreadable);
         return new DataCardFileInfo(folder + "/" + f.Name, f.Name, VaultFiles.CategoryName(f) ?? "", VaultFiles.StateOf(f),
-            released, f.CheckedOut, by, f.VerNum, unreadable);
+            released, f.CheckedOut, by, f.VerNum, unreadable, VaultFiles.RevisionOf(f));
     }
 
     // Fails closed: any problem reading the lifecycle state is reported through unreadable and the file is skipped.
@@ -182,7 +182,7 @@ internal sealed class DataCardHost : IDataCardHost
             try
             {
                 var set = doc.PropertySets[p.Set == PropSet.Design ? "Design Tracking Properties" : "Inventor User Defined Properties"];
-                result[p] = set[p.Name].Value?.ToString();
+                result[p] = ValueText(set[p.Name].Value);
             }
             catch (Exception ex) when (ex is COMException or ArgumentException)
             {
@@ -192,6 +192,115 @@ internal sealed class DataCardHost : IDataCardHost
             }
         }
         return result;
+    }
+
+    // Invariant text for numbers and dates so "12.5" is never "12,5" on a machine with another culture.
+    private static string? ValueText(object? v) => v switch
+    {
+        null => null,
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => v.ToString(),
+    };
+
+    // ---- Revise: lifecycle ----
+
+    private static string StateName(LfCycDef def, long id) => def.StateArray?.FirstOrDefault(s => s.Id == id)?.Name ?? "";
+
+    private static LfCycState? StateNamed(LfCycDef def, string name) =>
+        def.StateArray?.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    private static LfCycDef Definition(WsFile f)
+    {
+        var defId = f.FileLfCyc?.LfCycDefId ?? 0;
+        if (defId <= 0) throw new InvalidOperationException("could not read the file's lifecycle definition");
+        return Conn.WebServiceManager.LifeCycleService.GetLifeCycleDefinitionsByIds(new[] { defId })?.FirstOrDefault()
+               ?? throw new InvalidOperationException("could not read the file's lifecycle definition");
+    }
+
+    /// <summary>The transition from the file's current state to the state with that name, by NAME in its own lifecycle definition (no ids are
+    /// hard-coded), and only when the signed-in user is allowed to take it. Null Problem means the move is available.</summary>
+    private static (long? ToStateId, string? Problem) Transition(WsFile f, string toName)
+    {
+        try
+        {
+            var def = Definition(f);
+            var fromId = f.FileLfCyc?.LfCycStateId ?? 0;
+            var fromName = StateName(def, fromId);
+            var to = StateNamed(def, toName);
+            var trans = to is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == fromId && t.ToId == to.Id);
+            if (trans is null) return (null, DataCardFix.NoTransition(fromName.Length > 0 ? fromName : "the current state", toName));
+            var allowed = Conn.WebServiceManager.DocumentServiceExtensions.GetAllowedFileLifeCycleStateTransitionIds();
+            if (allowed is null || !allowed.Contains(trans.Id))
+                return (null, $"you are not allowed to change the state from {fromName} to {toName}");
+            return (to!.Id, null);
+        }
+        catch (Exception ex) { return (null, "could not read the lifecycle transitions: " + ex.Message); }
+    }
+
+    public RevisePlan PlanRevise(DataCardFileInfo file)
+    {
+        try
+        {
+            var latest = Latest(file);
+            var (_, problem) = Transition(latest, DataCardFix.WorkInProgressState);
+            if (problem is not null) return new RevisePlan(problem);
+            // The way back is checked from Work in Progress in the same definition, before anything is changed.
+            var def = Definition(latest);
+            var wip = StateNamed(def, DataCardFix.WorkInProgressState)!;
+            var rel = StateNamed(def, DataCardFix.ReleasedState);
+            var back = rel is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == wip.Id && t.ToId == rel.Id);
+            if (back is null) return new RevisePlan(DataCardFix.NoTransition(DataCardFix.WorkInProgressState, DataCardFix.ReleasedState));
+            var allowed = Conn.WebServiceManager.DocumentServiceExtensions.GetAllowedFileLifeCycleStateTransitionIds();
+            if (allowed is null || !allowed.Contains(back.Id))
+                return new RevisePlan($"you are not allowed to change the state from {DataCardFix.WorkInProgressState} to {DataCardFix.ReleasedState}");
+            return new RevisePlan(null, $"{StateName(def, latest.FileLfCyc!.LfCycStateId)} -> {wip.Name}", $"{wip.Name} -> {rel!.Name}");
+        }
+        catch (Exception ex) { return new RevisePlan("could not plan the revision: " + ex.Message); }
+    }
+
+    // UpdateFileLifeCycleStates(masterIds, toStateIds, comment) on the DocumentServiceExtensions web service: it takes the target STATE id and
+    // Vault checks the transition itself; the transition is also verified here from the definition. The result is read back, never assumed.
+    public DataCardStateChange ChangeState(DataCardFileInfo file, string toStateName, string comment)
+    {
+        var latest = Latest(file);
+        var (toId, problem) = Transition(latest, toStateName);
+        if (problem is not null || toId is null) throw new DataCardStepException("revise", problem ?? DataCardFix.NoTransition(latest.FileLfCyc?.LfCycStateName ?? "", toStateName));
+        try
+        {
+            Conn.WebServiceManager.DocumentServiceExtensions.UpdateFileLifeCycleStates(new[] { latest.MasterId }, new[] { toId.Value }, comment);
+        }
+        catch (Exception ex) { throw new DataCardStepException("revise", $"Vault refused the change to {toStateName}: {ex.Message}"); }
+        var now = Conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(latest.MasterId);
+        var state = now?.FileLfCyc?.LfCycStateName ?? "";
+        if (!string.Equals(state, toStateName, StringComparison.OrdinalIgnoreCase))
+            throw new DataCardStepException("revise", $"Vault reports the state as '{state}' after the change to {toStateName}.");
+        return new DataCardStateChange(state, VaultFiles.RevisionOf(now));
+    }
+
+    public bool? LinkedToItem(DataCardFileInfo file)
+    {
+        try
+        {
+            var latest = Latest(file);
+            var items = Conn.WebServiceManager.ItemService.GetItemsByFileId(latest.Id);
+            return items is { Length: > 0 };
+        }
+        catch (Exception) { return null; }
+    }
+
+    public string? ReadPropertyCompliance(DataCardFileInfo file)
+    {
+        try
+        {
+            var latest = Latest(file);
+            var ps = Conn.WebServiceManager.PropertyService;
+            var def = ps.GetPropertyDefinitionsByEntityClassId("FILE")?
+                .FirstOrDefault(d => string.Equals(d.DispName, "Property Compliance", StringComparison.OrdinalIgnoreCase));
+            if (def is null) return null;
+            var inst = ps.GetPropertiesByEntityIds("FILE", new[] { latest.Id })?.FirstOrDefault(i => i.PropDefId == def.Id);
+            return inst?.Val?.ToString();
+        }
+        catch (Exception) { return null; }
     }
 
     // ---- Apply ----
@@ -333,7 +442,14 @@ internal sealed class DataCardHost : IDataCardHost
     {
         if (c.Prop.Set == PropSet.Design)
         {
-            doc.PropertySets["Design Tracking Properties"][c.Prop.Name].Value = c.To;
+            var prop = doc.PropertySets["Design Tracking Properties"][c.Prop.Name];
+            // Number-typed properties (Cost) take a double, converted with the invariant culture; Core already rejected non-numbers.
+            if (DataCardFix.IsNumeric(c.Prop) || prop.Value is double or decimal or float)
+            {
+                if (!DataCardFix.TryParseNumber(c.To, out var d)) throw new DataCardStepException("set", $"{c.Prop.Name} must be a number");
+                prop.Value = d;
+            }
+            else prop.Value = c.To;
             return;
         }
         var user = doc.PropertySets["Inventor User Defined Properties"];

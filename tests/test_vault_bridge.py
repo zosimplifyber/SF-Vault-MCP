@@ -228,3 +228,14 @@ def test_fix_data_card_cli_parsing(server, capsys):
 def test_fix_data_card_cli_rejects_bad_pair():
     with pytest.raises(SystemExit):
         vb.main(["fix-data-card", "a.ipt", "--set", "novalue"])
+
+
+def test_fix_data_card_revise_released_flag(server):
+    server.replies["fix_data_card"] = (200, {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    vb.fix_data_card(["a.ipt"], design={"Cost": "12.5"})
+    vb.fix_data_card(["a.ipt"], revise_released=True)
+    assert vb.main(["fix-data-card", "a.ipt", "--set", "Cost=1.25", "--revise-released"]) == 0
+    assert "reviseReleased" not in server.seen[0][1]
+    assert server.seen[0][1]["design"] == {"Cost": "12.5"}
+    assert server.seen[1][1]["reviseReleased"] is True
+    assert server.seen[2][1]["reviseReleased"] is True and server.seen[2][1]["dryRun"] is True

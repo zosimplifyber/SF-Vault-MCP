@@ -65,6 +65,10 @@ py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --app
 
 Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, an assembly (.iam is not supported yet), not an .ipt, a local copy that differs from Vault, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
 
+Numeric Design properties (`Cost`) are converted with the invariant culture (`--set Cost=12.50`); a non-number is a per-file error, "Cost must be a number".
+
+Released files are skipped unless you pass `--revise-released`. Then, for a file in the state named `Released`, the add-in moves it to `Work in Progress`, does the normal checkout, edit and check-in, and moves it back to `Released`, looking each transition up by state name in the file's lifecycle definition (via `DocumentServiceExtensions.UpdateFileLifeCycleStates`). Both transitions are checked before anything changes, and the dry run shows `would_revise: true` and the transition names. If the edit fails the file is still returned to `Released`; if it cannot be returned the result is `status: "error", step: "re_release"` with the actual `state_after`. Content Center files are never revised. Results carry `revision_before`, `revision_after`, `state_after`, and `linked_to_item: true` for files linked to an item (the item is not touched).
+
 ## Dropbox upload (Partner Packages)
 
 Partner Packages can upload the zip to `/Suppliers/<Partner>/` in the team Dropbox and make a view-only shared link. The upload code is in the add-in; the Partner Package form does not call it yet.

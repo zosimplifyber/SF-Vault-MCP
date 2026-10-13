@@ -3,7 +3,7 @@ using SFVaultBridge.Core;
 
 namespace SFVaultBridge.Core.Tests;
 
-public class DataCardFixTests
+public partial class DataCardFixTests
 {
     private static DataCardFileInfo Info(string name = "CD-001885.ipt", string path = "$/DESIGNS/Simplifyber Library/McMaster-Carr/washers/CD-001885.ipt",
         string category = "Part - Purchased", string state = "Work in Progress", bool released = false, bool co = false, string by = "", long ver = 1)
@@ -21,12 +21,41 @@ public class DataCardFixTests
         public Exception? ReadThrows;
         public Exception? FindThrows;
         public string? Warning;
+        public Dictionary<string, string> StateByPath = new();      // simulated live state, set by ChangeState
+        public RevisePlan Plan = new(null, "Released -> Work in Progress", "Work in Progress -> Released");
+        public string? FailChangeTo;                                  // ChangeState to this state throws
+        public bool? Linked;
+        public bool ApplySkips;
+        public List<long> ApplyVersions = new();
+        public string? Compliance = "Compliant";
+        public bool BumpVersionOnState;                               // a state change creates a new version, as in real Vault
+        public string? ThrowAfterChangeTo;                            // the state changes, then ChangeState reports failure
+        public Dictionary<string, long> VersionByPath = new();
 
         public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file)
         {
             if (FindThrows is not null) throw FindThrows;
-            return Files.TryGetValue(file.Text, out var l) ? l : new List<DataCardFileInfo>();
+            var l = Files.TryGetValue(file.Text, out var x) ? x
+                  : Files.Values.SelectMany(v => v).Where(i => string.Equals(i.VaultPath, file.Text, StringComparison.OrdinalIgnoreCase)).ToList();
+            return l.Select(i => StateByPath.TryGetValue(i.VaultPath, out var st)
+                ? i with { State = st, Released = st == "Released", Revision = st == "Released" ? "B" : "A" } : i)
+                .Select(i => VersionByPath.TryGetValue(i.VaultPath, out var v) ? i with { Version = v } : i).ToList();
         }
+
+        public RevisePlan PlanRevise(DataCardFileInfo f) { Calls.Add("plan " + f.Name); return Plan; }
+
+        public DataCardStateChange ChangeState(DataCardFileInfo f, string toStateName, string comment)
+        {
+            Calls.Add($"state {f.Name} -> {toStateName}");
+            if (FailChangeTo == toStateName) throw new DataCardStepException("revise", "Vault refused");
+            StateByPath[f.VaultPath] = toStateName;
+            if (BumpVersionOnState) VersionByPath[f.VaultPath] = f.Version + 1;
+            if (ThrowAfterChangeTo == toStateName) throw new DataCardStepException("revise", "timed out after the change was made");
+            return new DataCardStateChange(toStateName, toStateName == "Released" ? "B" : "A");
+        }
+
+        public bool? LinkedToItem(DataCardFileInfo f) => Linked;
+        public string? ReadPropertyCompliance(DataCardFileInfo f) => Compliance;
 
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo f, IReadOnlyList<PropRef> props)
         {
@@ -38,6 +67,8 @@ public class DataCardFixTests
 
         public DataCardApplied Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment)
         {
+            ApplyVersions.Add(f.Version);
+            if (ApplySkips) throw new DataCardSkipException("open and dirty");
             Calls.Add($"apply {f.Name} [{string.Join(",", changes.Select(c => c.Prop.Name))}] {comment}");
             if (FailApply) throw new DataCardStepException("checkin", "boom (the checkout was undone)");
             return new DataCardApplied(Warning is null ? f.Version + 1 : -1, Warning);
@@ -45,8 +76,8 @@ public class DataCardFixTests
     }
 
     private static DataCardRequest Req(string[] files, bool dry = true, string? comment = null, bool pn = true,
-        Dictionary<string, string>? design = null, Dictionary<string, string>? custom = null)
-        => new(files, design ?? new(), custom ?? new(), pn, dry, comment);
+        Dictionary<string, string>? design = null, Dictionary<string, string>? custom = null, bool revise = false)
+        => new(files, design ?? new(), custom ?? new(), pn, dry, comment, revise);
 
     [Fact]
     public void ParseFile_tells_bare_names_from_vault_paths()
@@ -230,6 +261,10 @@ public class DataCardFixTests
             Files.TryGetValue(file.Text, out var l) ? l : throw new BridgeException("not_signed_in", "Sign in.");
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo f, IReadOnlyList<PropRef> props) => new Dictionary<PropRef, string?>();
         public DataCardApplied Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment) => new(2);
+        public RevisePlan PlanRevise(DataCardFileInfo f) => new("none");
+        public DataCardStateChange ChangeState(DataCardFileInfo f, string toStateName, string comment) => new(toStateName, "");
+        public bool? LinkedToItem(DataCardFileInfo f) => null;
+        public string? ReadPropertyCompliance(DataCardFileInfo f) => null;
     }
 
     [Fact]
