@@ -51,10 +51,22 @@ internal sealed class StepImporter : IStepImporter
             }
 
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outIpt)!);
-            doc.SaveAs(outIpt, false);
-            if (!System.IO.File.Exists(outIpt))
+            try { doc.SaveAs(outIpt, false); }
+            catch (COMException ex) { throw new BridgeException("save_failed", $"Inventor could not save {outIpt}: {ex.Message}"); }
+            if (System.IO.File.Exists(outIpt)) return outIpt;
+
+            // Vault's Inventor add-in can apply its own file numbering on save and write the next CD number instead of ours.
+            var saved = doc.FullFileName;
+            if (string.IsNullOrEmpty(saved) || !System.IO.File.Exists(saved))
                 throw new BridgeException("save_failed", $"Inventor did not save {outIpt}. Check for a Vault Data Standard or save dialog.");
-            return outIpt;
+            if (!ImportRules.IsVaultRenumberedSave(outIpt, saved))
+                throw new BridgeException("save_failed", $"Inventor saved the part as {saved} instead of {outIpt}. It is not in Vault; delete it and retry.");
+            var cd = System.IO.Path.GetFileNameWithoutExtension(saved);
+            tracking = doc.PropertySets["Design Tracking Properties"];
+            tracking["Part Number"].Value = cd;
+            doc.Save();
+            warnings?.Add($"Vault numbered the part {cd} on save (the tool had reserved {System.IO.Path.GetFileNameWithoutExtension(outIpt)}).");
+            return saved;
         }
         finally
         {

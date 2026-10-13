@@ -100,6 +100,14 @@ public static class ImportRules
         return last.Length == 0 ? parts[0] : $"{parts[0]} {char.ToUpperInvariant(last[0])}.";
     }
 
+    /// <summary>True when Inventor saved the part under a different CD-###### .ipt name in the same folder (Vault numbering on save).</summary>
+    public static bool IsVaultRenumberedSave(string requested, string saved)
+    {
+        if (string.Equals(requested, saved, StringComparison.OrdinalIgnoreCase)) return false;
+        var sameDir = string.Equals(System.IO.Path.GetDirectoryName(requested), System.IO.Path.GetDirectoryName(saved), StringComparison.OrdinalIgnoreCase);
+        return sameDir && System.Text.RegularExpressions.Regex.IsMatch(System.IO.Path.GetFileName(saved), @"^CD-\d{6}\.ipt$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
     public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };
 
     /// <summary>Names of the data-card properties whose value (read through valueOf) is blank.</summary>

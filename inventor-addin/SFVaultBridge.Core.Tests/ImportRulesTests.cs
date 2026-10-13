@@ -218,4 +218,14 @@ public class ImportRulesTests
     [InlineData(null, "")]
     public void Designer_name_is_first_name_and_last_initial(string? input, string expected) =>
         Assert.Equal(expected, ImportRules.DesignerName(input));
+
+    [Theory]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\CD-001907.ipt", true)]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\cd-001907.IPT", true)]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\CD-001906.ipt", false)]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\nuts\CD-001907.ipt", false)]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\Part1.ipt", false)]
+    [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\CD-001907.stp", false)]
+    public void Vault_renumbered_save_is_a_cd_ipt_in_the_same_folder(string requested, string saved, bool expected) =>
+        Assert.Equal(expected, ImportRules.IsVaultRenumberedSave(requested, saved));
 }

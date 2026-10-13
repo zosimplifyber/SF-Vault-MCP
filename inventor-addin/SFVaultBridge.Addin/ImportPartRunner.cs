@@ -67,8 +67,18 @@ internal static class ImportPartRunner
                 ["Engr Approved By"] = "NOT REVIEWED",
             };
             custom["Material Finish"] = ImportRules.NormalizeFinish(plan.MaterialFinish);
-            new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings);
+            var savedIpt = new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings);
             partDone = true;
+            if (!string.Equals(savedIpt, localIpt, StringComparison.OrdinalIgnoreCase))
+            {
+                localIpt = savedIpt;
+                cd = System.IO.Path.GetFileNameWithoutExtension(savedIpt);
+                partName = ImportRules.PartFileName(cd);
+                pdfName = ImportRules.PdfFileName(cd, plan);
+                var clash = VaultFiles.FindByNameContaining(cd).Where(f => ImportRules.IsNumberClash(f.Name, cd)).Select(f => f.Name).ToList();
+                if (clash.Count > 0)
+                    throw new StepFailure(step, $"Vault numbered the part {cd} on save, but Vault already has {string.Join(", ", clash)}. Nothing was added to Vault.");
+            }
 
             step = "pdf";
             var pdfLocal = System.IO.Path.Combine(localDir, pdfName);
