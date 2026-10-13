@@ -10,7 +10,14 @@ public sealed record PropChange(PropRef Prop, string? From, string To);
 
 /// <summary>What the Vault says about the latest version of one file.</summary>
 public sealed record DataCardFileInfo(string VaultPath, string Name, string Category, string State, bool Released,
-                                      bool CheckedOut, string CheckedOutBy, long Version);
+                                      bool CheckedOut, string CheckedOutBy, long Version,
+                                      string? Unreadable = null);
+
+/// <summary>Result of a successful check-in. Version is -1 when it could not be read back; Warning says why.</summary>
+public sealed record DataCardApplied(long Version, string? Warning = null);
+
+/// <summary>One file association row as Vault reports it.</summary>
+public sealed record AssocRow(long ParFileId, long CldFileId, string Type, string? RefId, string? Source, string? ExpectedVaultPath);
 
 /// <summary>A "files" entry: a bare file name or a full $/ Vault path.</summary>
 public sealed record DataCardFileRef(string Text, bool IsPath);
@@ -39,8 +46,8 @@ public interface IDataCardHost
     /// Throws DataCardSkipException when the file is open in Inventor with unsaved changes.</summary>
     IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo file, IReadOnlyList<PropRef> props);
 
-    /// <summary>Check out, set, save, check in with the comment (undoing the checkout on any failure). Returns the new version number.</summary>
-    long Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment);
+    /// <summary>Check out, set, save, check in with the comment. Any failure before the check-in succeeds undoes the checkout; nothing after it does.</summary>
+    DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment);
 }
 
 public sealed record DataCardRequest(IReadOnlyList<string> Files, IReadOnlyDictionary<string, string> Design,
@@ -75,8 +82,10 @@ public static class DataCardFix
     public static string? SkipReason(DataCardFileInfo f)
     {
         var ext = Path.GetExtension(f.Name);
-        if (!ext.Equals(".ipt", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".iam", StringComparison.OrdinalIgnoreCase))
-            return $"{f.Name} is not an .ipt or .iam file.";
+        if (ext.Equals(".iam", StringComparison.OrdinalIgnoreCase)) return "assemblies are not supported yet";
+        if (!ext.Equals(".ipt", StringComparison.OrdinalIgnoreCase))
+            return $"{f.Name} is not an .ipt file.";
+        if (f.Unreadable is not null) return f.Unreadable;
         if (f.CheckedOut)
             return $"{f.Name} is checked out by {(string.IsNullOrWhiteSpace(f.CheckedOutBy) ? "someone" : f.CheckedOutBy)}. Check it in or undo the checkout first.";
         if (f.Released || string.Equals(f.State, "Released", StringComparison.OrdinalIgnoreCase))
@@ -105,11 +114,17 @@ public static class DataCardFix
         foreach (var (p, to) in wanted)
         {
             current.TryGetValue(p, out var from);
-            if (string.Equals((from ?? "").Trim(), to.Trim(), StringComparison.Ordinal)) continue;
+            if (string.Equals(from ?? "", to, StringComparison.Ordinal)) continue;
             changes.Add(new PropChange(p, from, to));
         }
         return changes;
     }
+
+    /// <summary>The child Dependency and Attachment rows of the parent file, de-duplicated, to re-pass on check-in so the new version keeps its associations.</summary>
+    public static IReadOnlyList<AssocRow> ChildAssociations(IEnumerable<AssocRow> rows, long parentFileId) =>
+        rows.Where(r => r.ParFileId == parentFileId && (r.Type == "Dependency" || r.Type == "Attachment"))
+            .GroupBy(r => (r.CldFileId, r.Type, r.RefId))
+            .Select(g => g.First()).ToList();
 
     public static string DefaultComment(IEnumerable<PropChange> changes) =>
         "Data card fix: " + string.Join(", ", changes.Select(c => c.Prop.Name).Distinct());
@@ -120,7 +135,20 @@ public static class DataCardFix
         var counts = new Dictionary<string, int> { ["preview"] = 0, ["fixed"] = 0, ["no_change"] = 0, ["skipped"] = 0, ["error"] = 0 };
         foreach (var arg in req.Files.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var r = RunOne(arg, req, host);
+            JsonObject r;
+            try { r = RunOne(arg, req, host); }
+            catch (BridgeException ex) when (ex.Code == "not_signed_in")
+            {
+                // The session dropped: keep what is already done and mark this and every remaining file as an error.
+                foreach (var rest in req.Files.Distinct(StringComparer.OrdinalIgnoreCase).SkipWhile(f => !string.Equals(f, arg, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var e = Error(rest, "sign_in", ex.Message);
+                    counts["error"]++;
+                    log?.Invoke($"fix_data_card {rest}: error {ex.Message}");
+                    results.Add(e);
+                }
+                break;
+            }
             var status = r["status"]!.GetValue<string>();
             counts[status]++;
             var detail = r["reason"] ?? r["message"] ?? r["version"];
@@ -158,12 +186,15 @@ public static class DataCardFix
                 return new JsonObject { ["file"] = info.VaultPath, ["status"] = "preview", ["changes"] = ChangesJson(changes) };
 
             var comment = req.Comment ?? DefaultComment(changes);
-            var version = host.Apply(info, changes, comment);
-            return new JsonObject { ["file"] = info.VaultPath, ["status"] = "fixed", ["version"] = version, ["changes"] = ChangesJson(changes) };
+            var applied = host.Apply(info, changes, comment);
+            var fixedResult = new JsonObject { ["file"] = info.VaultPath, ["status"] = "fixed", ["version"] = applied.Version >= 0 ? applied.Version : null, ["changes"] = ChangesJson(changes) };
+            if (applied.Warning is not null) fixedResult["warning"] = applied.Warning;
+            return fixedResult;
         }
         catch (DataCardSkipException ex) { return Skipped(info?.VaultPath ?? arg, ex.Message); }
         catch (DataCardStepException ex) { return Error(info?.VaultPath ?? arg, ex.Step, ex.Message); }
         catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
+        catch (BridgeException ex) { return Error(info?.VaultPath ?? arg, ex.Code, ex.Message); }
         catch (Exception ex) { return Error(info?.VaultPath ?? arg, "unexpected", ex.Message); }
     }
 

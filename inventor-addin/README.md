@@ -63,7 +63,7 @@ py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --set
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --apply --comment "Data card fix"
 ```
 
-Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, not .ipt/.iam, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
+Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, an assembly (.iam is not supported yet), not an .ipt, a local copy that differs from Vault, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
 
 ## Uninstall
 

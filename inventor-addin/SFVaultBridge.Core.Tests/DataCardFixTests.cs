@@ -18,22 +18,29 @@ public class DataCardFixTests
         public List<string> Calls = new();
         public bool FailApply;
         public bool SkipRead;
+        public Exception? ReadThrows;
+        public Exception? FindThrows;
+        public string? Warning;
 
-        public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file) =>
-            Files.TryGetValue(file.Text, out var l) ? l : new List<DataCardFileInfo>();
+        public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file)
+        {
+            if (FindThrows is not null) throw FindThrows;
+            return Files.TryGetValue(file.Text, out var l) ? l : new List<DataCardFileInfo>();
+        }
 
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo f, IReadOnlyList<PropRef> props)
         {
             Calls.Add("read " + f.Name);
+            if (ReadThrows is not null) throw ReadThrows;
             if (SkipRead) throw new DataCardSkipException("open and dirty");
             return Current;
         }
 
-        public long Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment)
+        public DataCardApplied Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment)
         {
             Calls.Add($"apply {f.Name} [{string.Join(",", changes.Select(c => c.Prop.Name))}] {comment}");
             if (FailApply) throw new DataCardStepException("checkin", "boom (the checkout was undone)");
-            return f.Version + 1;
+            return new DataCardApplied(Warning is null ? f.Version + 1 : -1, Warning);
         }
     }
 
@@ -54,7 +61,8 @@ public class DataCardFixTests
     {
         Assert.Null(DataCardFix.SkipReason(Info()));
         Assert.Contains("not an .ipt", DataCardFix.SkipReason(Info("a.idw", "$/a.idw"))!);
-        Assert.Null(DataCardFix.SkipReason(Info("A.IAM", "$/A.IAM")));
+        Assert.Equal("assemblies are not supported yet", DataCardFix.SkipReason(Info("A.IAM", "$/A.IAM")));
+        Assert.Equal("could not read lifecycle state", DataCardFix.SkipReason(Info() with { Unreadable = "could not read lifecycle state" }));
         Assert.Contains("checked out by Zak", DataCardFix.SkipReason(Info(co: true, by: "Zak"))!);
         Assert.Contains("Released", DataCardFix.SkipReason(Info(state: "released"))!);
         Assert.Contains("Released", DataCardFix.SkipReason(Info(state: "Anything", released: true))!);
@@ -198,5 +206,93 @@ public class DataCardFixTests
         Assert.Equal("c", r2.Comment);
         Assert.Equal("V", r2.Design["Vendor"]);
         Assert.Equal("Buy", r2.Custom["Source"]);
+    }
+
+    [Fact]
+    public void Sign_in_loss_keeps_results_so_far_and_errors_the_rest()
+    {
+        var h = new SignInHost();
+        h.Files["a.ipt"] = new() { Info("a.ipt", "$/a.ipt") };
+        var log = new List<string>();
+        var o = DataCardFix.Run(Req(new[] { "a.ipt", "b.ipt", "c.ipt" }, dry: false), h, log.Add);
+        var st = o["results"]!.AsArray().Select(n => n!["status"]!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "fixed", "error", "error" }, st);
+        Assert.Equal("sign_in", o["results"]![1]!["step"]!.GetValue<string>());
+        Assert.Equal("c.ipt", o["results"]![2]!["file"]!.GetValue<string>());
+        Assert.Equal(2, o["counts"]!["error"]!.GetValue<int>());
+        Assert.Equal(3, log.Count);
+    }
+
+    private sealed class SignInHost : IDataCardHost
+    {
+        public Dictionary<string, List<DataCardFileInfo>> Files = new(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file) =>
+            Files.TryGetValue(file.Text, out var l) ? l : throw new BridgeException("not_signed_in", "Sign in.");
+        public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo f, IReadOnlyList<PropRef> props) => new Dictionary<PropRef, string?>();
+        public DataCardApplied Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment) => new(2);
+    }
+
+    [Fact]
+    public void Arbitrary_read_failure_is_an_error_at_step_read()
+    {
+        var h = new FakeHost { ReadThrows = new InvalidOperationException("kaput") };
+        h.Files["CD-001885.ipt"] = new() { Info() };
+        var r = DataCardFix.Run(Req(new[] { "CD-001885.ipt" }), h)["results"]![0]!;
+        Assert.Equal("error", r["status"]!.GetValue<string>());
+        Assert.Equal("read", r["step"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Read_back_failure_after_checkin_is_fixed_with_a_warning()
+    {
+        var h = new FakeHost { Warning = "could not read version" };
+        h.Files["CD-001885.ipt"] = new() { Info() };
+        var r = DataCardFix.Run(Req(new[] { "CD-001885.ipt" }, dry: false), h)["results"]![0]!;
+        Assert.Equal("fixed", r["status"]!.GetValue<string>());
+        Assert.Null(r["version"]);
+        Assert.Equal("could not read version", r["warning"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Duplicate_files_are_processed_once_and_assemblies_skipped_end_to_end()
+    {
+        var h = new FakeHost();
+        h.Files["CD-001885.ipt"] = new() { Info() };
+        h.Files["a.iam"] = new() { Info("a.iam", "$/a.iam") };
+        var o = DataCardFix.Run(Req(new[] { "CD-001885.ipt", "cd-001885.IPT", "a.iam" }), h);
+        Assert.Equal(2, o["results"]!.AsArray().Count);
+        Assert.Equal("assemblies are not supported yet", o["results"]![1]!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Whitespace_only_differences_are_changes()
+    {
+        var wanted = new Dictionary<PropRef, string> { [Pn] = "CD-1" };
+        Assert.Single(DataCardFix.ComputeChanges(wanted, new Dictionary<PropRef, string?> { [Pn] = "CD-1 " }));
+    }
+
+    [Fact]
+    public void Bool_arguments_must_be_booleans()
+    {
+        var ex = Assert.Throws<BridgeException>(() => DataCardFix.ParseRequest(JsonNode.Parse("""{"files":["a.ipt"],"dryRun":"no"}""")!.AsObject()));
+        Assert.Equal("bad_request", ex.Code);
+    }
+
+    [Fact]
+    public void Child_associations_keep_dependencies_and_attachments_of_the_parent_only()
+    {
+        var rows = new[]
+        {
+            new AssocRow(10, 20, "Dependency", "ref1", "src", "$/a/child.ipt"),
+            new AssocRow(10, 21, "Attachment", null, null, null),
+            new AssocRow(10, 20, "Dependency", "ref1", "src", "$/a/child.ipt"),
+            new AssocRow(99, 10, "Dependency", "r", null, null),
+            new AssocRow(10, 22, "Other", null, null, null),
+        };
+        var kept = DataCardFix.ChildAssociations(rows, 10);
+        Assert.Equal(2, kept.Count);
+        Assert.Equal("ref1", kept.Single(k => k.Type == "Dependency").RefId);
+        Assert.Contains(kept, k => k.CldFileId == 21 && k.Type == "Attachment");
+        Assert.Empty(DataCardFix.ChildAssociations(Array.Empty<AssocRow>(), 10));
     }
 }
