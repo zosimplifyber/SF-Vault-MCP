@@ -348,7 +348,8 @@ internal sealed class PackageBuilder
                     var d = r.Drawing;
                     gate.Add(new GatePart(pn, true, VaultFiles.StateOf(r.Model), r.Model.CheckedOut, CheckedOutBy(r.Model), OpenDirty(r.ModelLocal),
                                           needDrawing, d is not null, d is null ? "" : VaultFiles.StateOf(d),
-                                          d?.CheckedOut ?? false, d is null ? null : CheckedOutBy(d), d is not null && OpenDirty(r.DrawingLocal)));
+                                          d?.CheckedOut ?? false, d is null ? null : CheckedOutBy(d), d is not null && OpenDirty(r.DrawingLocal),
+                                          OpenOlder(r.ModelLocal, r.Model), d is not null && OpenOlder(r.DrawingLocal, d)));
                 }
                 catch (Exception ex)
                 {
@@ -380,6 +381,19 @@ internal sealed class PackageBuilder
             _log($"check-out user lookup failed: {ex.Message}");
             return "someone else";
         }
+    }
+
+    /// <summary>Open in Inventor, not dirty, but the local file predates the latest Vault version.</summary>
+    private bool OpenOlder(string? local, WsFile latest)
+    {
+        if (string.IsNullOrEmpty(local)) return false;
+        try
+        {
+            var doc = DocumentOpener.FindOpen(_app, local);
+            if (doc is null || doc.Dirty) return false;
+            return LocalCopy.IsOlderThanLatest(System.IO.File.GetLastWriteTimeUtc(local), latest.ModDate.ToUniversalTime());
+        }
+        catch { return false; }
     }
 
     private bool OpenDirty(string? local)

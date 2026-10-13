@@ -50,6 +50,29 @@ public class ReleaseGateTests
     }
 
     [Fact]
+    public void Open_at_older_version_blocks_model_and_drawing()
+    {
+        var b = ReleaseGate.Check(new[] { Ok() with { ModelOpenOlder = true, DrawingOpenOlder = true } });
+        Assert.Equal(new[] { "CD-1: model is open in Inventor at an older version; close it or Get Latest; drawing is open in Inventor at an older version; close it or Get Latest" }, b);
+    }
+
+    [Fact]
+    public void Dirty_wins_over_older()
+    {
+        var b = ReleaseGate.Check(new[] { Ok() with { ModelOpenDirty = true, ModelOpenOlder = true } });
+        Assert.Equal(new[] { "CD-1: model is open in Inventor with unsaved changes" }, b);
+    }
+
+    [Fact]
+    public void Older_check_uses_two_second_slack()
+    {
+        var t = new DateTime(2026, 10, 13, 12, 0, 0, DateTimeKind.Utc);
+        Assert.True(LocalCopy.IsOlderThanLatest(t.AddMinutes(-5), t));
+        Assert.False(LocalCopy.IsOlderThanLatest(t.AddSeconds(-1), t));
+        Assert.False(LocalCopy.IsOlderThanLatest(t.AddMinutes(5), t));
+    }
+
+    [Fact]
     public void Unknown_state_blocks()
     {
         var b = ReleaseGate.Check(new[] { Ok() with { ModelState = "" } });
