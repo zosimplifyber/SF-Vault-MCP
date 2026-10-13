@@ -167,10 +167,11 @@ public static class ToolResults
                               o["mode"] is JsonValue mv && mv.TryGetValue<string>(out var mode) ? mode : null);
     }
 
-    public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath, string? source = null)
+    public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath, string? source = null, double? salesTaxRate = null)
     {
         var args = new List<string> { "purchasing", "--bom", bom, "--assembly", assembly, "--out", outDir, "--name", name, "--result", resultPath };
         if (!string.IsNullOrWhiteSpace(source)) { args.Add("--source"); args.Add(source); }
+        if (salesTaxRate is double rate) { args.Add("--sales-tax-rate"); args.Add(rate.ToString("R", System.Globalization.CultureInfo.InvariantCulture)); }
         return args;
     }
 

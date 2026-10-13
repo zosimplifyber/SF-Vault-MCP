@@ -6,8 +6,9 @@ using System.Text.Json.Nodes;
 namespace SFVaultBridge.Core;
 
 /// <summary>The per-user settings file: Process values, print materials and recent partner names.</summary>
-public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "")
+public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "", double SalesTaxRate = BridgeSettings.DefaultSalesTaxRate)
 {
+    public const double DefaultSalesTaxRate = 0.07;
     public const int MaxRecent = 10;
 
     private static readonly BridgeSettings DefaultsValue = new(
@@ -34,7 +35,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             Strings(root, "processValues") ?? DefaultsValue.ProcessValues,
             Strings(root, "printMaterials") ?? DefaultsValue.PrintMaterials,
             Normalize(Strings(root, "recentPartners") ?? DefaultsValue.RecentPartners),
-            AppKey(root));
+            AppKey(root), Rate(root));
     }
 
     public static IReadOnlyList<string> WithRecent(IReadOnlyList<string> recent, string partner)
@@ -65,6 +66,12 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
     private static string AppKey(JsonObject root) =>
         root["dropboxAppKey"] is JsonValue v && v.TryGetValue<string>(out var k) ? k.Trim() : "";
 
+    private static double Rate(JsonObject root)
+    {
+        if (root["salesTaxRate"] is JsonValue v && v.TryGetValue<double>(out var r) && r >= 0 && r < 1 && double.IsFinite(r)) return r;
+        return DefaultSalesTaxRate;
+    }
+
     private static List<string>? Strings(JsonObject root, string key)
     {
         if (root[key] is not JsonArray a) return null;
@@ -81,6 +88,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             ["printMaterials"] = new JsonArray(s.PrintMaterials.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
             ["recentPartners"] = new JsonArray(recent.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
             ["dropboxAppKey"] = s.DropboxAppKey,
+            ["salesTaxRate"] = s.SalesTaxRate,
         }.ToJsonString(Indented);
 
     private static bool TryRead(string path, Action<string> log, out JsonObject? root)

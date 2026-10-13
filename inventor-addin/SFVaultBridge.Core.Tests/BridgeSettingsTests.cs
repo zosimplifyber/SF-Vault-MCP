@@ -21,6 +21,28 @@ public class BridgeSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Sales_tax_rate_defaults_to_seven_percent_and_is_written()
+    {
+        Assert.Equal(0.07, BridgeSettings.Defaults.SalesTaxRate);
+        var s = BridgeSettings.Load(P, _ => { });
+        Assert.Equal(0.07, s.SalesTaxRate);
+        Assert.Equal(0.07, JsonNode.Parse(File.ReadAllText(P))!["salesTaxRate"]!.GetValue<double>());
+    }
+
+    [Theory]
+    [InlineData("0.0825", 0.0825)]
+    [InlineData("0", 0.0)]
+    [InlineData("-1", 0.07)]
+    [InlineData("7", 0.07)]
+    [InlineData("\"x\"", 0.07)]
+    public void Sales_tax_rate_is_read_from_json(string json, double expected)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(P)!);
+        File.WriteAllText(P, "{\"salesTaxRate\": " + json + "}");
+        Assert.Equal(expected, BridgeSettings.Load(P, _ => { }).SalesTaxRate);
+    }
+
+    [Fact]
     public void Load_missing_writes_defaults()
     {
         var s = BridgeSettings.Load(P, _ => { });
