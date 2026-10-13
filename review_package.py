@@ -349,7 +349,7 @@ def _budget_page(b: dict[str, Any]) -> bytes:
     if b["unpriced"]:
         facts.append(f"Partial: {len(b['unpriced'])} purchased parts have no price")
     if b["tariff_missing"]:
-        facts.append(f"Tariff not entered: {b['tariff_missing']} tariffed parts (left out of the total)")
+        facts.append(f"Tariff not entered: {b['tariff_missing']} tariffed parts; their price is in the subtotal but their tariff is not, so the total is low")
     facts.append(f"Make parts: {b['make']} (not priced)")
     facts.append(f"Prices: File {b['file']} / List {b['list']}")
     if b["note"]:
