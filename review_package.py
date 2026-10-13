@@ -47,7 +47,7 @@ def _para(text: Any, style) -> Paragraph:
 
 
 def _is_released(d: dict[str, Any]) -> bool:
-    return str(d.get("state") or "").strip().lower() == "released"
+    return bp.is_released(str(d.get("state") or ""))
 
 
 def _assembly_cover(m: dict[str, Any], usable: list, failed: list[dict[str, str]]) -> bytes:

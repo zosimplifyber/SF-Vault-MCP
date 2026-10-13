@@ -364,3 +364,8 @@ def test_bom_key_lists_the_colours_the_table_can_use():
     assert [c for c, _ in rp.bom_key(cols, True)] == ["#FFF59D", "#FFCC80"]
     assert [c for c, _ in rp.bom_key(cols, False)] == ["#FFF59D"]
     assert rp.bom_key(["Item", "Description"], False) == []
+
+
+def test_library_state_counts_as_released():
+    import bom_purchasing as bp
+    assert bp.is_released("Library") and bp.is_released(" released ") and not bp.is_released("Library Edit")

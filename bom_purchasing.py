@@ -42,11 +42,15 @@ UNMATCHED_FILL = "FCE4D6"  # light orange — a Buy part with no price found
 UNRELEASED_FILL = "FFF59D"  # light yellow — a row whose Vault state is not Released
 
 
+RELEASED_STATE_NAMES = {"released", "library"}
+
+
 def is_released(value: Any) -> bool:
-    """True only when the state reads "Released" (None, NaN, blanks and non-strings are not)."""
+    """True when the state is a released state: "Released", or "Library" (the released state of the
+    Library lifecycle for purchased and Content Center parts). None, NaN, blanks and non-strings are not."""
     if value is None or not isinstance(value, str):
         return False
-    return value.strip().lower() == "released"
+    return value.strip().lower() in RELEASED_STATE_NAMES
 
 
 # ---------------------------------------------------------------------------

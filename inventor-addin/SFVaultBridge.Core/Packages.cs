@@ -48,7 +48,9 @@ public static class PackageRules
     public static bool StampDrawing(bool quote, string? state, bool checkedOut, bool openDirty, bool openOlder) =>
         quote && (!IsReleased(state) || checkedOut || openDirty || openOlder);
 
-    public static bool IsReleased(string? state) => string.Equals(state?.Trim(), "Released", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Released state names: "Released", and "Library" (the Library lifecycle's released state for purchased and Content Center parts).</summary>
+    public static bool IsReleased(string? state) =>
+        string.Equals(state?.Trim(), "Released", StringComparison.OrdinalIgnoreCase) || string.Equals(state?.Trim(), "Library", StringComparison.OrdinalIgnoreCase);
 
     public static PackageClass Classify(BomNode node, string? vaultCategory, PrintMaterials materials, bool isSheetMetal)
     {
