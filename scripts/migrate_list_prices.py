@@ -94,6 +94,8 @@ class PlanRow:
     action: str = ""
     detail: str = ""
     error: str = ""
+    skipped: str = ""
+    note: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -124,6 +126,8 @@ def classify(row: PlanRow) -> str:
         return "content center"
     if row.error:
         return "error"
+    if row.skipped:
+        return "skipped"
     if same_number(row.current, row.new_price()):
         return "same"
     if is_released(row.state):
@@ -156,12 +160,31 @@ def is_auth_failure(message: str) -> bool:
     return any(marker in low for marker in AUTH_MARKERS)
 
 
+class AmbiguousMatch(ValueError):
+    """Files with the exact name exist in more than one Vault folder."""
+
+    def __init__(self, name: str, folders: list[str]):
+        super().__init__(f"{name} exists in several folders: {', '.join(folders)}")
+        self.folders = folders
+
+
+def _folder_of(record: dict[str, Any]) -> str:
+    folder = record.get("folder") or {}
+    return str(folder.get("fullName") or folder.get("path") or "").rstrip("/")
+
+
 def pick_latest(records: Sequence[dict[str, Any]], wanted: str) -> dict[str, Any] | None:
-    """The exact (case-insensitive) name match with the highest version number."""
+    """The exact (case-insensitive) name match with the highest version number.
+
+    Raises AmbiguousMatch when exact matches sit in more than one folder.
+    """
     low = wanted.strip().lower()
     exact = [r for r in records if str(r.get("name", "")).strip().lower() == low]
     if not exact:
         return None
+    folders = sorted({_folder_of(r) for r in exact}, key=str.lower)
+    if len(folders) > 1:
+        raise AmbiguousMatch(wanted, [f or "(unknown folder)" for f in folders])
 
     def version(r: dict[str, Any]) -> int:
         for key in ("version", "versionNumber"):
@@ -195,6 +218,11 @@ def plan_rows(rows: Iterable[dict[str, Any]], lookup: Callable[[str], dict[str, 
         if row.price is not None:
             try:
                 found = lookup(number)
+            except AmbiguousMatch as exc:
+                row.action = "ambiguous"
+                row.detail = f"found in more than one folder: {'; '.join(exc.folders)}"
+                plan.append(row)
+                continue
             except VaultLookupError as exc:
                 row.action = "lookup error"
                 row.detail = str(exc)
@@ -259,11 +287,11 @@ def fill_current_costs(plan: list[PlanRow], fix: FixFn, batch: int = 20) -> None
     except StopSignIn as exc:
         for r in plan:
             r.action = classify(r)
-            r.detail = r.error
+            r.detail = r.error or r.skipped or r.note
         raise RunStopped(str(exc), plan) from exc
     for r in plan:
         r.action = classify(r)
-        r.detail = r.error
+        r.detail = r.error or r.skipped or r.note
 
 
 def _apply_preview(rows: list[PlanRow], reply: dict[str, Any]) -> None:
@@ -279,11 +307,22 @@ def _apply_preview(rows: list[PlanRow], reply: dict[str, Any]) -> None:
                     if not r.error:
                         r.error = mine.error
                 raise StopSignIn(mine.error)
+        elif status == "skipped":
+            mine.skipped = str(res.get("reason") or res.get("message") or "skipped by the bridge")
         elif status == "no_change":
             mine.current = mine.new_price()
         elif status == "preview":
             change = (res.get("changes") or {}).get("Cost") or {}
             mine.current = "" if change.get("from") is None else str(change.get("from"))
+            notes = []
+            if res.get("would_revise"):
+                transitions = res.get("transitions")
+                if isinstance(transitions, (list, tuple)):
+                    transitions = " -> ".join(str(t) for t in transitions)
+                notes.append("would revise" + (f" ({transitions})" if transitions else ""))
+            if res.get("linked_to_item"):
+                notes.append(f"linked to item {res.get('linked_to_item')}")
+            mine.note = "; ".join(notes)
 
 
 def _match(rows: list[PlanRow], file: str) -> PlanRow | None:
@@ -333,15 +372,26 @@ def apply_updates(plan: list[PlanRow], fix: FixFn, *, batch: int = 20,
                         raise StopSignIn(str(exc)) from exc  # do not queue more writes blind
                     continue
                 signed_out = False
+                revise_stop: tuple[str, str] | None = None
                 for res in reply.get("results") or []:
                     mine = _match(group, str(res.get("file") or ""))
                     detail = res.get("reason") or res.get("message") or res.get("warning") or ""
                     if res.get("step") == "sign_in":
                         signed_out = True
+                    if revise_stop is None and (res.get("step") == "re_release"
+                                                or (include_released and res.get("status") == "error")):
+                        revise_stop = (str(res.get("file") or ""), str(detail))
                     out.append(_result(mine.number if mine else "", str(res.get("file") or ""),
                                        str(res.get("status") or ""), res.get("version"), str(detail)))
                 if signed_out:
                     raise StopSignIn("The bridge reported the Vault session dropped.")
+                if revise_stop is not None:
+                    # A failed re-release can strand the file in Work in Progress; the bridge's own stop lasts one
+                    # request only, so end the whole run here and send nothing more.
+                    print(f"STOPPED after a failed revise on {revise_stop[0]}: {revise_stop[1]}. "
+                          "The remaining files were not attempted. Check that file in Vault before rerunning.",
+                          file=sys.stderr)
+                    raise StopSignIn(f"revise failed on {revise_stop[0]}")
     except StopSignIn:
         pass
     return out

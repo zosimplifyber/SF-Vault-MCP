@@ -276,3 +276,72 @@ def test_apply_stops_after_a_timeout_that_may_have_landed():
         raise Timeout("slow")
     m.apply_updates(plan, fix, batch=1)
     assert len(calls) == 1
+
+
+def _released_plan(n=3):
+    rows = [{"Number": f"CD-{i}", "Cost Per": 20 + i} for i in range(1, n + 1)]
+    files = {f"CD-{i}": {"name": f"CD-{i}.ipt", "path": f"$/D/CD-{i}.ipt", "state": "Released", "category": "P"}
+             for i in range(1, n + 1)}
+    return m.plan_rows(rows, files.get)
+
+
+def test_apply_stops_everything_after_a_failed_re_release(capsys):
+    plan = _released_plan()
+    for r in plan:
+        r.action = "released-revise"
+    calls = []
+
+    def fix(files_, **kw):
+        calls.append(files_)
+        return {"results": [{"file": f, "status": "error", "step": "re_release", "message": "no permission"}
+                            for f in files_]}
+    results = m.apply_updates(plan, fix, batch=1, include_released=True)
+    assert len(calls) == 1 and len(results) == 1
+    err = capsys.readouterr().err
+    assert "CD-1.ipt" in err and "not attempted" in err
+
+
+def test_apply_stops_on_any_error_while_revising(capsys):
+    plan = _released_plan()
+    for r in plan:
+        r.action = "released-revise"
+    calls = []
+
+    def fix(files_, **kw):
+        calls.append(files_)
+        return {"results": [{"file": f, "status": "error", "step": "edit", "message": "boom"} for f in files_]}
+    m.apply_updates(plan, fix, batch=1, include_released=True)
+    assert len(calls) == 1
+
+
+def test_dry_run_skipped_becomes_a_skipped_action_with_reason():
+    plan = m.plan_rows([{"Number": "CD-5", "Cost Per": 100}, {"Number": "CD-4", "Cost Per": 9}], lookup)
+
+    def fix(files, **kw):
+        return {"results": [
+            {"file": "$/D/CD-5.iam", "status": "skipped", "reason": "assemblies not supported yet"},
+            {"file": "$/D/CD-4.ipt", "status": "preview", "changes": {"Cost": {"from": "2.50", "to": "9.00"}}}]}
+    m.fill_current_costs(plan, fix)
+    assert plan[0].action == "skipped" and plan[0].detail == "assemblies not supported yet"
+    assert plan[1].action == "update"
+    fake = FakeBridge()
+    m.apply_updates(plan, fake)
+    assert [f for c in fake.calls for f in c["files"]] == ["$/D/CD-4.ipt"]
+
+
+def test_exact_name_in_two_folders_is_ambiguous():
+    recs = [{"name": "CD-1.ipt", "version": 2, "folder": {"fullName": "$/A"}},
+            {"name": "CD-1.ipt", "version": 7, "folder": {"fullName": "$/B"}}]
+    with pytest.raises(m.AmbiguousMatch) as exc:
+        m.pick_latest(recs, "CD-1.ipt")
+    assert exc.value.folders == ["$/A", "$/B"]
+    same = [{"name": "CD-1.ipt", "version": 2, "folder": {"fullName": "$/A"}},
+            {"name": "CD-1.ipt", "version": 7, "folder": {"fullName": "$/A"}}]
+    assert m.pick_latest(same, "CD-1.ipt")["version"] == 7
+
+
+def test_plan_rows_marks_ambiguous():
+    def amb(number):
+        raise m.AmbiguousMatch(number, ["$/A", "$/B"])
+    plan = m.plan_rows([{"Number": "CD-1", "Cost Per": 3}], amb)
+    assert plan[0].action == "ambiguous" and "$/A" in plan[0].detail and "$/B" in plan[0].detail
