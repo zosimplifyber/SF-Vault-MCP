@@ -198,7 +198,7 @@ internal sealed class ApproveForm : Form
         var problems = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<ReleaseRowSpec>? specs = null;
         var facts = new List<ReleaseFacts>();
-        HashSet<string>? rowKeys = null;
+        Dictionary<string, string>? rowKeys = null;
         var m = 0;
         var aborted = (string?)null;
         Pump(() =>
@@ -221,7 +221,7 @@ internal sealed class ApproveForm : Form
             if (specs is null)
             {
                 specs = ReleasePlan.Order(_models, drawings);
-                rowKeys = new HashSet<string>(specs.Select(s => ReleaseHost.Key(s.Key)), StringComparer.OrdinalIgnoreCase);
+                rowKeys = specs.GroupBy(s => ReleaseHost.Key(s.Key), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().Key, StringComparer.OrdinalIgnoreCase);
                 foreach (var s in specs)
                 {
                     var i = _grid.Rows.Add();
@@ -259,7 +259,7 @@ internal sealed class ApproveForm : Form
             for (var k = 0; k < specs.Count; k++) factsOf[specs[k]] = facts[k];
             _rows = ReleasePlan.Evaluate(specs, s => factsOf[s], _approver);
             for (var i = 0; i < _rows.Count; i++) FillPreview(i, _rows[i]);
-            var lines = new List<string> { $"Approver: {_approver}. Release order is bottom up: parts, their drawings, sub-assemblies, their drawings, the top assembly, its drawing." };
+            var lines = new List<string> { $"Approver: {_approver}. Release order is bottom up: parts, their drawings, sub-assemblies, their drawings, the top assembly, its drawing. A part or sub-assembly counts as released for the assemblies above it only when its drawing is Released too." };
             lines.Add(ReleasePlan.ChildCheckLine(_rows.Select(r => (r.Facts.Lifecycle, r.Facts.ChildCheck))));
             try { var note = _host.RestrictionNote(); if (note is not null) lines.Add(note); }
             catch (BridgeException ex) { lines.Add(ex.Message); }
@@ -268,7 +268,7 @@ internal sealed class ApproveForm : Form
             _previewed = true;
             _status.Text = c.Release == 0
                 ? $"Nothing can be released: {c.Skipped} skipped, {c.HeldBack} held back, {c.AlreadyReleased} already Released. Select a row to see why."
-                : $"{c.Release} ready, {c.Skipped} skipped, {c.HeldBack} held back, {c.AlreadyReleased} already Released. Press I Approve! to sign off and release.";
+                : $"{c.Release} ready ({c.Revise} Released drawings to revise), {c.Skipped} skipped, {c.HeldBack} held back, {c.AlreadyReleased} already Released. Press I Approve! to sign off and release.";
             ShowDetail();
         });
     }
@@ -278,7 +278,7 @@ internal sealed class ApproveForm : Form
         var cells = _grid.Rows[i].Cells;
         cells[StateCol].Value = r.Facts.Found ? r.Facts.State : "";
         cells[RevCol].Value = r.Facts.Revision;
-        cells[RevAfterCol].Value = r.Status == ReleaseStatus.Ready ? r.Facts.RevisionAfter : "";
+        cells[RevAfterCol].Value = r.Status is ReleaseStatus.Ready or ReleaseStatus.Revise ? r.Facts.RevisionAfter : "";
         cells[ReadyCol].Value = ReleasePlan.PreviewText(r);
         cells[NotesCol].Value = string.Join("; ", r.Warnings);
         cells[ResultCol].Value = "";

@@ -324,20 +324,25 @@ internal sealed class DataCardHost : IDataCardHost
     // ---- Apply ----
 
     public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) =>
-        Edit(file, changes, comment, f => DataCardFix.SkipReason(f), null, doc => doc.Save(), null, DataCardFix.OpenDocumentSaveFailure);
+        Edit(file, changes, comment, f => DataCardFix.SkipReason(f), null, doc => doc.Save(), null, DataCardFix.OpenDocumentSaveFailure,
+             "Data card fix", restoreOpenOnFailure: false);
 
     /// <summary>
     /// The I Approve! sign-off: the same checkout, edit, save and check-in as Apply, but with ReleasePlan.SignOffSkipReason (also .iam and
     /// .idw/.dwg, never a Released file). The opened document must be the kind its extension says with every reference found; only that
-    /// document is saved (Save2 without dependents); a Dependency child whose latest version has the same content is referenced at that version.
+    /// document is saved (Save2 without dependents). Each Dependency child is referenced at the version on disk (ReleasePlan.ChooseChildVersions;
+    /// touchedMasters are the files this run signed or released); a child with no matching version stops the edit before the checkout.
+    /// On a failure an open document gets its old value back in memory.
     /// </summary>
-    internal DataCardApplied SignOff(DataCardFileInfo file, PropChange change, string comment) =>
+    internal DataCardApplied SignOff(DataCardFileInfo file, PropChange change, string comment, IReadOnlySet<long> touchedMasters) =>
         Edit(file, new[] { change }, comment, ReleasePlan.SignOffSkipReason, RequireSignable,
-             doc => doc.Save2(false, System.Reflection.Missing.Value), rows => RemapToLatest(Conn, rows), ReleasePlan.OpenDocumentSaveFailure);
+             doc => doc.Save2(false, System.Reflection.Missing.Value), rows => ChooseOnDisk(Conn, rows, touchedMasters),
+             ReleasePlan.OpenDocumentSaveFailure, comment, restoreOpenOnFailure: true);
 
     private DataCardApplied Edit(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment, Func<DataCardFileInfo, string?> skipReason,
                                  Action<Inv.Document, string>? check, Action<Inv.Document> save,
-                                 Func<IReadOnlyList<AssocRow>, IReadOnlyList<AssocRow>>? remap, Func<string, string, string> openSaveFailure)
+                                 Func<IReadOnlyList<AssocRow>, IReadOnlyList<AssocRow>>? remap, Func<string, string, string> openSaveFailure,
+                                 string checkoutComment, bool restoreOpenOnFailure)
     {
         var conn = Conn;
         var ds = conn.WebServiceManager.DocumentService;
@@ -360,39 +365,76 @@ internal sealed class DataCardHost : IDataCardHost
             finally { DeleteQuietly(temp); }
         }
 
+        // The associations of the version being replaced (and, for the sign-off, the child versions on disk) are settled before the checkout,
+        // so a child that matches no Vault version stops the edit with nothing to undo.
+        FileAssocParam[]? assocs;
+        try { assocs = ChildAssociations(conn, latest, remap); }
+        catch (DataCardStepException) { throw; }
+        catch (Exception ex) { throw new DataCardStepException("children", "could not read the file's child associations: " + ex.Message); }
+
         VDF.Vault.Currency.Entities.FileIteration? checkedOut = null;
         var path = local;
         var step = "checkout";
+        List<(PropChange Change, bool Existed, object? Old)>? before = null;
         try
         {
             // The local copy is absent or identical to Vault here, so overwriting it is safe, except under a document the user has open.
-            (checkedOut, path) = CheckOut(conn, latest, overwrite: open is null);
+            (checkedOut, path) = CheckOut(conn, latest, overwrite: open is null, checkoutComment);
             ClearReadOnly(path);
             step = "open";
             WithDocument(path, doc =>
             {
                 check?.Invoke(doc, file.Name);
                 step = "set";
+                if (restoreOpenOnFailure && open is not null) before = changes.Select(c => Snapshot(doc, c)).ToList();
                 foreach (var c in changes) SetProp(doc, c);
                 step = "save";
                 save(doc);
                 return true;
             }, open);
             step = "checkin";
-            var assocs = ChildAssociations(conn, latest, remap);
             var after = conn.FileManager.CheckinFile(checkedOut, comment, false, assocs, null, false, null,
                 FileClassification.None, false, new VDF.Currency.FilePathAbsolute(path));
             return ReadBack(ds, after.EntityMasterId);
         }
         catch (Exception ex)
         {
+            var restored = open is not null && before is not null && Restore(open, before);
             var undone = UndoIfStillMine(conn, latest.MasterId, path);
-            var inventorNote = open is not null ? " The open Inventor document still holds the edited values; close it without saving." : "";
+            var inventorNote = open is null || restored ? "" : " The open Inventor document still holds the edited values; close it without saving.";
             var failedStep = ex is DataCardStepException se ? se.Step : step;
             if (open is not null && failedStep == "save")
                 throw new DataCardStepException(failedStep, openSaveFailure(ex.Message, undone) + inventorNote);
             throw new DataCardStepException(failedStep, $"{ex.Message} ({undone}){inventorNote}");
         }
+    }
+
+    /// <summary>The current value of a property before the sign-off sets it (Existed false: the custom property is added).</summary>
+    private static (PropChange Change, bool Existed, object? Old) Snapshot(Inv.Document doc, PropChange c)
+    {
+        try { return (c, true, doc.PropertySets[DataCardFix.SetName(c.Prop.Set)][c.Prop.Name].Value); }
+        catch (Exception ex) when (ex is COMException or ArgumentException) { return (c, false, null); }
+    }
+
+    /// <summary>Puts the open document's values back after a failed sign-off (an added custom property is deleted) and clears Dirty, since it
+    /// was clean before. True when every value was restored.</summary>
+    private static bool Restore(Inv.Document doc, IReadOnlyList<(PropChange Change, bool Existed, object? Old)> before)
+    {
+        try
+        {
+            foreach (var (c, existed, old) in before)
+            {
+                var set = doc.PropertySets[DataCardFix.SetName(c.Prop.Set)];
+                if (existed) set[c.Prop.Name].Value = old;
+                else
+                {
+                    try { set[c.Prop.Name].Delete(); } catch (Exception ex) when (ex is COMException or ArgumentException) { }
+                }
+            }
+            doc.Dirty = false;
+            return true;
+        }
+        catch (Exception) { return false; }
     }
 
     // After a successful check-in nothing may report a failure or undo anything.
@@ -433,7 +475,7 @@ internal sealed class DataCardHost : IDataCardHost
         catch (Exception undoEx) { return "the checkout could NOT be undone (" + undoEx.Message + "); undo it in Vault"; }
     }
 
-    private static (VDF.Vault.Currency.Entities.FileIteration, string) CheckOut(VDF.Vault.Currency.Connections.Connection conn, WsFile latest, bool overwrite)
+    private static (VDF.Vault.Currency.Entities.FileIteration, string) CheckOut(VDF.Vault.Currency.Connections.Connection conn, WsFile latest, bool overwrite, string comment)
     {
         var settings = new VDF.Vault.Settings.AcquireFilesSettings(conn, false);
         settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = false;
@@ -442,7 +484,7 @@ internal sealed class DataCardHost : IDataCardHost
         settings.OptionsResolution.OverwriteOption = overwrite
             ? VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.ForceOverwriteAll
             : VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.NoOverwrite;
-        settings.CheckoutComment = "Data card fix";
+        settings.CheckoutComment = comment;
         var iteration = new VDF.Vault.Currency.Entities.FileIteration(conn, latest);
         settings.AddFileToAcquire(iteration,
             VDF.Vault.Settings.AcquireFilesSettings.AcquisitionOption.Checkout | VDF.Vault.Settings.AcquireFilesSettings.AcquisitionOption.Download);
@@ -478,20 +520,60 @@ internal sealed class DataCardHost : IDataCardHost
         }).ToArray();
     }
 
-    /// <summary>For the sign-off: (latest id, referenced checksum, latest checksum) of each Dependency child, then ReleasePlan.RemapToLatest.
-    /// A read failure throws inside the edit's try, so the checkout is undone.</summary>
-    private static IReadOnlyList<AssocRow> RemapToLatest(VDF.Vault.Currency.Connections.Connection conn, IReadOnlyList<AssocRow> rows)
+    /// <summary>
+    /// For the sign-off: each Dependency child's versions (id, Vault checksum, size), its latest version, and the local file's CRC-32 and size,
+    /// then ReleasePlan.ChooseChildVersions. A byte compare with a fresh download of the latest version is the fallback when no checksum
+    /// matches. Any problem throws DataCardStepException("children") before the checkout.
+    /// </summary>
+    private static IReadOnlyList<AssocRow> ChooseOnDisk(VDF.Vault.Currency.Connections.Connection conn, IReadOnlyList<AssocRow> rows, IReadOnlySet<long> touched)
     {
         var ids = rows.Where(r => r.Type == "Dependency").Select(r => r.CldFileId).Distinct().ToArray();
         if (ids.Length == 0) return rows;
         var ds = conn.WebServiceManager.DocumentService;
-        var referenced = ds.GetFilesByIds(ids) ?? Array.Empty<WsFile>();
-        var masters = referenced.Select(f => f.MasterId).Distinct().ToArray();
-        var latest = (ds.GetLatestFilesByMasterIds(masters) ?? Array.Empty<WsFile>()).GroupBy(f => f.MasterId).ToDictionary(g => g.Key, g => g.First());
-        var map = new Dictionary<long, (long, long, long)>();
-        foreach (var f in referenced)
-            if (latest.TryGetValue(f.MasterId, out var l)) map[f.Id] = (l.Id, f.Cksum, l.Cksum);
-        return ReleasePlan.RemapToLatest(rows, map);
+        var byId = (ds.GetFilesByIds(ids) ?? Array.Empty<WsFile>()).Where(f => f.Id > 0).GroupBy(f => f.Id).ToDictionary(g => g.Key, g => g.First());
+        var cache = new Dictionary<long, ChildOnDisk?>();
+        ChildOnDisk? ChildOf(long id)
+        {
+            if (!byId.TryGetValue(id, out var referenced)) return null;
+            if (cache.TryGetValue(referenced.MasterId, out var hit)) return hit;
+            var versions = ds.GetFilesByMasterId(referenced.MasterId) ?? Array.Empty<WsFile>();
+            var latest = ds.GetLatestFileByMasterId(referenced.MasterId);
+            var local = VaultFiles.LocalPathOf(latest);
+            long? crc = null, size = null;
+            if (System.IO.File.Exists(local))
+            {
+                using var fs = new System.IO.FileStream(local, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+                size = fs.Length;
+                crc = ReleasePlan.Crc32(fs);
+            }
+            bool SameAsLatest()
+            {
+                var temp = NewTempDir();
+                try { return SameBytes(local, DownloadBaseline(latest, temp)); }
+                catch (Exception) { return false; }
+                finally { DeleteQuietly(temp); }
+            }
+            return cache[referenced.MasterId] = new ChildOnDisk(latest.Name, touched.Contains(referenced.MasterId), latest.Id,
+                versions.Select(v => new ChildVersion(v.Id, v.Cksum, v.FileSize)).ToList(), crc, size, SameAsLatest);
+        }
+        var (mapped, problems) = ReleasePlan.ChooseChildVersions(rows, ChildOf);
+        if (problems.Count > 0)
+            throw new DataCardStepException("children", "not checked in, because a child cannot be matched to a Vault version: "
+                + string.Join("; ", problems.Take(5)) + (problems.Count > 5 ? $"; and {problems.Count - 5} more" : "") + ". Get Latest and try again.");
+        return mapped;
+    }
+
+    /// <summary>The transition between two states named in the file's lifecycle definition, or null (for the revise preview of a Released drawing).</summary>
+    internal static LfCycTrans? TransitionBetween(WsFile f, string fromName, string toName)
+    {
+        try
+        {
+            var def = Definition(f);
+            var from = StateNamed(def, fromName);
+            var to = StateNamed(def, toName);
+            return from is null || to is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == from.Id && t.ToId == to.Id);
+        }
+        catch (Exception) { return null; }
     }
 
     /// <summary>The sign-off opens assemblies and drawings: the document must be the kind its extension says, and every file it references

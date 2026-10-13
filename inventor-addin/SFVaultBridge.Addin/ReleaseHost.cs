@@ -19,6 +19,7 @@ internal sealed class ReleaseHost : IReleaseWriter
     private readonly IReadOnlyList<string> _tree;
     private readonly Dictionary<string, WsFile?> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<long, WsFile> _children = new();
+    private readonly HashSet<long> _touched = new();
     private long? _designerDefId;
     private bool _designerDefRead;
 
@@ -77,9 +78,10 @@ internal sealed class ReleaseHost : IReleaseWriter
         catch (Exception ex) { _log($"approve: change order restriction unreadable: {ex.Message}"); return null; }
     }
 
-    /// <summary>Everything the preview needs about one row. rowKeys holds the (Key-normalized) keys of every row, so a Vault child that is
-    /// itself a row is left to the hold-back rule. A Vault read failure becomes Problem (a blocker); a lost session throws.</summary>
-    public ReleaseFacts Facts(ReleaseRowSpec spec, ISet<string> rowKeys)
+    /// <summary>Everything the preview needs about one row. rows maps the Key-normalized key of every row to its row key, so a Vault child
+    /// that is itself a row becomes a RowDependency (hold-back) and every other child an OtherChild (blocker rules). A Vault read failure
+    /// becomes Problem (a blocker); a lost session throws. A Released drawing also gets its revise plan (Released, Work in Progress, Released).</summary>
+    public ReleaseFacts Facts(ReleaseRowSpec spec, IReadOnlyDictionary<string, string> rows)
     {
         RequireSignedIn();
         try
@@ -95,21 +97,46 @@ internal sealed class ReleaseHost : IReleaseWriter
             try { ReadChildren(f, out childFiles); }
             catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
             catch (Exception ex) { childrenProblem = ex.Message; _log($"approve: children of {f.Name} unreadable: {ex}"); }
-            if (info.Released && info.Unreadable is null) return basic;
+            var released = info.Released && info.Unreadable is null;
+            if (released && spec.Kind != ReleaseKind.Drawing) return basic;
 
-            var (trans, def, _, problem) = DataCardHost.FindTransition(f, DataCardFix.ReleasedState);
+            LfCycTrans? trans;
+            LfCycDef? def;
+            string? problem;
+            string? reviseProblem = null;
+            string revisionAfter;
+            if (released)
+            {
+                // A Released drawing is revised when its model changes: plan both moves by name, read the way back's child check and sync.
+                reviseProblem = _card.PlanRevise(info).Problem;
+                trans = DataCardHost.TransitionBetween(f, DataCardFix.WorkInProgressState, DataCardFix.ReleasedState);
+                var toWip = DataCardHost.TransitionBetween(f, DataCardFix.ReleasedState, DataCardFix.WorkInProgressState);
+                def = null; problem = null;
+                revisionAfter = toWip is null ? "Vault decides" : ReleasePlan.RevisionAfter(Bump(toWip.Bump), info.Revision, NextRevisions(f, toWip.Bump));
+                try { def = Conn.WebServiceManager.LifeCycleService.GetLifeCycleDefinitionsByIds(new[] { f.FileLfCyc!.LfCycDefId })?.FirstOrDefault(); }
+                catch (Exception) { }
+            }
+            else
+            {
+                (trans, def, _, problem) = DataCardHost.FindTransition(f, DataCardFix.ReleasedState);
+                revisionAfter = trans is null ? "" : ReleasePlan.RevisionAfter(Bump(trans.Bump), info.Revision, NextRevisions(f, trans.Bump));
+            }
             bool? childCheck = trans is null ? null : (trans.CldState & EnforceChildStateEnum.EnforceChildFiles) != 0;
-            var revisionAfter = trans is null ? "" : ReleasePlan.RevisionAfter(Bump(trans.Bump), info.Revision, NextRevisions(f, trans.Bump));
+            var syncProps = trans is not null && (trans.SyncPropOption & JobSyncPropEnum.SyncProp) != 0;
             var others = new List<ReleaseChild>();
-            if (childrenProblem is not null) others.Add(new ReleaseChild($"its children ({childrenProblem})", null));
+            var rowDeps = new List<string>();
+            // Unreadable children fail closed as an engineering dependency.
+            if (childrenProblem is not null) others.Add(new ReleaseChild($"its children ({childrenProblem})", null, ReleasePlan.PartCategory));
             foreach (var c in childFiles)
             {
-                if (rowKeys.Contains(Key(SafeLocal(c)))) continue;
+                if (rows.TryGetValue(Key(SafeLocal(c)), out var rowKey)) { rowDeps.Add(rowKey); continue; }
                 var id = c.FileLfCyc?.LfCycStateId ?? 0;
-                others.Add(id <= 0 ? new ReleaseChild(c.Name + " (no lifecycle)", false) : new ReleaseChild(c.Name, _card.StateReleased(id)));
+                var category = VaultFiles.CategoryName(c) ?? "";
+                others.Add(id <= 0 ? new ReleaseChild(c.Name + " (no lifecycle)", false, category) : new ReleaseChild(c.Name, _card.StateReleased(id), category));
             }
             return basic with
             {
+                RowDependencies = rowDeps, ReviseProblem = reviseProblem, SyncProps = syncProps,
                 CheckedOut = info.CheckedOut, CheckedOutBy = info.CheckedOutBy,
                 OpenDirty = LocalState.OpenDirty(_app, local), OpenOlder = LocalState.OpenOlder(_app, local, f),
                 LocalEdits = LocalState.HasLocalEdits(_app, local, f), ControlledByChangeOrder = f.ControlledByChangeOrder,
@@ -232,8 +259,9 @@ internal sealed class ReleaseHost : IReleaseWriter
     }
 
     /// <summary>
-    /// Sign off and release one row. The file must still be the version the preview read. Failures are returned (step and message); the
-    /// checkout is undone by SignOff on any failure before the check-in, and a final check undoes any checkout still held. A lost session throws.
+    /// Sign off and release one row (a Revise row: Released, Work in Progress, sign off, Released). The file must still be the version the
+    /// preview read and not checked out. Failures are returned (step and message); SignOff undoes its own checkout on any failure before the
+    /// check-in, and a final check undoes a checkout this step still holds. A lost session throws.
     /// </summary>
     public ReleaseOutcome Release(ReleaseRow row, string approver)
     {
@@ -249,31 +277,68 @@ internal sealed class ReleaseHost : IReleaseWriter
             var info = _card.Describe(latest);
             if (info.Version != row.Facts.Version)
                 return ReleaseOutcome.Fail("check", $"changed in Vault since the preview (version {row.Facts.Version} to {info.Version}); run Preview again.");
-            var comment = ReleasePlan.SignOffComment(approver);
+            if (info.CheckedOut)
+                return ReleaseOutcome.Fail("check", $"checked out by {(string.IsNullOrWhiteSpace(info.CheckedOutBy) ? "someone" : info.CheckedOutBy)} since the preview.");
+            var vaultUser = "";
+            try { vaultUser = Conn.UserName ?? ""; } catch (Exception) { }
+            var comment = ReleasePlan.SignOffComment(approver, vaultUser);
+            var change = new PropChange(new PropRef(PropSet.Custom, ReleasePlan.ApprovedByProperty), null, approver);
+            // From here a checkout to this user can only be this step's own (it was not checked out just above).
             attempted = true;
-            try
+
+            if (row.Status == ReleaseStatus.Revise)
             {
-                var signed = _card.SignOff(info, new PropChange(new PropRef(PropSet.Custom, ReleasePlan.ApprovedByProperty), null, approver), comment);
-                if (signed.Warning is not null) _log($"approve: {path}: {signed.Warning}");
+                var o = ReleasePlan.ReviseAndRelease(
+                    () => _card.ChangeState(info, DataCardFix.WorkInProgressState, comment),
+                    () => StateNow(path),
+                    () => SignOff(Fresh(path), change, comment, master.Value),
+                    () => { var r = _card.ChangeState(Fresh(path), DataCardFix.ReleasedState, comment).Revision; _touched.Add(master.Value); return r; });
+                if (!o.Ok) RequireSignedIn(o.Message);
+                return o;
             }
+
+            try { SignOff(info, change, comment, master.Value); }
             catch (DataCardSkipException ex) { RequireSignedIn(); return ReleaseOutcome.Fail("sign off", ex.Message); }
             catch (DataCardStepException ex) { RequireSignedIn(); return ReleaseOutcome.Fail($"sign off ({ex.Step})", ex.Message); }
 
             try
             {
-                var changed = _card.ChangeState(info, DataCardFix.ReleasedState, comment);
+                var changed = _card.ChangeState(Fresh(path), DataCardFix.ReleasedState, comment);
                 return ReleaseOutcome.Done(changed.Revision);
             }
             catch (DataCardStepException ex)
             {
                 RequireSignedIn();
-                return ReleaseOutcome.Fail("release", ex.Message + $" The sign-off ({ReleasePlan.ApprovedByProperty} = {approver}) is checked in; the file was not released.");
+                return ReleaseOutcome.Fail("release", ex.Message + $" The sign-off ({ReleasePlan.ApprovedByProperty} = {approver}) is checked in. "
+                    + $"Vault shows the file in {StateNow(path)} now; check the state in Vault before trying again.");
             }
         }
         finally
         {
             if (attempted && master is long m) EnsureNotCheckedOut(m, path);
         }
+    }
+
+    /// <summary>Sign-off through DataCardHost; the file counts as touched (children of later parents use its latest version) once checked in.</summary>
+    private void SignOff(DataCardFileInfo info, PropChange change, string comment, long master)
+    {
+        var signed = _card.SignOff(info, change, comment, _touched);
+        _touched.Add(master);
+        if (signed.Warning is not null) _log($"approve: {info.VaultPath}: {signed.Warning}");
+    }
+
+    private DataCardFileInfo Fresh(string vaultPath) =>
+        _card.Describe(VaultFiles.FindLatest(vaultPath) ?? throw new DataCardStepException("resolve", $"{vaultPath} is no longer in Vault."));
+
+    private string StateNow(string vaultPath)
+    {
+        try { return VaultFiles.FindLatest(vaultPath)?.FileLfCyc?.LfCycStateName ?? "unknown"; }
+        catch (Exception) { return "unknown"; }
+    }
+
+    private static void RequireSignedIn(string detail)
+    {
+        if (!VaultSession.IsSignedIn) throw new BridgeException("not_signed_in", detail + " " + BridgeOps.NotSignedInMessage);
     }
 
     /// <summary>The preview refused files that were checked out, so any checkout to this user now is the run's own: undo it and log it.</summary>
