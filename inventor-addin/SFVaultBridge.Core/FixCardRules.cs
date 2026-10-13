@@ -160,7 +160,7 @@ public static class FixCardRules
     private static string Val(IReadOnlyDictionary<PropRef, string?> current, PropRef p) =>
         current.TryGetValue(p, out var v) ? v ?? "" : "";
 
-    /// <summary>The proposed "new" value per field: Part Number from the file name; Title as PartTitle for Buy or purchased parts, else unchanged;
+    /// <summary>The proposed "new" value per field: Part Number from the file name; Title as PartTitle ("Part Number - Description") for every part;
     /// Vendor in the data card spelling; everything else as it is now.</summary>
     public static IReadOnlyDictionary<PropRef, string> Propose(string fileName, string? category, IReadOnlyDictionary<PropRef, string?> current)
     {
@@ -178,12 +178,10 @@ public static class FixCardRules
         return o;
     }
 
-    /// <summary>Title: PartTitle(Part Number, Description) for Source = Buy or a purchased category, otherwise the title as it is.</summary>
-    public static string ProposeTitle(string partNumber, string description, string source, string? category, string currentTitle)
-    {
-        var buy = string.Equals((source ?? "").Trim(), BuySource, StringComparison.OrdinalIgnoreCase);
-        return (buy || IsPurchasedCategory(category)) && partNumber.Trim().Length > 0 ? ImportRules.PartTitle(partNumber, description) : currentTitle ?? "";
-    }
+    /// <summary>Title: PartTitle(Part Number, Description) for every part ("Part Number - Description"); the title as it is when there is no Part Number.
+    /// Source and category are kept as parameters for callers but no longer change the rule (Zak, 2026-10-13).</summary>
+    public static string ProposeTitle(string partNumber, string description, string source, string? category, string currentTitle) =>
+        partNumber.Trim().Length > 0 ? ImportRules.PartTitle(partNumber, description) : currentTitle ?? "";
 
     /// <summary>When Part Number, Description or Source is edited: the new automatic Title if the Title cell still holds the previous automatic one
     /// (the user has not edited it by hand), otherwise the cell as it is.</summary>

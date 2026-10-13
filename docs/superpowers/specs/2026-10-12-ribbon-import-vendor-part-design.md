@@ -50,7 +50,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 |---|---|---|
 | Part Number | Design Tracking "Part Number" | CD number |
 | Description | Design Tracking "Description" | form |
-| Title | Summary "Title" | `<CD>-<Description>`, e.g. `CD-001909-Black-Oxide Alloy Steel Socket Head Screw` (Zak, 2026-10-13); follows the CD number Vault applies on save |
+| Title | Summary "Title" | `<CD> - <Description>`, e.g. `CD-001909 - Black-Oxide Alloy Steel Socket Head Screw` (Zak, 2026-10-13); follows the CD number Vault applies on save |
 | Vendor | Design Tracking "Vendor" | vendor folder name as shown (e.g. `McMaster-Carr`); for McMaster the existing parts use `McMASTER-CARR`, so McMaster-Carr maps to `McMASTER-CARR` to keep one spelling |
 | Vendor Number | custom "Vendor Number" | form |
 | WEB Link | Design Tracking "Catalog Web Link" | Vendor Number (matches existing parts) |

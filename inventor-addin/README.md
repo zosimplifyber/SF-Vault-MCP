@@ -99,7 +99,7 @@ Which parts:
 The form has one row per part. Each field has a grey "now" column (read from Vault's latest version, opened invisibly in Inventor, nothing changed) and an editable "new" column: Part Number, Title, Description, Vendor, Vendor Number, Source, Process, Material Finish, Estimated Cost. Cells that differ from "now" turn yellow. Proposed values:
 
 - Part Number is the file name without the extension.
-- Title is `<Part Number>-<Description>` for Source = Buy or a purchased category, otherwise it stays as it is. Title is a Summary Information property.
+- Title is `<Part Number> - <Description>` for Source = Buy or a purchased category, otherwise it stays as it is. Title is a Summary Information property.
 - Vendor uses the data card spelling (`McMASTER-CARR`).
 - Source is a Buy/Make dropdown and Process a dropdown from `processValues` in `settings.json` plus blank; the current value is always kept in the list.
 - Estimated Cost is a number, shown with 4 decimals; a blank or non-number is an error on that row.

@@ -74,7 +74,7 @@ public partial class DataCardFixTests
     {
         var o = Edited("CD-001885.ipt", "Part - Purchased", Card());
         Assert.Equal("CD-001885", o[FixCardRules.PartNumberProp]);
-        Assert.Equal("CD-001885-Steel Washers", o[FixCardRules.TitleProp]);
+        Assert.Equal("CD-001885 - Steel Washers", o[FixCardRules.TitleProp]);
         Assert.Equal("McMASTER-CARR", o[FixCardRules.VendorProp]);
         Assert.Equal("12.5000", o[FixCardRules.CostProp]);
         Assert.Equal("93501A035", o[FixCardRules.VendorNumberProp]);
@@ -82,18 +82,18 @@ public partial class DataCardFixTests
     }
 
     [Fact]
-    public void Propose_title_is_unchanged_for_make_parts_in_a_make_category()
+    public void Propose_title_for_make_parts_too()
     {
         var o = Edited("CD-001885.ipt", "Part - Made", Card(source: "Make", title: "keep me"));
-        Assert.Equal("keep me", o[FixCardRules.TitleProp]);
+        Assert.Equal("CD-001885 - Steel Washers", o[FixCardRules.TitleProp]);
         Assert.Equal("CD-001885", o[FixCardRules.PartNumberProp]);
     }
 
     [Fact]
     public void Propose_title_follows_the_category_when_source_is_blank_and_the_source_when_the_category_is_not_purchased()
     {
-        Assert.Equal("CD-1-Steel Washers", Edited("CD-1.ipt", "Part - Purchased", Card(source: ""))[FixCardRules.TitleProp]);
-        Assert.Equal("CD-1-Steel Washers", Edited("CD-1.ipt", "Part - Made", Card(source: "buy"))[FixCardRules.TitleProp]);
+        Assert.Equal("CD-1 - Steel Washers", Edited("CD-1.ipt", "Part - Purchased", Card(source: ""))[FixCardRules.TitleProp]);
+        Assert.Equal("CD-1 - Steel Washers", Edited("CD-1.ipt", "Part - Made", Card(source: "buy"))[FixCardRules.TitleProp]);
     }
 
     [Fact]
@@ -137,13 +137,13 @@ public partial class DataCardFixTests
         Assert.Equal("CD-001885", r.Design["Part Number"]);
         Assert.Equal("McMASTER-CARR", r.Design["Vendor"]);
         Assert.Empty(r.Custom);
-        Assert.Equal("CD-001885-Steel Washers", r.Summary!["Title"]);
+        Assert.Equal("CD-001885 - Steel Washers", r.Summary!["Title"]);
     }
 
     [Fact]
     public void BuildRequest_returns_null_when_nothing_changed()
     {
-        var current = Card(pn: "CD-001885", title: "CD-001885-Steel Washers", vendor: "McMASTER-CARR", cost: "12.5");
+        var current = Card(pn: "CD-001885", title: "CD-001885 - Steel Washers", vendor: "McMASTER-CARR", cost: "12.5");
         var b = FixCardRules.BuildRequest("$/L/CD-001885.ipt", current, Edited("CD-001885.ipt", "Part - Purchased", current), false, true);
         Assert.Null(b.Request);
         Assert.Empty(b.Errors);
@@ -152,7 +152,7 @@ public partial class DataCardFixTests
     [Fact]
     public void BuildRequest_cost_compares_as_a_number_and_sends_the_invariant_value()
     {
-        var current = Card(pn: "CD-1", title: "CD-1-Steel Washers", vendor: "McMASTER-CARR", cost: "12.5");
+        var current = Card(pn: "CD-1", title: "CD-1 - Steel Washers", vendor: "McMASTER-CARR", cost: "12.5");
         var same = Edited("CD-1.ipt", "Part - Purchased", current);
         same[FixCardRules.CostProp] = "12.50";
         Assert.Null(FixCardRules.BuildRequest("$/L/CD-1.ipt", current, same, false, true).Request);
@@ -181,7 +181,7 @@ public partial class DataCardFixTests
     [Fact]
     public void BuildRequest_blank_cost_over_a_blank_current_is_no_change()
     {
-        var current = Card(pn: "CD-1", cost: "", title: "CD-1-Steel Washers", vendor: "McMASTER-CARR");
+        var current = Card(pn: "CD-1", cost: "", title: "CD-1 - Steel Washers", vendor: "McMASTER-CARR");
         var e = Edited("CD-1.ipt", "Part - Purchased", current);
         Assert.Equal("", e[FixCardRules.CostProp]);
         var b = FixCardRules.BuildRequest("$/a.ipt", current, e, false, true);
@@ -473,7 +473,7 @@ public partial class DataCardFixTests
     [Fact]
     public void Vendor_already_in_the_data_card_spelling_proposes_no_change()
     {
-        var current = Card(pn: "CD-1", title: "CD-1-Steel Washers", vendor: "McMASTER-CARR");
+        var current = Card(pn: "CD-1", title: "CD-1 - Steel Washers", vendor: "McMASTER-CARR");
         Assert.Equal("McMASTER-CARR", Edited("CD-1.ipt", "Part - Purchased", current)[FixCardRules.VendorProp]);
         Assert.Null(FixCardRules.BuildRequest("$/a.ipt", current, Edited("CD-1.ipt", "Part - Purchased", current), false, true).Request);
         // Only a different spelling is proposed, and the comparison is case-sensitive.
@@ -485,11 +485,12 @@ public partial class DataCardFixTests
     [Fact]
     public void Title_follows_part_number_and_description_unless_edited_by_hand()
     {
-        Assert.Equal("CD-1-New", FixCardRules.ProposeTitle("CD-1", "New", "Buy", "Part - Made", "old"));
-        Assert.Equal("old", FixCardRules.ProposeTitle("CD-1", "New", "Make", "Part - Made", "old"));
-        var auto = "CD-1-Steel Washers";
+        Assert.Equal("CD-1 - New", FixCardRules.ProposeTitle("CD-1", "New", "Buy", "Part - Made", "old"));
+        Assert.Equal("CD-1 - New", FixCardRules.ProposeTitle("CD-1", "New", "Make", "Part - Made", "old"));
+        Assert.Equal("old", FixCardRules.ProposeTitle(" ", "New", "Make", "Part - Made", "old"));
+        var auto = "CD-1 - Steel Washers";
         var next = FixCardRules.ProposeTitle("CD-1", "Hex Nut", "Buy", null, "old");
-        Assert.Equal("CD-1-Hex Nut", FixCardRules.FollowTitle(auto, auto, next));
+        Assert.Equal("CD-1 - Hex Nut", FixCardRules.FollowTitle(auto, auto, next));
         Assert.Equal("my title", FixCardRules.FollowTitle("my title", auto, next));
     }
 
