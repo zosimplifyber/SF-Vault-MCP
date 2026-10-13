@@ -181,7 +181,7 @@ internal sealed class RibbonActions
     private void Purchasing(Inv.AssemblyDocument asm)
     {
         var (folder, vaultFolder, stem) = Locate(asm);
-        var lines = BomOrdering.Flatten(BomReader.Read(asm));
+        var lines = BomOrdering.Flatten(BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log));
         if (lines.Count == 0) throw new BridgeException("no_bom", "The assembly has no BOM rows.");
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(temp);
@@ -203,7 +203,7 @@ internal sealed class RibbonActions
     {
         var assemblyMode = mode == PackageMode.Assembly;
         var (folder, vaultFolder, stem) = Locate(asm);
-        var lines = BomOrdering.Flatten(BomReader.Read(asm));
+        var lines = BomOrdering.Flatten(BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log));
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(temp);
         try

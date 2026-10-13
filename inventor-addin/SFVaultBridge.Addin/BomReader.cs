@@ -72,7 +72,7 @@ internal static class BomReader
             revision = Prop("Inventor Summary Information", "Revision Number");
             material = Prop("Design Tracking Properties", "Material");
             vendor = Prop("Design Tracking Properties", "Vendor");
-            vendorNumber = Prop("Inventor User Defined Properties", "Vendor Number");
+            vendorNumber = SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number"));
         }
         catch { }
         if (string.IsNullOrWhiteSpace(partNumber))

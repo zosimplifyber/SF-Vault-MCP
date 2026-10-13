@@ -34,8 +34,8 @@ public class BomTests : IDisposable
         var node = new BomNode("CD-1", "1/2\" bolt\twith tab", 2.5, "Each", "Purchased", "", "Steel", "CD-1.ipt", @"C:\x\CD-1.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\tVendor\tVendor Number\r\n", text);
-        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\tSteel\tCD-1.ipt\t\t\r\n", text);
+        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tFile Name\tVendor\tVendor Number\r\n", text);
+        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\tCD-1.ipt\t\t\r\n", text);
     }
 
     [Fact]
@@ -52,5 +52,14 @@ public class BomTests : IDisposable
     {
         Assert.Equal("a b", BomFile.Field("a\r\nb"));
         Assert.Equal("", BomFile.Field(null));
+    }
+
+    [Fact]
+    public void Writes_state_after_rev()
+    {
+        var path = Path.Combine(_dir, "bom-state.txt");
+        var node = new BomNode("CD-3", "bolt", 1, "Each", "Purchased", "A", "", "CD-3.ipt", @"C:\x\CD-3.ipt", Array.Empty<BomNode>(), "", "", "Released");
+        BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
+        Assert.Contains("\tA\tReleased\t", File.ReadAllText(path));
     }
 }

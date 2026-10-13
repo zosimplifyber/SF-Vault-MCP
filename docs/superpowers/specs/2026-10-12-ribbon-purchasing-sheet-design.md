@@ -38,9 +38,16 @@ Vault.
       message naming the problem and stops.
    2. **Reads the BOM** from the open document (unsaved edits included):
       Structured view, all levels. Columns: Item, Part Number, QTY, Unit QTY,
-      Description, BOM Structure, REV, Material, Vendor, Vendor Number,
-      Source. Part Number is the component's file name stem when its Part
-      Number iProperty is empty. Siblings are sorted by Description
+      Description, BOM Structure, REV, State, Material, File Name, Vendor,
+      Vendor Number. Part Number is the component's file name stem when its
+      Part Number iProperty is empty. Vault facts per unique file (looked up
+      once, failures logged and skipped): REV is the Vault revision (the
+      Revision Number iProperty only when Vault has none), State is the Vault
+      lifecycle state, and BOM Structure becomes Purchased when the Vault
+      category is Part - Purchased or Part - Content Center (the engine maps
+      that to Source Buy; Phantom and Reference keep their meaning). Vendor
+      Number is the Design Tracking Catalog Web Link, falling back to the
+      custom Vendor Number iProperty only when the link is empty. Siblings are sorted by Description
       (descending) and renumbered (1, 1.1, 1.2, 2 ...), matching the manual
       export instructions.
    3. **Builds the workbook** by handing that BOM to the existing purchasing
