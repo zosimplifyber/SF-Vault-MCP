@@ -28,7 +28,7 @@
 - Inventor custom iProperty `Process` (User Defined Properties). Values (settings file, editable): `CNC`, `3D Print`, `Sheet Metal`, `Weldment`, `In-house`, `Other`. Matching is case-insensitive and trimmed.
 - Vault: UDP `Process` (Text, list values as above), assigned to Part - Engineering and Assembly - Engineering, mapped bidirectionally to the Inventor custom property with Create. Zak does this in Vault Settings; README documents the steps. The add-in only reads/writes the Inventor iProperty.
 - `fix_data_card` already sets custom iProperties (`--custom Process=CNC`); no new write path is needed. README example added.
-- BomReader reads `Process` per row (custom iProperty of the row's component definition document; blank when missing). BomNode gains trailing optional `Process`. BomFile gains a `Process` column after `Material`.
+- BomReader reads `Process` per row (custom iProperty of the row's component definition document; blank when missing). BomNode gains trailing optional `Process`. BomFile gains a `Process` column after `Material`. BomReader also reads the Design Tracking `Cost` (Estimated Cost; 0 or missing is blank) and the custom iProperty `HS/HTS Code` per row; BomNode gains trailing optional `Cost` and `HsCode`, and BomFile appends `Cost` and `HS/HTS Code` columns after `Vendor Number`.
 
 ## Part selection rules (Core, pure, tested)
 

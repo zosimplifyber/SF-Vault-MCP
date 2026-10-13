@@ -243,7 +243,8 @@ public static class PackageManifest
 /// <summary>What the release gate needs to know about one included part. Drawing fields are ignored when no drawing is required.</summary>
 public sealed record GatePart(string PartNumber, bool ModelFound, string ModelState, bool ModelCheckedOut, string? ModelCheckedOutBy,
                               bool ModelOpenDirty, bool DrawingRequired, bool HasDrawing, string DrawingState, bool DrawingCheckedOut,
-                              string? DrawingCheckedOutBy, bool DrawingOpenDirty);
+                              string? DrawingCheckedOutBy, bool DrawingOpenDirty,
+                              bool ModelOpenOlder = false, bool DrawingOpenOlder = false);
 
 /// <summary>A part counts as released only when its model and its drawing are Released on the latest version and neither is checked out or open with edits.</summary>
 public static class ReleaseGate
@@ -255,22 +256,23 @@ public static class ReleaseGate
         {
             if (!p.ModelFound) { blockers.Add($"{p.PartNumber}: model not in Vault"); continue; }
             var reasons = new List<string>();
-            Item("model", p.ModelState, p.ModelCheckedOut, p.ModelCheckedOutBy, p.ModelOpenDirty, reasons);
+            Item("model", p.ModelState, p.ModelCheckedOut, p.ModelCheckedOutBy, p.ModelOpenDirty, p.ModelOpenOlder, reasons);
             if (p.DrawingRequired)
             {
                 if (!p.HasDrawing) reasons.Add("no drawing");
-                else Item("drawing", p.DrawingState, p.DrawingCheckedOut, p.DrawingCheckedOutBy, p.DrawingOpenDirty, reasons);
+                else Item("drawing", p.DrawingState, p.DrawingCheckedOut, p.DrawingCheckedOutBy, p.DrawingOpenDirty, p.DrawingOpenOlder, reasons);
             }
             if (reasons.Count > 0) blockers.Add($"{p.PartNumber}: {string.Join("; ", reasons)}");
         }
         return blockers;
     }
 
-    private static void Item(string what, string state, bool checkedOut, string? by, bool dirty, List<string> reasons)
+    private static void Item(string what, string state, bool checkedOut, string? by, bool dirty, bool older, List<string> reasons)
     {
         if (!PackageRules.IsReleased(state)) reasons.Add($"{what} is {(string.IsNullOrWhiteSpace(state) ? "in an unknown state" : state.Trim())}");
         if (checkedOut) reasons.Add($"{what} is checked out" + (string.IsNullOrWhiteSpace(by) ? "" : $" by {by.Trim()}"));
         if (dirty) reasons.Add($"{what} is open in Inventor with unsaved changes");
+        else if (older) reasons.Add($"{what} is open in Inventor at an older version; close it or Get Latest");
     }
 
     public static string Message(IReadOnlyList<string> blockers) =>
@@ -293,4 +295,11 @@ public static class LocalCopy
         openInInventor ? LocalCopyAction.KeepOpenCopy
         : checkedOut ? LocalCopyAction.KeepCheckedOutCopy
         : LocalCopyAction.Refresh;
+
+    /// <summary>
+    /// True when the local file was last written before the latest Vault version was saved (beyond clock slack), i.e. the copy
+    /// Inventor has open is an older Vault version. A copy written later than the latest version is not older (unsaved Vault edits are the dirty rule).
+    /// </summary>
+    public static bool IsOlderThanLatest(DateTime localWriteUtc, DateTime vaultModifiedUtc) =>
+        localWriteUtc < vaultModifiedUtc - TimeSpan.FromSeconds(2);
 }

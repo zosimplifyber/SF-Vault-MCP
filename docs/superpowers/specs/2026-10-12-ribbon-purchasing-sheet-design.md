@@ -38,8 +38,8 @@ Vault.
       message naming the problem and stops.
    2. **Reads the BOM** from the open document (unsaved edits included):
       Structured view, all levels. Columns: Item, Part Number, QTY, Unit QTY,
-      Description, BOM Structure, REV, State, Material, File Name, Vendor,
-      Vendor Number. Part Number is the component's file name stem when its
+      Description, BOM Structure, REV, State, Material, Process, File Name, Vendor,
+      Vendor Number, Cost (Estimated Cost, blank when 0 or missing), HS/HTS Code. Part Number is the component's file name stem when its
       Part Number iProperty is empty. Vault facts per unique file (looked up
       once, failures logged and skipped): REV is the Vault revision (the
       Revision Number iProperty only when Vault has none), State is the Vault

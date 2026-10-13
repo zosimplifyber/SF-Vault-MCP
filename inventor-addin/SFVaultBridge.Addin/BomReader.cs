@@ -72,6 +72,8 @@ internal static class BomReader
     {
         string process = "", finish = "";
         var isSheetMetal = false;
+        double? cost = null;
+        string hsCode = "";
         string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "", vendor = "", vendorNumber = "";
         double qty;
         try { qty = Convert.ToDouble(row.ItemQuantity, System.Globalization.CultureInfo.InvariantCulture); } catch { qty = 0; }
@@ -105,6 +107,8 @@ internal static class BomReader
             vendor = Prop("Design Tracking Properties", "Vendor");
             process = Prop("Inventor User Defined Properties", "Process");
             finish = Prop("Inventor User Defined Properties", "Material Finish");
+            hsCode = Prop("Inventor User Defined Properties", "HS/HTS Code").Trim();
+            try { cost = ParseCost(sets?["Design Tracking Properties"]["Cost"].Value); } catch { cost = null; }
             vendorNumber = SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number"));
         }
         catch { }
@@ -116,7 +120,24 @@ internal static class BomReader
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
         try { children = Rows(row.ChildRows); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
-        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal);
+        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal, Cost: cost, HsCode: hsCode);
+    }
+
+    /// <summary>Estimated Cost from COM (double, decimal or string); 0, negative, blank or unparseable is no cost.</summary>
+    internal static double? ParseCost(object? v)
+    {
+        double d;
+        switch (v)
+        {
+            case null: return null;
+            case string s:
+                if (!double.TryParse(s.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d)) return null;
+                break;
+            default:
+                try { d = Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture); } catch { return null; }
+                break;
+        }
+        return d > 0 && !double.IsNaN(d) && !double.IsInfinity(d) ? d : null;
     }
 
     private static string Structure(Inv.BOMStructureEnum s) => s switch

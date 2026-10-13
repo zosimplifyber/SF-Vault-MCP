@@ -88,7 +88,7 @@ public sealed record BomNode(string PartNumber, string Description, double Quant
                              string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children,
                              string Vendor = "", string VendorNumber = "", string State = "",
                              string Process = "", string MaterialFinish = "", bool IsSheetMetal = false);
-// BomFile.Headers: Item, Part Number, BOM Structure, Unit QTY, QTY, Description, REV, State, Material, Process, File Name, Vendor, Vendor Number
+// BomFile.Headers: Item, Part Number, BOM Structure, Unit QTY, QTY, Description, REV, State, Material, Process, File Name, Vendor, Vendor Number, Cost, HS/HTS Code
 
 public enum PackageKind { None, Cnc, SheetMetal, Print, OtherMake }
 public enum ManufacturingMode { AllMake, Cnc, SheetMetal, Print }
@@ -169,7 +169,7 @@ Rules the implementation must follow exactly:
 - [ ] **Step 1: Write the failing tests**
 
 `BomTests.cs`: change the header assertion in `Writes_headers_and_escapes_fields` to
-`"Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\r\n"` and the row assertion to
+`"Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\tCost\tHS/HTS Code\r\n"` and the row assertion to
 `"1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\t\tCD-1.ipt\t\t\r\n"`. Add:
 
 ```csharp
@@ -287,7 +287,7 @@ Rules:
 `tests/test_review_package.py` (append):
 
 ```python
-STATE_HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\r\n"
+STATE_HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\tCost\tHS/HTS Code\r\n"
 
 
 def _state_bom(path: Path) -> Path:

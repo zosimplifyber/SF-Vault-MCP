@@ -188,3 +188,25 @@ def test_cli_rejects_a_bad_sales_tax_rate(bad):
     with pytest.raises(SystemExit):
         cli._parser().parse_args(["purchasing", "--bom", "b", "--assembly", "a", "--out", "o",
                                   "--name", "n", "--result", "r", "--sales-tax-rate", bad])
+
+
+def test_addin_style_bom_file_with_cost_and_hs_code_end_to_end(tmp_path, monkeypatch):
+    hdr = ("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\t"
+           "File Name\tVendor\tVendor Number\tCost\tHS/HTS Code")
+    rows = [
+        "1\tCD-990020\tPurchased\tEach\t2\tBolt\t\tReleased\tSteel\t\tCD-990020.ipt\tMcMaster\t91251A1\t4.5\t7318.15",
+        "2\tCD-990021\tPurchased\tEach\t1\tNut\t\tReleased\tSteel\t\tCD-990021.ipt\tMcMaster\t91251A2\t\t",
+    ]
+    bom = tmp_path / "bom.txt"
+    bom.write_text(hdr + "\r\n" + "\r\n".join(rows) + "\r\n", encoding="utf-8")
+    ref = pd.DataFrame({"Number": ["CD-990021"], "Vendor": ["V"], "Cost Per": [9.0]})
+    monkeypatch.setattr(bp, "_enrich_with_reference",
+                        lambda df, reference_path="", info=None: _fake_enrich(df, ref, info))
+    res = bp.generate_from_file(str(bom), "ASM", str(tmp_path))
+    assert not res.get("error"), res
+    ws = openpyxl.load_workbook(res["output_path"])["Purchasing"]
+    r1, r2 = _row(ws, 1), _row(ws, 2)
+    assert (r1["Cost Per"].value, r1["Price source"].value) == (4.5, "File")
+    assert r1["HS/HTS Code"].value == "7318.15"
+    assert r2["Cost Per"].value == 9.0
+    assert r2["Price source"].value != "File"
