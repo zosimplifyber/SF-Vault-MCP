@@ -41,7 +41,7 @@ internal sealed class DataCardHost : IDataCardHost
         return found.Select(Describe).ToList();
     }
 
-    private DataCardFileInfo Describe(WsFile f)
+    internal DataCardFileInfo Describe(WsFile f)
     {
         var folder = VaultFiles.FolderPathOf(f).TrimEnd('/');
         var by = "";
@@ -64,16 +64,23 @@ internal sealed class DataCardHost : IDataCardHost
     private bool IsReleased(WsFile f, out string? unreadable)
     {
         unreadable = null;
+        var released = StateReleased(f.FileLfCyc?.LfCycStateId ?? 0);
+        if (released is null) { unreadable = "could not read lifecycle state"; return false; }
+        return released.Value;
+    }
+
+    /// <summary>The released flag of a lifecycle state (LfCycState.ReleasedState), cached by state id; null when it cannot be read.</summary>
+    internal bool? StateReleased(long stateId)
+    {
         try
         {
-            var id = f.FileLfCyc?.LfCycStateId ?? 0;
-            if (id <= 0) { unreadable = "could not read lifecycle state"; return false; }
-            if (_releasedByStateId.TryGetValue(id, out var cached)) return cached;
-            var state = Conn.WebServiceManager.LifeCycleService.GetLifeCycleStatesByIds(new[] { id })?.FirstOrDefault();
-            if (state is null) { unreadable = "could not read lifecycle state"; return false; }
-            return _releasedByStateId[id] = state.ReleasedState;
+            if (stateId <= 0) return null;
+            if (_releasedByStateId.TryGetValue(stateId, out var cached)) return cached;
+            var state = Conn.WebServiceManager.LifeCycleService.GetLifeCycleStatesByIds(new[] { stateId })?.FirstOrDefault();
+            if (state is null) return null;
+            return _releasedByStateId[stateId] = state.ReleasedState;
         }
-        catch (Exception) { unreadable = "could not read lifecycle state"; return false; }
+        catch (Exception) { return null; }
     }
 
     // ---- Read (dry run and pre-check) ----
@@ -221,20 +228,31 @@ internal sealed class DataCardHost : IDataCardHost
     /// hard-coded), and only when the signed-in user is allowed to take it. Null Problem means the move is available.</summary>
     private static (long? ToStateId, string? Problem) Transition(WsFile f, string toName)
     {
+        var t = FindTransition(f, toName);
+        return (t.ToStateId, t.Problem);
+    }
+
+    /// <summary>Transition lookup that also returns the transition and the definition, for the release preview (child-state control
+    /// LfCycTrans.CldState, revision bump LfCycTrans.Bump). Trans is set when the transition exists, even when the user may not take it
+    /// (Problem says so); ToStateId is set only when the move is available.</summary>
+    internal static (LfCycTrans? Trans, LfCycDef? Def, long? ToStateId, string? Problem) FindTransition(WsFile f, string toName)
+    {
+        LfCycDef? def = null;
+        LfCycTrans? trans = null;
         try
         {
-            var def = Definition(f);
+            def = Definition(f);
             var fromId = f.FileLfCyc?.LfCycStateId ?? 0;
             var fromName = StateName(def, fromId);
             var to = StateNamed(def, toName);
-            var trans = to is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == fromId && t.ToId == to.Id);
-            if (trans is null) return (null, DataCardFix.NoTransition(fromName.Length > 0 ? fromName : "the current state", toName));
+            trans = to is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == fromId && t.ToId == to.Id);
+            if (trans is null) return (null, def, null, DataCardFix.NoTransition(fromName.Length > 0 ? fromName : "the current state", toName));
             var allowed = Conn.WebServiceManager.DocumentServiceExtensions.GetAllowedFileLifeCycleStateTransitionIds();
             if (allowed is null || !allowed.Contains(trans.Id))
-                return (null, $"you are not allowed to change the state from {fromName} to {toName}");
-            return (to!.Id, null);
+                return (trans, def, null, $"you are not allowed to change the state from {fromName} to {toName}");
+            return (trans, def, to!.Id, null);
         }
-        catch (Exception ex) { return (null, "could not read the lifecycle transitions: " + ex.Message); }
+        catch (Exception ex) { return (trans, def, null, "could not read the lifecycle transitions: " + ex.Message); }
     }
 
     public RevisePlan PlanRevise(DataCardFileInfo file)
@@ -305,13 +323,27 @@ internal sealed class DataCardHost : IDataCardHost
 
     // ---- Apply ----
 
-    public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment)
+    public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) =>
+        Edit(file, changes, comment, f => DataCardFix.SkipReason(f), null, doc => doc.Save(), null, DataCardFix.OpenDocumentSaveFailure);
+
+    /// <summary>
+    /// The I Approve! sign-off: the same checkout, edit, save and check-in as Apply, but with ReleasePlan.SignOffSkipReason (also .iam and
+    /// .idw/.dwg, never a Released file). The opened document must be the kind its extension says with every reference found; only that
+    /// document is saved (Save2 without dependents); a Dependency child whose latest version has the same content is referenced at that version.
+    /// </summary>
+    internal DataCardApplied SignOff(DataCardFileInfo file, PropChange change, string comment) =>
+        Edit(file, new[] { change }, comment, ReleasePlan.SignOffSkipReason, RequireSignable,
+             doc => doc.Save2(false, System.Reflection.Missing.Value), rows => RemapToLatest(Conn, rows), ReleasePlan.OpenDocumentSaveFailure);
+
+    private DataCardApplied Edit(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment, Func<DataCardFileInfo, string?> skipReason,
+                                 Action<Inv.Document, string>? check, Action<Inv.Document> save,
+                                 Func<IReadOnlyList<AssocRow>, IReadOnlyList<AssocRow>>? remap, Func<string, string, string> openSaveFailure)
     {
         var conn = Conn;
         var ds = conn.WebServiceManager.DocumentService;
         var latest = Latest(file);
         var again = Describe(latest);
-        var skip = DataCardFix.SkipReason(again);
+        var skip = skipReason(again);
         if (skip is not null) throw new DataCardSkipException(skip);
         if (again.Version != file.Version)
             throw new DataCardSkipException($"{file.Name} changed in Vault since the preview (version {file.Version} to {again.Version}). Run it again.");
@@ -339,14 +371,15 @@ internal sealed class DataCardHost : IDataCardHost
             step = "open";
             WithDocument(path, doc =>
             {
+                check?.Invoke(doc, file.Name);
                 step = "set";
                 foreach (var c in changes) SetProp(doc, c);
                 step = "save";
-                doc.Save();
+                save(doc);
                 return true;
             }, open);
             step = "checkin";
-            var assocs = ChildAssociations(conn, latest);
+            var assocs = ChildAssociations(conn, latest, remap);
             var after = conn.FileManager.CheckinFile(checkedOut, comment, false, assocs, null, false, null,
                 FileClassification.None, false, new VDF.Currency.FilePathAbsolute(path));
             return ReadBack(ds, after.EntityMasterId);
@@ -357,7 +390,7 @@ internal sealed class DataCardHost : IDataCardHost
             var inventorNote = open is not null ? " The open Inventor document still holds the edited values; close it without saving." : "";
             var failedStep = ex is DataCardStepException se ? se.Step : step;
             if (open is not null && failedStep == "save")
-                throw new DataCardStepException(failedStep, DataCardFix.OpenDocumentSaveFailure(ex.Message, undone) + inventorNote);
+                throw new DataCardStepException(failedStep, openSaveFailure(ex.Message, undone) + inventorNote);
             throw new DataCardStepException(failedStep, $"{ex.Message} ({undone}){inventorNote}");
         }
     }
@@ -380,7 +413,7 @@ internal sealed class DataCardHost : IDataCardHost
     }
 
     /// <summary>Undoes a checkout only when Vault still shows the file checked out to this user (so a completed check-in is never touched).</summary>
-    private static string UndoIfStillMine(VDF.Vault.Currency.Connections.Connection conn, long masterId, string localPath)
+    internal static string UndoIfStillMine(VDF.Vault.Currency.Connections.Connection conn, long masterId, string localPath)
     {
         try
         {
@@ -424,14 +457,18 @@ internal sealed class DataCardHost : IDataCardHost
         return (r.NewFileIteration ?? new VDF.Vault.Currency.Entities.FileIteration(conn, now), r.LocalPath.FullPath);
     }
 
-    /// <summary>Every child Dependency and Attachment of the version being replaced, with the original reference ids, so the new version keeps them.</summary>
-    private static FileAssocParam[]? ChildAssociations(VDF.Vault.Currency.Connections.Connection conn, WsFile latest)
+    /// <summary>Every child Dependency and Attachment of the version being replaced, with the original reference ids, so the new version keeps them.
+    /// Library files are included (includeLibraryFiles): an assembly's Content Center children live in a library folder and are dependencies too.</summary>
+    private static FileAssocParam[]? ChildAssociations(VDF.Vault.Currency.Connections.Connection conn, WsFile latest,
+                                                       Func<IReadOnlyList<AssocRow>, IReadOnlyList<AssocRow>>? remap = null)
     {
         var ds = conn.WebServiceManager.DocumentService;
+        // After the child type: childRecurse, includeLibraryFiles, includeRelatedDocuments, includeHidden.
         var lites = ds.GetFileAssociationLitesByIds(new[] { latest.Id }, FileAssocAlg.Actual,
-            FileAssociationTypeEnum.None, false, FileAssociationTypeEnum.All, false, false, true, false) ?? Array.Empty<FileAssocLite>();
+            FileAssociationTypeEnum.None, false, FileAssociationTypeEnum.All, false, true, true, false) ?? Array.Empty<FileAssocLite>();
         var rows = lites.Select(a => new AssocRow(a.ParFileId, a.CldFileId, a.Typ.ToString(), a.RefId, a.Source, a.ExpectedVaultPath));
         var mine = DataCardFix.ChildAssociations(rows, latest.Id);
+        if (remap is not null) mine = remap(mine);
         if (mine.Count == 0) return null;
         return mine.Select(a => new FileAssocParam
         {
@@ -439,6 +476,57 @@ internal sealed class DataCardHost : IDataCardHost
             Typ = a.Type == "Attachment" ? AssociationType.Attachment : AssociationType.Dependency,
             RefId = a.RefId, Source = a.Source, ExpectedVaultPath = a.ExpectedVaultPath,
         }).ToArray();
+    }
+
+    /// <summary>For the sign-off: (latest id, referenced checksum, latest checksum) of each Dependency child, then ReleasePlan.RemapToLatest.
+    /// A read failure throws inside the edit's try, so the checkout is undone.</summary>
+    private static IReadOnlyList<AssocRow> RemapToLatest(VDF.Vault.Currency.Connections.Connection conn, IReadOnlyList<AssocRow> rows)
+    {
+        var ids = rows.Where(r => r.Type == "Dependency").Select(r => r.CldFileId).Distinct().ToArray();
+        if (ids.Length == 0) return rows;
+        var ds = conn.WebServiceManager.DocumentService;
+        var referenced = ds.GetFilesByIds(ids) ?? Array.Empty<WsFile>();
+        var masters = referenced.Select(f => f.MasterId).Distinct().ToArray();
+        var latest = (ds.GetLatestFilesByMasterIds(masters) ?? Array.Empty<WsFile>()).GroupBy(f => f.MasterId).ToDictionary(g => g.Key, g => g.First());
+        var map = new Dictionary<long, (long, long, long)>();
+        foreach (var f in referenced)
+            if (latest.TryGetValue(f.MasterId, out var l)) map[f.Id] = (l.Id, f.Cksum, l.Cksum);
+        return ReleasePlan.RemapToLatest(rows, map);
+    }
+
+    /// <summary>The sign-off opens assemblies and drawings: the document must be the kind its extension says, and every file it references
+    /// (all levels) must have been found, or saving could write it with references missing.</summary>
+    private static void RequireSignable(Inv.Document doc, string name)
+    {
+        var ext = System.IO.Path.GetExtension(name).ToLowerInvariant();
+        var kindOk = ext switch
+        {
+            ".ipt" => doc is Inv.PartDocument,
+            ".iam" => doc is Inv.AssemblyDocument,
+            ".idw" or ".dwg" => doc is Inv.DrawingDocument,
+            _ => false,
+        };
+        if (!kindOk)
+            throw new DataCardStepException("open", $"Inventor did not open {name} as an Inventor {(ext == ".iam" ? "assembly" : ext == ".ipt" ? "part" : "drawing")}.");
+        var missing = new List<string>();
+        try
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Walk(Inv.File file)
+            {
+                foreach (Inv.FileDescriptor d in file.ReferencedFileDescriptors)
+                {
+                    if (d.ReferenceMissing) { missing.Add(System.IO.Path.GetFileName(d.FullFileName)); continue; }
+                    var child = d.ReferencedFile;
+                    if (child is not null && seen.Add(child.FullFileName)) Walk(child);
+                }
+            }
+            Walk(doc.File);
+        }
+        catch (COMException ex) { throw new DataCardStepException("open", $"could not check the references of {name}: {ex.Message}"); }
+        if (missing.Count > 0)
+            throw new DataCardStepException("open", $"Inventor could not find {missing.Count} referenced file(s) of {name} "
+                + $"({string.Join(", ", missing.Distinct(StringComparer.OrdinalIgnoreCase).Take(5))}). Get Latest on the assembly and try again.");
     }
 
     private static void SetProp(Inv.Document doc, PropChange c)

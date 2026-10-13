@@ -17,6 +17,12 @@ internal sealed class VaultSession : IVaultSession
 
     internal static VDF.Vault.Currency.Connections.Connection Connection => Conn;
 
+    /// <summary>True while the Vault add-in has a signed-in connection.</summary>
+    internal static bool IsSignedIn
+    {
+        get { try { return Current is not null; } catch { return false; } }
+    }
+
     public StatusInfo Status()
     {
         var c = Current;

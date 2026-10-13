@@ -410,6 +410,10 @@ public static class ReleasePlan
             ? r with { CldFileId = l.LatestId } : r).ToList();
 
     public static string SignOffComment(string approver) => $"Approved by {approver}";
+
+    /// <summary>Message for a save failure on a document the user had open in Inventor (it is read-only or refused the save).</summary>
+    public static string OpenDocumentSaveFailure(string detail, string undone) =>
+        $"Inventor kept the open file read-only; close it and click I Approve! again. ({detail}; {undone})";
 }
 
 /// <summary>

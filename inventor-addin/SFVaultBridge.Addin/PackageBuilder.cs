@@ -428,53 +428,13 @@ internal sealed class PackageBuilder
         finally { SetStatus(previous); }
     }
 
-    private string? CheckedOutBy(WsFile f)
-    {
-        if (!f.CheckedOut) return null;
-        try
-        {
-            var conn = VaultSession.Connection;
-            if (f.CkOutUserId == conn.UserID) return "you";
-            return conn.WebServiceManager.AdminService.GetUserByUserId(f.CkOutUserId)?.Name ?? "someone else";
-        }
-        catch (Exception ex)
-        {
-            _log($"check-out user lookup failed: {ex.Message}");
-            return "someone else";
-        }
-    }
+    private string? CheckedOutBy(WsFile f) => LocalState.CheckedOutBy(f, _log);
 
-    /// <summary>Open in Inventor, not dirty, but the local file predates the latest Vault version.</summary>
-    private bool OpenOlder(string? local, WsFile latest)
-    {
-        if (string.IsNullOrEmpty(local)) return false;
-        try
-        {
-            var doc = DocumentOpener.FindOpen(_app, local);
-            if (doc is null || doc.Dirty) return false;
-            return LocalCopy.IsOlderThanLatest(System.IO.File.GetLastWriteTimeUtc(local), latest.ModDate.ToUniversalTime());
-        }
-        catch { return false; }
-    }
+    private bool OpenOlder(string? local, WsFile latest) => LocalState.OpenOlder(_app, local, latest);
 
-    /// <summary>A closed, not checked-out workspace file written after its Vault version: Get Latest would overwrite local edits.</summary>
-    private bool HasLocalEdits(string? local, WsFile latest)
-    {
-        if (string.IsNullOrEmpty(local) || latest.CheckedOut) return false;
-        try
-        {
-            if (!System.IO.File.Exists(local) || DocumentOpener.FindOpen(_app, local) is not null) return false;
-            return LocalCopy.HasLocalEdits(System.IO.File.GetLastWriteTimeUtc(local), latest.ModDate.ToUniversalTime());
-        }
-        catch { return false; }
-    }
+    private bool HasLocalEdits(string? local, WsFile latest) => LocalState.HasLocalEdits(_app, local, latest);
 
-    private bool OpenDirty(string? local)
-    {
-        if (string.IsNullOrEmpty(local)) return false;
-        try { return DocumentOpener.FindOpen(_app, local)?.Dirty ?? false; }
-        catch { return false; }
-    }
+    private bool OpenDirty(string? local) => LocalState.OpenDirty(_app, local);
 
     private sealed class Owner : IWin32Window
     {
