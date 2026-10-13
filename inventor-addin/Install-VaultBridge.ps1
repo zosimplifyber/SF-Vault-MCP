@@ -19,7 +19,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 $tool = Join-Path $root 'tools\SFVaultTools.exe'
 $repo = Split-Path $root -Parent
-$sources = 'vault_tools_cli.py','review_package.py','bom_purchasing.py','purchasing_reference.py','pdf_watermark.py','vault_state.py' |
+$sources = 'vault_tools_cli.py','review_package.py','manufacturing_package.py','bom_purchasing.py','purchasing_reference.py','pdf_watermark.py','vault_state.py' |
     ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ }
 $stale = (Test-Path $tool) -and (@($sources | Where-Object { (Get-Item $_).LastWriteTime -gt (Get-Item $tool).LastWriteTime }).Count -gt 0)
 if (-not (Test-Path $tool) -or $stale) {

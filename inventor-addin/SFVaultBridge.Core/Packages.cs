@@ -212,7 +212,8 @@ public sealed record PackageManifestData(string Kind, string Assembly, string De
                                          string Partner, string Mode, string Source, string User, DateTime Created,
                                          IReadOnlyList<PackageRow> Rows, IReadOnlyList<PackageFile> Files,
                                          IReadOnlyList<string> Guessed, IReadOnlyList<string> MissingDrawings,
-                                         IReadOnlyList<string> NoFlatPattern, IReadOnlyList<PackageFailure> Failed);
+                                         IReadOnlyList<string> NoFlatPattern, IReadOnlyList<PackageFailure> Failed,
+                                         bool Quote = false);
 
 public static class PackageManifest
 {
@@ -235,5 +236,6 @@ public static class PackageManifest
             ["missing_drawings"] = Strings(m.MissingDrawings),
             ["no_flat_pattern"] = Strings(m.NoFlatPattern),
             ["failed"] = new JsonArray(m.Failed.Select(f => (JsonNode?)new JsonObject { ["part"] = f.Part, ["reason"] = f.Reason }).ToArray()),
+            ["quote"] = m.Quote,
         }.ToJsonString();
 }

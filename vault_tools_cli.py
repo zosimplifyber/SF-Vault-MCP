@@ -5,6 +5,7 @@ Inventor add-in. A windowed exe has no stdout, so every result goes to the
 file named by --result. Specs:
 docs/superpowers/specs/2026-10-12-ribbon-purchasing-sheet-design.md
 docs/superpowers/specs/2026-10-12-ribbon-design-review-package-design.md
+docs/superpowers/specs/2026-10-13-ribbon-manufacturing-packages-design.md
 """
 from __future__ import annotations
 
@@ -74,6 +75,10 @@ def _parser() -> argparse.ArgumentParser:
     rev.add_argument("--manifest", required=True)
     rev.add_argument("--out", required=True)
     rev.add_argument("--result", required=True)
+    pkg = sub.add_parser("package")
+    pkg.add_argument("--manifest", required=True)
+    pkg.add_argument("--out", required=True)
+    pkg.add_argument("--result", required=True)
     return p
 
 
@@ -82,6 +87,9 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "purchasing":
             result = run_purchasing(args.bom, args.assembly, args.out, args.name, args.source)
+        elif args.command == "package":
+            import manufacturing_package
+            result = manufacturing_package.run_package(args.manifest, args.out)
         else:
             import review_package
             result = review_package.run_review(args.bom, args.manifest, args.out)

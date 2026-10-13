@@ -304,4 +304,18 @@ public class PackageRulesTests
         Assert.Equal("CD-000126", (string?)o["failed"]![0]!["part"]);
         Assert.Equal("STEP export failed", (string?)o["failed"]![0]!["reason"]);
     }
+
+    [Fact]
+    public void Manifest_writes_quote_flag_defaulting_to_false()
+    {
+        PackageManifestData Make(bool? quote) => quote is null
+            ? new PackageManifestData("partner", "A", "", "", "", "P", "CNC", "", "u", new DateTime(2026, 10, 13),
+                Array.Empty<PackageRow>(), Array.Empty<PackageFile>(), Array.Empty<string>(), Array.Empty<string>(),
+                Array.Empty<string>(), Array.Empty<PackageFailure>())
+            : new PackageManifestData("partner", "A", "", "", "", "P", "CNC", "", "u", new DateTime(2026, 10, 13),
+                Array.Empty<PackageRow>(), Array.Empty<PackageFile>(), Array.Empty<string>(), Array.Empty<string>(),
+                Array.Empty<string>(), Array.Empty<PackageFailure>(), quote.Value);
+        Assert.False(JsonNode.Parse(PackageManifest.ToJson(Make(null)))!["quote"]!.GetValue<bool>());
+        Assert.True(JsonNode.Parse(PackageManifest.ToJson(Make(true)))!["quote"]!.GetValue<bool>());
+    }
 }
