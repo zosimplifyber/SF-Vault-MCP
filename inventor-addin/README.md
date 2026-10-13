@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Buttons
 
-The SF Vault Bridge panel has six action buttons (Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part) plus the status dot. All but Import New Part need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge panel has seven action buttons (Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part, Fix Data Card) plus the status dot. All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 
@@ -76,6 +76,29 @@ The sixth action button files a vendor STEP and its PDF into Vault as a numbered
 4. A file in Vault with the same Vendor and Vendor Number (ignoring case and spaces) stops the import before anything is written; the message names the existing CD number and folder.
 5. If a step fails, the message names the step and lists anything that already reached Vault. Nothing is undone automatically and your downloads stay where they were. Remove or reuse the listed leftovers in Vault, fix the cause, and run it again.
 
+### Fix Data Card
+
+The seventh action button, after Import New Part, fixes the data card of parts already in Vault from a form, with a preview before anything is written. It is the screen for the `fix_data_card` operation below, so every safety rule there applies unchanged: dry run first, Released parts skipped unless you tick the revise box, only `.ipt` files, Content Center never touched, and a checkout is undone on any failure before the check-in. It needs a Vault sign-in.
+
+Which parts:
+
+- A part is open: that part.
+- An assembly is open: the components selected in the browser or graphics window, once per file. With nothing selected the message is "Select the parts to fix in the browser, then click Fix Data Card." Sub-assemblies contribute nothing and are listed as ".iam not supported yet".
+- A drawing is open, or nothing: "Open a part, or select parts in an assembly."
+
+The form has one row per part. Each field has a grey "now" column (read from Vault's latest version, opened invisibly in Inventor, nothing changed) and an editable "new" column: Part Number, Title, Description, Vendor, Vendor Number, Source, Process, Material Finish, Estimated Cost. Cells that differ from "now" turn yellow. Proposed values:
+
+- Part Number is the file name without the extension.
+- Title is `<Part Number>-<Description>` for Source = Buy or a purchased category, otherwise it stays as it is. Title is a Summary Information property.
+- Vendor uses the data card spelling (`McMASTER-CARR`).
+- Source is a Buy/Make dropdown and Process a dropdown from `processValues` in `settings.json` plus blank; the current value is always kept in the list.
+- Estimated Cost is a number, shown with 4 decimals; a blank or non-number is an error on that row.
+- Everything else starts as it is now.
+
+Only fields whose new value differs are sent; a row with nothing to change is greyed "no change". Tick **Revise and re-release Released parts** to include Released parts (off by default, never remembered); without it they show "Released: skipped".
+
+Preview runs the dry run with the edited values and gives each row would change, skipped (with the reason) or error. Apply is enabled only after a Preview with no edits since, asks "Check out, edit and check in N parts?" and then fixes the rows that would change, one at a time, so Inventor stays responsive. Each row ends as fixed (new version), skipped with the reason, or error with the step; revised rows also show the revision before and after and the state. If a Released part cannot be returned to Released, later Released rows are skipped. **Copy results** puts a tab-separated summary on the clipboard. After an Apply the form is read-only; close it and click the button again to continue.
+
 ### Purchasing list sign-in
 
 The Purchasing Sheet prices parts from the purchasing Microsoft List, which needs a one-time sign-in per Windows user. Open the existing Simplifyber BOM Purchasing tool and press its Sign in button (or run `py -3.14 -m purchasing_reference --login` on a PC with Python). The sign-in is kept in `%LOCALAPPDATA%\Simplifyber\purchasing_msal_cache.bin`, outside the exe, so it survives updates and is shared by both tools. The summary dialog says which source was used:
@@ -96,9 +119,10 @@ py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --set
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --apply --comment "Data card fix"
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt --custom Process=CNC
 py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt --custom Process=CNC --apply
+py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt --summary "Title=CD-001885-Steel Washer"
 ```
 
-Setting `Process` this way works for `.ipt` only (assemblies are not supported yet).
+Setting `Process` this way works for `.ipt` only (assemblies are not supported yet). `--summary NAME=VALUE` (request field `summary`) sets Summary Information properties such as `Title`, compared and applied like the Design ones.
 
 Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, an assembly (.iam is not supported yet), not an .ipt, a local copy that differs from Vault, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
 

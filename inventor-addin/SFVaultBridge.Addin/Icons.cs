@@ -226,4 +226,47 @@ internal static class Icons
         }
         return bmp;
     }
+
+    /// <summary>Clipboard with a sheet and two text lines, and an orange open-end wrench across its lower right corner.</summary>
+    public static Bitmap FixCard(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var board = new RectangleF(S(3), S(4), S(19), S(25));
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillRectangle(b, board);
+            g.DrawRectangle(pen, board.X, board.Y, board.Width, board.Height);
+            var sheet = new RectangleF(S(5.5f), S(8), S(14), S(18));
+            using (var b = new SolidBrush(Paper)) g.FillRectangle(b, sheet);
+            g.DrawRectangle(pen, sheet.X, sheet.Y, sheet.Width, sheet.Height);
+            var clip = new RectangleF(S(8), S(1.5f), S(9), S(5.5f));
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillRectangle(b, clip);
+            g.DrawRectangle(pen, clip.X, clip.Y, clip.Width, clip.Height);
+            if (big)
+            {
+                using var line = new Pen(Color.FromArgb(255, 144, 164, 174), 1.25f);
+                g.DrawLine(line, S(8), S(13), S(17), S(13));
+                g.DrawLine(line, S(8), S(17), S(15), S(17));
+            }
+            // Wrench: ink outline under an orange body so it reads on dark and light ribbons.
+            var orange = Color.FromArgb(255, 0xEF, 0x6C, 0x00);
+            var head = new RectangleF(S(20.5f), S(13), S(8), S(8));
+            var shaftFrom = new PointF(S(22), S(20)); var shaftTo = new PointF(S(13.5f), S(29));
+            var outlineW = big ? 6f : 4f; var bodyW = big ? 3.5f : 2.5f;
+            using (var o = new Pen(Ink, outlineW) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawLine(o, shaftFrom, shaftTo);
+                g.DrawArc(o, head, 350, 290);
+            }
+            using (var w = new Pen(orange, bodyW) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawLine(w, shaftFrom, shaftTo);
+                g.DrawArc(w, head, 350, 290);
+            }
+        }
+        return bmp;
+    }
 }

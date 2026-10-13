@@ -4,7 +4,7 @@ using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part and the Status button (see RibbonStatus).</summary>
+/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part, Fix Data Card and the Status button (see RibbonStatus).</summary>
 internal sealed class RibbonActions
 {
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
@@ -28,6 +28,7 @@ internal sealed class RibbonActions
         Add("Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
         Add("3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
         Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
+        Add("Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
     }
 
     private void Add(string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument>? work, Action? custom = null)
@@ -167,6 +168,43 @@ internal sealed class RibbonActions
         {
             try { _app.Documents.Open(result.LocalIpt, true); }
             catch (Exception ex) { _log($"open {result.LocalIpt} failed: {ex}"); Msg($"Could not open the part: {ex.Message}", title); }
+        }
+    }
+
+    private void FixDataCard()
+    {
+        const string title = "Fix Data Card";
+        var doc = _app.ActiveDocument;
+        var kind = doc is null ? FixCardDocKind.None : doc is Inv.PartDocument ? FixCardDocKind.Part : doc is Inv.AssemblyDocument ? FixCardDocKind.Assembly : FixCardDocKind.Other;
+        var selected = new List<string?>();
+        if (kind == FixCardDocKind.Assembly) selected.AddRange(SelectedComponentFiles(doc!));
+        var pick = FixCardRules.Pick(kind, kind == FixCardDocKind.None ? null : doc!.FullFileName, selected);
+        if (pick.Message is not null) { Msg(pick.Message, title); return; }
+
+        var root = VaultFiles.WorkingFolderRoot();
+        var sources = pick.Files.Select(f =>
+        {
+            var name = System.IO.Path.GetFileName(f);
+            try { return new FixCardSource(VaultPaths.ToVaultFolder(f, root) + "/" + name, name, null); }
+            catch (BridgeException ex) { return new FixCardSource("", name, ex.Message); }
+        }).ToList();
+        var process = BridgeSettings.Load(BridgeSettings.DefaultPath, _log).ProcessValues;
+        using var form = new FixDataCardForm(new DataCardHost(_app), sources, pick.Skipped, process, _log);
+        var owner = OwnerWindow();
+        if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
+    }
+
+    /// <summary>The file of each selected component occurrence (null when it has none, for example a virtual component). Other selected items are ignored.</summary>
+    private IEnumerable<string?> SelectedComponentFiles(Inv.Document doc)
+    {
+        var set = doc.SelectSet;
+        for (var i = 1; i <= set.Count; i++)
+        {
+            if (set[i] is not Inv.ComponentOccurrence occ) continue;
+            string? file = null;
+            try { file = occ.ReferencedDocumentDescriptor.FullDocumentName; }
+            catch (Exception ex) { _log($"fix data card: selected component has no file: {ex.Message}"); }
+            yield return file;
         }
     }
 
