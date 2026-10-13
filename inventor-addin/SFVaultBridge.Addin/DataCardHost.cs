@@ -355,7 +355,10 @@ internal sealed class DataCardHost : IDataCardHost
         {
             var undone = UndoIfStillMine(conn, latest.MasterId, path);
             var inventorNote = open is not null ? " The open Inventor document still holds the edited values; close it without saving." : "";
-            throw new DataCardStepException(ex is DataCardStepException se ? se.Step : step, $"{ex.Message} ({undone}){inventorNote}");
+            var failedStep = ex is DataCardStepException se ? se.Step : step;
+            if (open is not null && failedStep == "save")
+                throw new DataCardStepException(failedStep, DataCardFix.OpenDocumentSaveFailure(ex.Message, undone) + inventorNote);
+            throw new DataCardStepException(failedStep, $"{ex.Message} ({undone}){inventorNote}");
         }
     }
 

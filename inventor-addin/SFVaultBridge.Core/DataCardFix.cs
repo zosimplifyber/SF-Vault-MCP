@@ -179,6 +179,10 @@ public static class DataCardFix
     public static bool IsReleased(DataCardFileInfo f) =>
         f.Released || string.Equals(f.State, ReleasedState, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Message for a save failure on a document the user had open in Inventor (it is read-only or refused the save).</summary>
+    public static string OpenDocumentSaveFailure(string detail, string undone) =>
+        $"Inventor kept the open part read-only; close it and click Fix Data Card again. ({detail}; {undone})";
+
     public static string NoTransition(string from, string to) => $"no transition from {from} to {to}";
 
     public static IReadOnlyList<PropRef> Targets(DataCardRequest r, string fileName, out IReadOnlyDictionary<PropRef, string> wanted)
@@ -252,7 +256,7 @@ public static class DataCardFix
         };
     }
 
-    public sealed class RunState { public bool ReviseStopped; }
+    public sealed class RunState { public bool ReviseStopped { get; internal set; } }
 
     public const string ReviseStoppedReason = "stopped: an earlier file could not be returned to Released";
 

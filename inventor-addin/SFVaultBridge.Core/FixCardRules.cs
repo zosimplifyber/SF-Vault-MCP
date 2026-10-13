@@ -26,6 +26,7 @@ public sealed record FixCardOutcome(string File, string Status, string Detail, s
     public const string Skipped = "skipped";
     public const string Error = "error";
     public const string NoChange = "no change";
+    public const string NotAttempted = "not attempted";
 }
 
 /// <summary>Request built from the form values for one file. Request is null when nothing changed or an input is invalid (Errors says why).</summary>
@@ -167,14 +168,54 @@ public static class FixCardRules
         foreach (var f in Fields) o[f.Prop] = Val(current, f.Prop);
         var pn = Path.GetFileNameWithoutExtension(fileName ?? "");
         if (pn.Length > 0) o[PartNumberProp] = pn;
-        var buy = string.Equals(Val(current, SourceProp).Trim(), BuySource, StringComparison.OrdinalIgnoreCase);
-        if ((buy || IsPurchasedCategory(category)) && pn.Length > 0)
-            o[TitleProp] = ImportRules.PartTitle(pn, Val(current, DescriptionProp));
-        var vendor = Val(current, VendorProp).Trim();
-        if (vendor.Length > 0) o[VendorProp] = ImportRules.DataCardVendor(vendor);
+        if (pn.Length > 0)
+            o[TitleProp] = ProposeTitle(pn, Val(current, DescriptionProp), Val(current, SourceProp), category, Val(current, TitleProp));
+        var vendorNow = Val(current, VendorProp);
+        // A vendor already in the data card spelling (case-sensitive) is left exactly as it is.
+        if (vendorNow.Trim().Length > 0 && !string.Equals(vendorNow, ImportRules.DataCardVendor(vendorNow), StringComparison.Ordinal))
+            o[VendorProp] = ImportRules.DataCardVendor(vendorNow.Trim());
         o[CostProp] = FormatCost(Val(current, CostProp));
         return o;
     }
+
+    /// <summary>Title: PartTitle(Part Number, Description) for Source = Buy or a purchased category, otherwise the title as it is.</summary>
+    public static string ProposeTitle(string partNumber, string description, string source, string? category, string currentTitle)
+    {
+        var buy = string.Equals((source ?? "").Trim(), BuySource, StringComparison.OrdinalIgnoreCase);
+        return (buy || IsPurchasedCategory(category)) && partNumber.Trim().Length > 0 ? ImportRules.PartTitle(partNumber, description) : currentTitle ?? "";
+    }
+
+    /// <summary>When Part Number, Description or Source is edited: the new automatic Title if the Title cell still holds the previous automatic one
+    /// (the user has not edited it by hand), otherwise the cell as it is.</summary>
+    public static string FollowTitle(string? titleCell, string previousAuto, string newAuto) =>
+        string.Equals(titleCell ?? "", previousAuto, StringComparison.Ordinal) ? newAuto : titleCell ?? "";
+
+    /// <summary>True when the values and the revise flag are exactly those that were previewed.</summary>
+    public static bool SameAsPreview(IReadOnlyList<IReadOnlyDictionary<PropRef, string>> previewed, bool previewedRevise,
+                                     IReadOnlyList<IReadOnlyDictionary<PropRef, string>> now, bool nowRevise)
+    {
+        if (previewedRevise != nowRevise || previewed.Count != now.Count) return false;
+        for (var i = 0; i < now.Count; i++)
+        {
+            if (previewed[i].Count != now[i].Count) return false;
+            foreach (var (k, v) in now[i])
+                if (!previewed[i].TryGetValue(k, out var pv) || !string.Equals(pv, v, StringComparison.Ordinal)) return false;
+        }
+        return true;
+    }
+
+    public const string ChangedSincePreview = "Values changed since Preview; click Preview again.";
+
+    /// <summary>Apply confirmation; names how many parts are revised and re-released when any are.</summary>
+    public static string ConfirmText(int parts, int revised)
+    {
+        var text = $"Check out, edit and check in {parts} {(parts == 1 ? "part" : "parts")}?";
+        if (revised > 0)
+            text += $"\n\n{revised} Released {(revised == 1 ? "part" : "parts")} will be revised and re-released: moved to Work in Progress, edited (new revision) and returned to Released.";
+        return text;
+    }
+
+    public static FixCardOutcome NotAttemptedOutcome(string file) => new(file, FixCardOutcome.NotAttempted, "stopped before this part");
 
     // ---- Changed fields only ----
 

@@ -200,12 +200,28 @@ internal sealed class RibbonActions
         var set = doc.SelectSet;
         for (var i = 1; i <= set.Count; i++)
         {
-            if (set[i] is not Inv.ComponentOccurrence occ) continue;
-            string? file = null;
-            try { file = occ.ReferencedDocumentDescriptor.FullDocumentName; }
-            catch (Exception ex) { _log($"fix data card: selected component has no file: {ex.Message}"); }
+            if (!TryComponentFile(set[i], out var file)) continue;
             yield return file;
         }
+    }
+
+    /// <summary>True for a component occurrence or a proxy of one (a pick inside a sub-assembly); file is null when it has none (virtual).</summary>
+    private bool TryComponentFile(object item, out string? file)
+    {
+        file = null;
+        var isComponent = item is Inv.ComponentOccurrenceProxy or Inv.ComponentOccurrence;
+        if (!isComponent) return false;
+        try
+        {
+            if (item is Inv.ComponentOccurrenceProxy proxy)
+            {
+                try { file = proxy.NativeObject.ReferencedDocumentDescriptor.FullDocumentName; }
+                catch (Exception) { file = ((Inv.Document)proxy.Definition.Document).FullFileName; }
+            }
+            else file = ((Inv.ComponentOccurrence)item).ReferencedDocumentDescriptor.FullDocumentName;
+        }
+        catch (Exception ex) { _log("fix data card: selected component has no file: " + ex.Message); file = null; }
+        return true;
     }
 
     internal static (string Folder, string VaultFolder, string Stem) Locate(Inv.AssemblyDocument asm)

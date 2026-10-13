@@ -39,12 +39,17 @@ internal sealed class FixDataCardForm : Form
     private readonly Button _preview = new() { Text = "Preview", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _apply = new() { Text = "Apply", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _copy = new() { Text = "Copy results", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly Button _stop = new() { Text = "Stop", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Enabled = false };
     private readonly Button _close = new() { Text = "Close", DialogResult = DialogResult.Cancel, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private bool _busy;
     private bool _loaded;
     private bool _previewed;
     private bool _applied;
     private bool _filling;
+    private bool _stopRequested;
+    private IReadOnlyList<IReadOnlyDictionary<PropRef, string>>? _snapshot;
+    private bool _snapshotRevise;
+    private readonly Dictionary<int, string> _autoTitle = new();
 
     public FixDataCardForm(IDataCardHost host, IReadOnlyList<FixCardSource> sources, IReadOnlyList<string> skippedNotes,
                            IReadOnlyList<string> processValues, Action<string> log)
@@ -73,6 +78,7 @@ internal sealed class FixDataCardForm : Form
         _preview.Click += (_, _) => Safe(OnPreview);
         _apply.Click += (_, _) => Safe(OnApply);
         _copy.Click += (_, _) => Safe(OnCopy);
+        _stop.Click += (_, _) => { _stopRequested = true; _stop.Enabled = false; _status.Text = "Stopping after the current part..."; };
         FormClosing += (_, e) => { if (_busy) e.Cancel = true; };
     }
 
@@ -169,15 +175,16 @@ internal sealed class FixDataCardForm : Form
             Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false,
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(0, Px(2), 0, Px(6)),
         };
-        foreach (var b in new[] { _close, _apply, _preview, _copy })
+        foreach (var b in new[] { _close, _apply, _preview, _copy, _stop })
         {
             b.MinimumSize = new Size(Px(88), 0); b.Margin = new Padding(Px(6), Px(3), Px(0), Px(3));
         }
-        _preview.TabIndex = 2; _apply.TabIndex = 3; _copy.TabIndex = 4; _close.TabIndex = 5;
+        _preview.TabIndex = 2; _apply.TabIndex = 3; _stop.TabIndex = 4; _copy.TabIndex = 5; _close.TabIndex = 6;
         buttons.Controls.Add(_close);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_preview);
         buttons.Controls.Add(_copy);
+        buttons.Controls.Add(_stop);
         Fixed(buttons);
         Controls.Add(root);
     }
@@ -268,6 +275,7 @@ internal sealed class FixDataCardForm : Form
                 }
                 row.Cells[NewCol(f)].Value = newText;
             }
+            _autoTitle[i] = proposed[FixCardRules.TitleProp];
         }
         finally { _filling = false; }
         RefreshRow(i);
@@ -317,8 +325,29 @@ internal sealed class FixDataCardForm : Form
     private void OnCellChanged(int row, int col)
     {
         if (_filling || row < 0 || col < FirstFieldCol || (col - FirstFieldCol) % 2 == 0) return;
+        FollowTitle(row, (col - FirstFieldCol) / 2);
         RefreshRow(row);
         Invalidated();
+    }
+
+    private static int FieldIndex(PropRef p) => FixCardRules.Fields.ToList().FindIndex(f => f.Prop == p);
+
+    /// <summary>Part Number, Description or Source edited: Title follows unless it was edited by hand.</summary>
+    private void FollowTitle(int row, int field)
+    {
+        var prop = FixCardRules.Fields[field].Prop;
+        if (prop != FixCardRules.PartNumberProp && prop != FixCardRules.DescriptionProp && prop != FixCardRules.SourceProp) return;
+        if (_rows[row].Loaded is not { Problem: null } loaded || !_autoTitle.TryGetValue(row, out var prev)) return;
+        var e = ReadEdited(row);
+        loaded.Current.TryGetValue(FixCardRules.TitleProp, out var currentTitle);
+        var next = FixCardRules.ProposeTitle(e[FixCardRules.PartNumberProp], e[FixCardRules.DescriptionProp], e[FixCardRules.SourceProp], loaded.Category, currentTitle ?? "");
+        var cell = _grid.Rows[row].Cells[NewCol(FieldIndex(FixCardRules.TitleProp))];
+        var follow = FixCardRules.FollowTitle(Convert.ToString(cell.Value), prev, next);
+        _autoTitle[row] = next;
+        if (follow == Convert.ToString(cell.Value)) return;
+        _filling = true;
+        try { cell.Value = follow; }
+        finally { _filling = false; }
     }
 
     private void OnReviseChanged()
@@ -355,6 +384,7 @@ internal sealed class FixDataCardForm : Form
         _revise.Enabled = !_busy && !_applied;
         _grid.Enabled = !_busy;
         _close.Enabled = !_busy;
+        _stop.Enabled = _busy && !_stopRequested;
     }
 
     // ---- Preview and Apply ----
@@ -371,9 +401,14 @@ internal sealed class FixDataCardForm : Form
 
     private List<int> WorkRows() => Enumerable.Range(0, _rows.Count).Where(i => _rows[i].Loaded is { Problem: null }).ToList();
 
+    private IReadOnlyList<IReadOnlyDictionary<PropRef, string>> TakeSnapshot() =>
+        Enumerable.Range(0, _rows.Count).Select(i => _rows[i].Loaded is { Problem: null } ? ReadEdited(i) : new Dictionary<PropRef, string>()).ToList();
+
     private void OnPreview()
     {
         _grid.EndEdit();
+        _snapshot = TakeSnapshot();
+        _snapshotRevise = _revise.Checked;
         var batch = new FixCardRules.Batch(_host, _revise.Checked, _log);
         var rows = WorkRows();
         RunQueue(rows, i =>
@@ -382,21 +417,28 @@ internal sealed class FixDataCardForm : Form
             SetOutcome(i, Guarded(_rows[i], () => batch.Run(_rows[i].Loaded!, ReadEdited(i), true)));
         }, () =>
         {
-            _previewed = true;
+            _previewed = !_stoppedEarly;
             var n = _rows.Count(r => r.Outcome?.Status == FixCardOutcome.WouldChange);
-            _status.Text = n == 0 ? "Nothing would change." : $"{n} {(n == 1 ? "part" : "parts")} would change. Press Apply to check out, edit and check in.";
+            _status.Text = _stoppedEarly ? "Stopped. Click Preview again before applying."
+                : n == 0 ? "Nothing would change." : $"{n} {(n == 1 ? "part" : "parts")} would change. Press Apply to check out, edit and check in.";
             UpdateButtons();
             ShowDetail();
-        });
+        }, i => SetOutcome(i, FixCardRules.NotAttemptedOutcome(_rows[i].Source.VaultPath)));
     }
 
     private void OnApply()
     {
+        _grid.EndEdit();
         var targets = Enumerable.Range(0, _rows.Count).Where(i => _rows[i].Outcome?.Status == FixCardOutcome.WouldChange).ToList();
         if (!_previewed || targets.Count == 0) return;
-        var ask = $"Check out, edit and check in {targets.Count} {(targets.Count == 1 ? "part" : "parts")}?";
-        if (MessageBox.Show(this, ask, Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-        _grid.EndEdit();
+        if (_snapshot is null || !FixCardRules.SameAsPreview(_snapshot, _snapshotRevise, TakeSnapshot(), _revise.Checked))
+        {
+            _status.Text = FixCardRules.ChangedSincePreview;
+            Invalidated();
+            return;
+        }
+        var revised = targets.Count(i => _revise.Checked && _rows[i].Loaded!.Released);
+        if (MessageBox.Show(this, FixCardRules.ConfirmText(targets.Count, revised), Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
         var batch = new FixCardRules.Batch(_host, _revise.Checked, _log);
         RunQueue(targets, i =>
         {
@@ -409,10 +451,11 @@ internal sealed class FixDataCardForm : Form
             foreach (DataGridViewRow gr in _grid.Rows) for (var c = FirstFieldCol; c < _grid.ColumnCount; c++) gr.Cells[c].ReadOnly = true;
             var fixedCount = targets.Count(i => _rows[i].Outcome?.Status == FixCardOutcome.Fixed);
             var errors = targets.Count(i => _rows[i].Outcome?.Status == FixCardOutcome.Error);
-            _status.Text = $"{fixedCount} fixed, {errors} with errors, {targets.Count - fixedCount - errors} skipped. Use Copy results to keep a record.";
+            var notTried = targets.Count(i => _rows[i].Outcome?.Status == FixCardOutcome.NotAttempted);
+            _status.Text = $"{fixedCount} fixed, {errors} with errors, {notTried} not attempted, {targets.Count - fixedCount - errors - notTried} skipped. Use Copy results to keep a record.";
             UpdateButtons();
             ShowDetail();
-        });
+        }, i => SetOutcome(i, FixCardRules.NotAttemptedOutcome(_rows[i].Source.VaultPath)));
     }
 
     private FixCardOutcome Guarded(RowData row, Func<FixCardOutcome> run)
@@ -441,15 +484,35 @@ internal sealed class FixDataCardForm : Form
         }
     }
 
-    /// <summary>Runs work(row) for each row, one per message-pump turn, so painting and Inventor's own messages are served between rows.</summary>
-    private void RunQueue(IReadOnlyList<int> rows, Action<int> work, Action done)
+    private bool _stoppedEarly;
+
+    /// <summary>Runs work(row) for each row, one per message-pump turn, so painting and Inventor's own messages are served between rows.
+    /// Stop is checked between rows; rows not reached go to notAttempted.</summary>
+    private void RunQueue(IReadOnlyList<int> rows, Action<int> work, Action done, Action<int>? notAttempted = null)
     {
         _busy = true;
+        _stopRequested = false;
+        _stoppedEarly = false;
         UpdateButtons();
         var next = 0;
         void Step()
         {
             if (IsDisposed) return;
+            if (_stopRequested && next < rows.Count)
+            {
+                _stoppedEarly = true;
+                for (; next < rows.Count; next++)
+                {
+                    var skipped = rows[next];
+                    if (notAttempted is not null) notAttempted(skipped);
+                    else
+                    {
+                        _grid.Rows[skipped].Cells[StatusCol].Value = FixCardOutcome.NotAttempted;
+                        _grid.Rows[skipped].DefaultCellStyle.ForeColor = SystemColors.GrayText;
+                        _rows[skipped].Problem ??= "stopped before this part";
+                    }
+                }
+            }
             if (next >= rows.Count)
             {
                 _busy = false;

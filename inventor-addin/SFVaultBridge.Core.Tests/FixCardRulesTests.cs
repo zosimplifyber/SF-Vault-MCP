@@ -467,4 +467,63 @@ public partial class DataCardFixTests
         Assert.Equal(new[] { "", "CNC", "Laser" }, FixCardRules.ProcessChoices(new[] { "CNC", "Laser", " " }, ""));
         Assert.Equal(new[] { "", "CNC", "Weird" }, FixCardRules.ProcessChoices(new[] { "CNC" }, "Weird"));
     }
+
+    // ---- Fix round 1 ----
+
+    [Fact]
+    public void Vendor_already_in_the_data_card_spelling_proposes_no_change()
+    {
+        var current = Card(pn: "CD-1", title: "CD-1-Steel Washers", vendor: "McMASTER-CARR");
+        Assert.Equal("McMASTER-CARR", Edited("CD-1.ipt", "Part - Purchased", current)[FixCardRules.VendorProp]);
+        Assert.Null(FixCardRules.BuildRequest("$/a.ipt", current, Edited("CD-1.ipt", "Part - Purchased", current), false, true).Request);
+        // Only a different spelling is proposed, and the comparison is case-sensitive.
+        Assert.Equal("McMASTER-CARR", Edited("CD-1.ipt", "x", Card(vendor: "McMaster-Carr"))[FixCardRules.VendorProp]);
+        Assert.Equal("McMASTER-CARR", Edited("CD-1.ipt", "x", Card(vendor: "MCMASTER-CARR"))[FixCardRules.VendorProp]);
+        Assert.Equal("Acme", Edited("CD-1.ipt", "x", Card(vendor: "Acme"))[FixCardRules.VendorProp]);
+    }
+
+    [Fact]
+    public void Title_follows_part_number_and_description_unless_edited_by_hand()
+    {
+        Assert.Equal("CD-1-New", FixCardRules.ProposeTitle("CD-1", "New", "Buy", "Part - Made", "old"));
+        Assert.Equal("old", FixCardRules.ProposeTitle("CD-1", "New", "Make", "Part - Made", "old"));
+        var auto = "CD-1-Steel Washers";
+        var next = FixCardRules.ProposeTitle("CD-1", "Hex Nut", "Buy", null, "old");
+        Assert.Equal("CD-1-Hex Nut", FixCardRules.FollowTitle(auto, auto, next));
+        Assert.Equal("my title", FixCardRules.FollowTitle("my title", auto, next));
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<PropRef, string>> Snap(params string[] descs) =>
+        descs.Select(d => (IReadOnlyDictionary<PropRef, string>)new Dictionary<PropRef, string> { [FixCardRules.DescriptionProp] = d }).ToList();
+
+    [Fact]
+    public void SameAsPreview_compares_values_and_the_revise_flag()
+    {
+        Assert.True(FixCardRules.SameAsPreview(Snap("a", "b"), false, Snap("a", "b"), false));
+        Assert.False(FixCardRules.SameAsPreview(Snap("a", "b"), false, Snap("a", "b "), false));
+        Assert.False(FixCardRules.SameAsPreview(Snap("a"), false, Snap("a", "b"), false));
+        Assert.False(FixCardRules.SameAsPreview(Snap("a"), false, Snap("a"), true));
+        Assert.Equal("Values changed since Preview; click Preview again.", FixCardRules.ChangedSincePreview);
+    }
+
+    [Fact]
+    public void ConfirmText_names_the_revise_count_only_when_there_is_one()
+    {
+        Assert.Equal("Check out, edit and check in 3 parts?", FixCardRules.ConfirmText(3, 0));
+        Assert.Equal("Check out, edit and check in 1 part?", FixCardRules.ConfirmText(1, 0));
+        var t = FixCardRules.ConfirmText(4, 2);
+        Assert.StartsWith("Check out, edit and check in 4 parts?", t);
+        Assert.Contains("2 Released parts will be revised and re-released", t);
+    }
+
+    [Fact]
+    public void Not_attempted_outcome_and_open_document_save_message()
+    {
+        var o = FixCardRules.NotAttemptedOutcome("$/L/A.ipt");
+        Assert.Equal("not attempted", o.Status);
+        Assert.Equal("$/L/A.ipt", o.File);
+        var m = DataCardFix.OpenDocumentSaveFailure("access denied", "the checkout was undone");
+        Assert.StartsWith("Inventor kept the open part read-only; close it and click Fix Data Card again", m);
+        Assert.Contains("access denied", m);
+    }
 }
