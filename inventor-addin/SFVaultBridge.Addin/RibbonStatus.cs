@@ -26,7 +26,7 @@ internal sealed class RibbonStatus
     private readonly List<Inv.RibbonTab> _tabs = new();
 
     /// <summary>Panels on the SF Vault Bridge tab, in order: Status first, then the button groups.</summary>
-    public static readonly string[] Groups = { "Status", "Parts", "Purchasing", "Review", "Manufacturing" };
+    public static readonly string[] Groups = { "Status", "Parts", "Purchasing", "Review", "Manufacturing", "Release" };
     public const string TabName = "SF Vault Bridge";
     private const string TabId = "SFVaultBridge.Tab";
     private readonly HashSet<string> _loggedErrors = new();

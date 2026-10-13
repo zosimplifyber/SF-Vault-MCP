@@ -227,6 +227,37 @@ internal static class Icons
         return bmp;
     }
 
+    /// <summary>Approval seal: a green scalloped rosette with an ink rim and a white check mark.</summary>
+    public static Bitmap ApproveSeal(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            var cx = S(16); var cy = S(16);
+            var points = big ? 12 : 8;
+            var outer = S(15); var inner = S(12.5f);
+            var star = new PointF[points * 2];
+            for (var i = 0; i < star.Length; i++)
+            {
+                var r = i % 2 == 0 ? outer : inner;
+                var a = Math.PI * i / points - Math.PI / 2;
+                star[i] = new PointF(cx + (float)(r * Math.Cos(a)), cy + (float)(r * Math.Sin(a)));
+            }
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, star);
+            using (var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round }) g.DrawPolygon(pen, star);
+            if (big)
+            {
+                using var ring = new Pen(Color.FromArgb(200, Paper), 1.25f);
+                g.DrawEllipse(ring, cx - S(9.5f), cy - S(9.5f), S(19), S(19));
+            }
+            using var tick = new Pen(Color.White, big ? 3.25f : 2.25f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLines(tick, new[] { new PointF(S(10), S(16.5f)), new PointF(S(14.5f), S(21)), new PointF(S(22.5f), S(11.5f)) });
+        }
+        return bmp;
+    }
+
     /// <summary>Clipboard with a sheet and two text lines, and an orange open-end wrench across its lower right corner.</summary>
     public static Bitmap FixCard(int size)
     {

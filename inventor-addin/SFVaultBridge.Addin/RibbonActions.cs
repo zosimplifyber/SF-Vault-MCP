@@ -4,7 +4,7 @@ using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part, Fix Data Card and the Status button (see RibbonStatus).</summary>
+/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part, Fix Data Card, I Approve! and the Status button (see RibbonStatus).</summary>
 internal sealed class RibbonActions
 {
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
@@ -29,6 +29,7 @@ internal sealed class RibbonActions
         Add("Manufacturing", "3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
         Add("Parts", "Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
         Add("Parts", "Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
+        Add("Release", "I Approve!", "SFVaultBridge.Approve", "Sign off (Engr Approved By) and release this assembly's engineering parts, Make sub-assemblies, the assembly and their drawings, bottom up, with a preview first. Then builds the Purchasing Sheet and Assembly Package and opens Partner Package.", Icons.ApproveSeal, null, Approve);
     }
 
     private void Add(string group, string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument>? work, Action? custom = null)
@@ -194,6 +195,72 @@ internal sealed class RibbonActions
         if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
     }
 
+    /// <summary>
+    /// I Approve!: preview, then sign off and release the open assembly's engineering files bottom up (ApproveForm). When the top assembly ends
+    /// Released, the Purchasing Sheet and Assembly Package are built through their usual code paths and the Partner Package form opens.
+    /// </summary>
+    private void Approve()
+    {
+        const string title = "I Approve!";
+        if (_app.ActiveDocument is not Inv.AssemblyDocument asm) { Msg("Open an assembly first.", title); return; }
+        IReadOnlyList<ReleaseModel> models;
+        ReleaseHost host;
+        string approver;
+        var cursor = Cursor.Current;
+        try
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            var (_, vaultFolder, _) = Locate((Inv.Document)asm);
+            var root = VaultFiles.WorkingFolderRoot();
+            var categories = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var roots = BomEnricher.Apply(BomReader.Read(asm), root, _log, categories);
+            var asmFile = VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(asm.FullFileName));
+            var top = BomReader.TopNode(asm, VaultFiles.RevisionOf(asmFile), asmFile is null ? "" : VaultFiles.StateOf(asmFile));
+            models = ReleasePlan.Models(top, asmFile is null ? null : VaultFiles.CategoryName(asmFile), roots,
+                                        n => categories.TryGetValue(n.FullPath, out var c) ? c : null);
+            var tree = BomOrdering.Flatten(roots).Select(l => l.Node.FullPath).Where(p => !string.IsNullOrWhiteSpace(p))
+                                  .Append(asm.FullFileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var user = "";
+            try { user = _app.GeneralOptions.UserName ?? ""; } catch (Exception ex) { _log($"approve: Inventor user name unavailable: {ex.Message}"); }
+            approver = ReleasePlan.ApproverName(user);
+            host = new ReleaseHost(_app, new DataCardHost(_app), _log, root, tree);
+        }
+        finally { Cursor.Current = cursor; }
+        if (approver.Length == 0)
+        {
+            Msg("Inventor has no user name, so there is no sign-off name. Set it in Tools, Application Options, General, User name, then try again.", title);
+            return;
+        }
+
+        IReadOnlyList<ReleaseResult> results;
+        using (var form = new ApproveForm(host, models, approver, System.IO.Path.GetFileName(asm.FullFileName), _log))
+        {
+            var owner = OwnerWindow();
+            if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
+            if (!form.Ran) return;
+            results = form.Results;
+        }
+        var after = ReleasePlan.AfterRelease(results);
+        if (!after.Build) { Msg(after.Message, title); return; }
+        AfterStep("Purchasing Sheet", () => Purchasing(asm));
+        AfterStep("Assembly Package", () => BuildPackage(asm, PackageMode.Assembly));
+        AfterStep("Partner Package", () => PartnerPackage(true));
+    }
+
+    /// <summary>One after-release step with the same messages as its own button; a failure is shown and the next step still runs.</summary>
+    private void AfterStep(string label, Action work)
+    {
+        var cursor = Cursor.Current;
+        try
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            work();
+        }
+        catch (BridgeException ex) { _log($"{label}: {ex.Code} {ex.Message}"); Msg(ex.Message, label); }
+        catch (Exception ex) { _log($"{label} failed: {ex}"); Msg($"{label} failed: {ex.Message}\nDetails are in bridge.log.", label); }
+        finally { Cursor.Current = cursor; }
+    }
+
     internal static (string Folder, string VaultFolder, string Stem) Locate(Inv.Document doc)
     {
         var noun = doc is Inv.PartDocument ? "part" : "assembly";
@@ -228,12 +295,15 @@ internal sealed class RibbonActions
     }
 
     /// <summary>Whole assembly, the components selected in it, or the open part (see PackageScope.Decide).</summary>
-    private void PartnerPackage()
+    private void PartnerPackage() => PartnerPackage(false);
+
+    /// <param name="wholeAssembly">Ignore the selection (after I Approve!, the package is for the whole assembly).</param>
+    private void PartnerPackage(bool wholeAssembly)
     {
         const string title = "Partner Package";
         var doc = _app.ActiveDocument;
         var kind = doc is Inv.AssemblyDocument ? ScopeDoc.Assembly : doc is Inv.PartDocument ? ScopeDoc.Part : doc is null ? ScopeDoc.None : ScopeDoc.Other;
-        var selected = kind == ScopeDoc.Assembly ? ComponentSelection.Files(doc!, m => _log("partner package: " + m)) : Array.Empty<string?>();
+        var selected = kind == ScopeDoc.Assembly && !wholeAssembly ? ComponentSelection.Files(doc!, m => _log("partner package: " + m)) : Array.Empty<string?>();
         var decision = PackageScope.Decide(kind, selected.Count);
         if (decision.Kind is null) { Msg(decision.Message ?? PackageScope.OpenMessage, title); return; }
 
