@@ -82,11 +82,13 @@ public static class ImportRules
     /// <summary>Material Finish for the data card: empty becomes "As Finished".</summary>
     public static string NormalizeFinish(string? finish) => string.IsNullOrWhiteSpace(finish) ? DefaultFinish : CleanText(finish);
 
-    /// <summary>"Steel" when the library has it (case-insensitive), else the first name, else null.</summary>
+    /// <summary>Exact "Steel" (case-insensitive), else the first name starting with "Steel", else the first name, else null.</summary>
     public static string? PreferredMaterial(IEnumerable<string> names)
     {
         var list = names.ToList();
-        return list.FirstOrDefault(n => string.Equals(n, "Steel", StringComparison.OrdinalIgnoreCase)) ?? list.FirstOrDefault();
+        return list.FirstOrDefault(n => string.Equals(n, "Steel", StringComparison.OrdinalIgnoreCase))
+            ?? list.FirstOrDefault(n => n.StartsWith("Steel", StringComparison.OrdinalIgnoreCase))
+            ?? list.FirstOrDefault();
     }
 
     public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };

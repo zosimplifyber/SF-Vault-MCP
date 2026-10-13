@@ -194,6 +194,9 @@ public class ImportRulesTests
     {
         Assert.Equal("steel", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "steel", "Brass" }));
         Assert.Equal("Aluminum 6061", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "Brass" }));
+        Assert.Equal("Steel", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "Steel, Mild", "Steel" }));
+        Assert.Equal("Steel, Mild", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "Steel, Mild", "Stainless Steel" }));
+        Assert.Equal("steel, mild", ImportRules.PreferredMaterial(new[] { "Aluminum 6061", "steel, mild" }));
         Assert.Null(ImportRules.PreferredMaterial(Array.Empty<string>()));
     }
 
