@@ -80,7 +80,7 @@ Each engineer signs in once: the first upload opens the browser, they approve, a
 
 Sign out of Dropbox by deleting `dropbox.token` (the add-in's sign-out does the same). The next upload asks for sign-in again.
 
-A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. Upload or link failures are warnings; the zip stays in Downloads and Vault.
+A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. The sign-in listener on `localhost:53682` filters by host name, not network interface; a request still needs the one-time `state` value, so this is low risk. Sign-out also asks Dropbox to revoke the token (best effort). Upload or link failures are warnings; the zip stays in Downloads and Vault.
 
 ## Uninstall
 

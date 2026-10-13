@@ -134,4 +134,22 @@ public class DropboxTests
         var f = JsonNode.Parse(DropboxJson.SessionFinishArg("sid", 99, "/x/y.zip"))!;
         Assert.Equal("overwrite", (string?)f["commit"]!["mode"]);
     }
+
+    [Fact]
+    public void Missing_scope_parsing()
+    {
+        Assert.True(DropboxJson.TryMissingScope("{\"error\":{\".tag\":\"missing_scope\",\"required_scope\":\"sharing.write\"}}", out var sc));
+        Assert.Equal("sharing.write", sc);
+        Assert.False(DropboxJson.TryMissingScope("{\"error\":{\".tag\":\"expired_access_token\"}}", out _));
+        Assert.False(DropboxJson.TryMissingScope("garbage", out _));
+    }
+
+    [Fact]
+    public void Retry_delay_backoff_and_retry_after()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(1), DropboxJson.RetryDelay(0, null));
+        Assert.Equal(TimeSpan.FromSeconds(4), DropboxJson.RetryDelay(2, null));
+        Assert.Equal(TimeSpan.FromSeconds(7), DropboxJson.RetryDelay(0, 7));
+        Assert.Equal(TimeSpan.FromSeconds(60), DropboxJson.RetryDelay(0, 600));
+    }
 }

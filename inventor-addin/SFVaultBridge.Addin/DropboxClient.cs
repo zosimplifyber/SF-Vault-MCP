@@ -23,9 +23,13 @@ public sealed class DropboxClient
     {
         _auth = auth;
         _http = http;
+        _auth.AccountChanged += ResetAccount;
     }
 
-    public static HttpClient NewHttpClient() => new() { Timeout = TimeSpan.FromMinutes(10) };
+    /// <summary>Forget the cached team path root; call after a sign-in or sign-out.</summary>
+    public void ResetAccount() { _rootNs = null; _rootChecked = false; }
+
+    public static HttpClient NewHttpClient() => new() { Timeout = Timeout.InfiniteTimeSpan };
 
     private sealed class DropboxException : Exception
     {
@@ -45,7 +49,7 @@ public sealed class DropboxClient
                 await CreateFolderAsync(folder, ct).ConfigureAwait(false);
             await UploadFileAsync(localZip, dest, ct).ConfigureAwait(false);
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e) when (!ct.IsCancellationRequested)
         {
             warnings.Add("Dropbox upload failed: " + e.Message);
             return new DropboxUploadResult("", null, null, warnings);
@@ -57,7 +61,7 @@ public sealed class DropboxClient
             if (vis == "team_only") warnings.Add("Team policy does not allow public links; the link works for Dropbox team members only.");
             return new DropboxUploadResult(dest, url, vis, warnings);
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e) when (!ct.IsCancellationRequested)
         {
             warnings.Add("Dropbox share link failed (the file is uploaded): " + e.Message);
             return new DropboxUploadResult(dest, null, null, warnings);
@@ -97,7 +101,7 @@ public sealed class DropboxClient
                 req.Content = new StreamContent(new FileStream(localZip, FileMode.Open, FileAccess.Read, FileShare.Read));
                 req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
                 return req;
-            }, true, ct).ConfigureAwait(false);
+            }, true, ct, ScaledTimeout(length)).ConfigureAwait(false);
             return;
         }
 
@@ -113,7 +117,7 @@ public sealed class DropboxClient
             if (i == 0) { url = "files/upload_session/start"; arg = new JsonObject { ["close"] = false }.ToJsonString(); }
             else if (i < chunks.Count - 1) { url = "files/upload_session/append_v2"; arg = DropboxJson.SessionAppendArg(session!, offset); }
             else { url = "files/upload_session/finish"; arg = DropboxJson.SessionFinishArg(session!, offset, dest); }
-            var body = await SendAsync(() => Binary(Content + url, arg, buf), true, ct).ConfigureAwait(false);
+            var body = await SendAsync(() => Binary(Content + url, arg, buf), true, ct, ScaledTimeout(len)).ConfigureAwait(false);
             if (i == 0)
                 session = JsonNode.Parse(body)?["session_id"]?.GetValue<string>() ?? throw new InvalidOperationException("Dropbox did not return an upload session id.");
         }
@@ -171,26 +175,65 @@ public sealed class DropboxClient
         return req;
     }
 
-    /// <summary>Sends with the bearer token. On 401: one refresh, then one browser sign-in, then give up.</summary>
-    private async Task<string> SendAsync(Func<HttpRequestMessage> make, bool usePathRoot, CancellationToken ct)
+    /// <summary>
+    /// Sends with the bearer token. On 401: one refresh, then one browser sign-in, then give up.
+    /// On 429 and 5xx: up to 3 retries with backoff, honouring Retry-After. Each try has its own timeout.
+    /// </summary>
+    private async Task<string> SendAsync(Func<HttpRequestMessage> make, bool usePathRoot, CancellationToken ct, TimeSpan? timeout = null)
     {
-        for (var attempt = 0; ; attempt++)
+        var authStep = 0;
+        var retries = 0;
+        while (true)
         {
-            var token = attempt switch
+            var token = authStep switch
             {
                 0 => await _auth.GetAccessTokenAsync(ct).ConfigureAwait(false),
                 1 => await _auth.GetAccessTokenAsync(ct, forceRefresh: true).ConfigureAwait(false),
-                _ => await _auth.SignInAsync(ct).ConfigureAwait(false),
+                _ => await SignInAsync(ct).ConfigureAwait(false),
             };
             using var req = make();
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             if (usePathRoot && _rootNs is not null)
                 req.Headers.TryAddWithoutValidation("Dropbox-API-Path-Root", DropboxJson.PathRoot(_rootNs));
-            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-            var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if (resp.IsSuccessStatusCode) return text;
-            if (resp.StatusCode == HttpStatusCode.Unauthorized && attempt < 2) continue;
-            throw new DropboxException((int)resp.StatusCode, text);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout ?? TimeSpan.FromMinutes(2));
+            HttpResponseMessage resp;
+            string text;
+            try
+            {
+                resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
+                text = await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException("Dropbox did not answer in time.");
+            }
+            using (resp)
+            {
+                if (resp.IsSuccessStatusCode) return text;
+                if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    if (DropboxJson.TryMissingScope(text, out var scope))
+                        throw new InvalidOperationException("The Dropbox app is missing the '" + scope + "' permission. Tick it on the app's Permissions tab, Submit, then sign out and sign in again.");
+                    if (authStep < 2) { authStep++; continue; }
+                }
+                else if ((resp.StatusCode == (HttpStatusCode)429 || (int)resp.StatusCode >= 500) && retries < 3)
+                {
+                    int? after = resp.Headers.RetryAfter?.Delta is { } d ? (int)Math.Ceiling(d.TotalSeconds) : null;
+                    await Task.Delay(DropboxJson.RetryDelay(retries++, after), ct).ConfigureAwait(false);
+                    continue;
+                }
+                throw new DropboxException((int)resp.StatusCode, text);
+            }
         }
     }
+
+    private async Task<string> SignInAsync(CancellationToken ct)
+    {
+        var t = await _auth.SignInAsync(ct).ConfigureAwait(false);
+        ResetAccount();
+        return t;
+    }
+
+    private static TimeSpan ScaledTimeout(long bytes) => TimeSpan.FromSeconds(60 + bytes / 200_000.0);
 }

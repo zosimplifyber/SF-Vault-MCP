@@ -110,6 +110,20 @@ public static class DropboxJson
         return true;
     }
 
+    /// <summary>A 401 whose error is missing_scope names the scope the app lacks.</summary>
+    public static bool TryMissingScope(string errorJson, out string scope)
+    {
+        scope = "";
+        var err = Parse(errorJson)?["error"] as JsonObject;
+        if (err is null || err[".tag"]?.GetValue<string>() != "missing_scope") return false;
+        scope = err["required_scope"]?.GetValue<string>() ?? "unknown";
+        return true;
+    }
+
+    /// <summary>Seconds to wait before retry number attempt (0-based): Retry-After when given, else 1, 2, 4; capped at 60.</summary>
+    public static TimeSpan RetryDelay(int attempt, int? retryAfterSeconds) =>
+        TimeSpan.FromSeconds(Math.Min(60, retryAfterSeconds is > 0 ? retryAfterSeconds.Value : 1 << Math.Clamp(attempt, 0, 5)));
+
     /// <summary>The short error text Dropbox sends, or a trimmed body when there is none.</summary>
     public static string ErrorSummary(string body)
     {

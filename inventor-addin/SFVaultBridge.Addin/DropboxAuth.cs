@@ -36,15 +36,35 @@ public sealed class DropboxAuth
     public static string DefaultTokenPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Simplifyber", "VaultBridge", "dropbox.token");
 
+    /// <summary>Raised after a sign-in or sign-out so callers drop account-specific caches.</summary>
+    public event Action? AccountChanged;
+
     public bool IsSignedIn => File.Exists(_tokenPath);
 
     /// <summary>Deletes the stored refresh token and forgets the access token.</summary>
     public void SignOut()
     {
+        RevokeBestEffort();
+        AccountChanged?.Invoke();
         _access = null;
         _accessExpiresUtc = DateTime.MinValue;
         try { if (File.Exists(_tokenPath)) File.Delete(_tokenPath); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new InvalidOperationException("Could not delete the Dropbox sign-in file: " + e.Message); }
+    }
+
+    /// <summary>Tells Dropbox to drop the current access token (which also ends its refresh token). Failures are ignored.</summary>
+    private void RevokeBestEffort()
+    {
+        var access = _access;
+        if (access is null) return;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.dropboxapi.com/2/auth/token/revoke");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            _http.Send(req, cts.Token).Dispose();
+        }
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException) { }
     }
 
     /// <summary>Returns a valid access token, refreshing or signing in as needed. forceRefresh drops the cached token first.</summary>
@@ -102,7 +122,7 @@ public sealed class DropboxAuth
         try { listener.Start(); }
         catch (HttpListenerException e) { throw new InvalidOperationException("Could not listen on " + RedirectUri + " for the Dropbox sign-in (" + e.Message + "). Close other sign-ins and try again."); }
 
-        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        using (Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })) { }
         var code = await WaitForCodeAsync(listener, state, ct).ConfigureAwait(false);
 
         var json = await PostTokenAsync(new Dictionary<string, string>
@@ -116,6 +136,7 @@ public sealed class DropboxAuth
         var refresh = json["refresh_token"]?.GetValue<string>();
         if (string.IsNullOrEmpty(refresh)) throw new InvalidOperationException("Dropbox did not return a refresh token.");
         WriteRefreshToken(refresh);
+        AccountChanged?.Invoke();
         return Remember(json);
     }
 
