@@ -65,6 +65,9 @@ public interface IDataCardHost
 
     /// <summary>True when the file is linked to an item. Null when that could not be read (never an error).</summary>
     bool? LinkedToItem(DataCardFileInfo file);
+
+    /// <summary>The file's Property Compliance value as Vault shows it, or null when it cannot be read (never an error).</summary>
+    string? ReadPropertyCompliance(DataCardFileInfo file);
 }
 
 public sealed record DataCardRequest(IReadOnlyList<string> Files, IReadOnlyDictionary<string, string> Design,
@@ -97,6 +100,10 @@ public static class DataCardFix
     /// <summary>Invariant, shortest round-trip form ("12.5"); the same text is shown in previews and compared with the current value.</summary>
     public static string FormatNumber(double value) => value.ToString("R", CultureInfo.InvariantCulture);
 
+    /// <summary>Inventor stores currency to 4 decimals, so values are rounded to 4 before they are compared or written; otherwise a rerun would
+    /// never see "no change" and would revise a Released file again.</summary>
+    public static double RoundCurrency(double value) => Math.Round(value, 4, MidpointRounding.AwayFromZero);
+
     /// <summary>Normalizes the number-typed targets to invariant text; a non-number is a per-file error ("Cost must be a number").</summary>
     public static IReadOnlyDictionary<PropRef, string> NormalizeWanted(IReadOnlyDictionary<PropRef, string> wanted)
     {
@@ -105,7 +112,7 @@ public static class DataCardFix
         {
             if (!IsNumeric(p)) { o[p] = v; continue; }
             if (!TryParseNumber(v, out var d)) throw new DataCardStepException("set", $"{p.Name} must be a number");
-            o[p] = FormatNumber(d);
+            o[p] = FormatNumber(RoundCurrency(d));
         }
         return o;
     }
@@ -113,7 +120,7 @@ public static class DataCardFix
     private static IReadOnlyDictionary<PropRef, string?> NormalizeCurrent(IReadOnlyDictionary<PropRef, string?> current)
     {
         var o = new Dictionary<PropRef, string?>();
-        foreach (var (p, v) in current) o[p] = IsNumeric(p) && TryParseNumber(v, out var d) ? FormatNumber(d) : v;
+        foreach (var (p, v) in current) o[p] = IsNumeric(p) && TryParseNumber(v, out var d) ? FormatNumber(RoundCurrency(d)) : v;
         return o;
     }
 
@@ -200,11 +207,12 @@ public static class DataCardFix
     public static JsonObject Run(DataCardRequest req, IDataCardHost host, Action<string>? log = null)
     {
         var results = new JsonArray();
+        var run = new RunState();
         var counts = new Dictionary<string, int> { ["preview"] = 0, ["fixed"] = 0, ["no_change"] = 0, ["skipped"] = 0, ["error"] = 0 };
         foreach (var arg in req.Files.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             JsonObject r;
-            try { r = RunOne(arg, req, host); }
+            try { r = RunOne(arg, req, host, run); }
             catch (BridgeException ex) when (ex.Code == "not_signed_in")
             {
                 // The session dropped: keep what is already done and mark this and every remaining file as an error.
@@ -230,7 +238,11 @@ public static class DataCardFix
         };
     }
 
-    private static JsonObject RunOne(string arg, DataCardRequest req, IDataCardHost host)
+    private sealed class RunState { public bool ReviseStopped; }
+
+    public const string ReviseStoppedReason = "stopped: an earlier file could not be returned to Released";
+
+    private static JsonObject RunOne(string arg, DataCardRequest req, IDataCardHost host, RunState run)
     {
         DataCardFileInfo? info = null;
         try
@@ -254,6 +266,7 @@ public static class DataCardFix
 
             var revise = IsReleased(info);
             RevisePlan? plan = null;
+            if (revise && run.ReviseStopped) return Skipped(info.VaultPath, ReviseStoppedReason);
             if (revise)
             {
                 // Both moves are looked up before anything changes, so a file is never stranded in Work in Progress for want of a way back.
@@ -275,7 +288,9 @@ public static class DataCardFix
             }
 
             var comment = req.Comment ?? DefaultComment(changes);
-            JsonObject result = revise ? ReviseAndFix(info, changes, comment, host) : FixOnly(info, changes, comment, host);
+            JsonObject result = revise ? ReviseAndFix(info, changes, comment, host, plan!) : FixOnly(info, changes, comment, host);
+            // A systemic cause (criteria, restriction, lost session) would hit every Released file the same way: stop revising after the first.
+            if (revise && result["step"]?.GetValue<string>() == "re_release") run.ReviseStopped = true;
             if (linked == true) result["linked_to_item"] = true;
             return result;
         }
@@ -294,33 +309,46 @@ public static class DataCardFix
         return fixedResult;
     }
 
-    /// <summary>Released to Work in Progress, the normal checkout/edit/check-in, then back to Released. Once the first move succeeded the way back is
-    /// always attempted, whatever happened in the middle, and a failure to get back is reported loudly with the actual state.</summary>
-    private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host)
+    /// <summary>Released to Work in Progress, the normal checkout/edit/check-in, then back to Released. Once the first move was attempted and the file is
+    /// found in Work in Progress, the way back is always attempted, whatever happened in the middle, and a failure to get back is reported loudly with
+    /// the actual state.</summary>
+    private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host, RevisePlan plan)
     {
         var revisionBefore = info.Revision;
+        string? firstError = null;
         try { host.ChangeState(info, WorkInProgressState, comment); }
-        catch (Exception ex)
+        catch (Exception ex) { firstError = ex.Message; }
+
+        if (firstError is not null)
         {
-            // Nothing is known to have changed, but the real state is read back rather than assumed.
-            var o = Error(info.VaultPath, "revise", ex.Message);
-            o["state_after"] = ActualState(host, info);
-            o["revision_before"] = revisionBefore;
-            return o;
+            // A move that committed but reported failure (timeout, odd read-back) leaves the file in Work in Progress: bring it back, do not edit it.
+            var actual = ActualState(host, info);
+            if (!string.Equals(actual, WorkInProgressState, StringComparison.OrdinalIgnoreCase))
+            {
+                var o = Error(info.VaultPath, "revise", firstError);
+                o["state_after"] = actual;
+                o["revision_before"] = info.Revision;
+                o["transitions"] = TransitionsJson(plan);
+                return o;
+            }
         }
 
         // Step 2: edit on the refreshed file (the state change can move the version). Whatever fails is held until the file is back.
         DataCardApplied? applied = null;
         string? editStep = null, editError = null;
-        try
+        if (firstError is null)
         {
-            var fresh = Refresh(host, info);
-            applied = host.Apply(fresh, changes, comment);
+            try
+            {
+                var fresh = Refresh(host, info);
+                applied = host.Apply(fresh, changes, comment);
+            }
+            catch (DataCardSkipException ex) { editStep = "skipped"; editError = ex.Message; }
+            catch (DataCardStepException ex) { editStep = ex.Step; editError = ex.Message; }
+            catch (BridgeException ex) { editStep = ex.Code; editError = ex.Message; }
+            catch (Exception ex) { editStep = "unexpected"; editError = ex.Message; }
         }
-        catch (DataCardSkipException ex) { editStep = "skipped"; editError = ex.Message; }
-        catch (DataCardStepException ex) { editStep = ex.Step; editError = ex.Message; }
-        catch (BridgeException ex) { editStep = ex.Code; editError = ex.Message; }
-        catch (Exception ex) { editStep = "unexpected"; editError = ex.Message; }
+        else { editStep = "revise"; editError = firstError + " (the file was found in " + WorkInProgressState + " and was not edited)"; }
 
         // Step 3: back to Released, always.
         DataCardStateChange? back = null;
@@ -328,19 +356,24 @@ public static class DataCardFix
         try { back = host.ChangeState(Refresh(host, info), ReleasedState, comment); }
         catch (Exception ex) { backError = ex.Message; }
 
-        var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = ChangesJson(changes), ["revision_before"] = revisionBefore };
+        var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = ChangesJson(changes), ["revision_before"] = revisionBefore, ["transitions"] = TransitionsJson(plan) };
         if (backError is not null)
         {
             result["status"] = "error";
             result["step"] = "re_release";
-            result["message"] = $"Could not return the file to {ReleasedState}: {backError}" + (editError is null ? "" : $" (the edit also failed at {editStep}: {editError})");
+            result["message"] = $"Could not return the file to {ReleasedState}: {backError}" + (editError is null ? "" : $" (the edit also failed at {editStep}: {editError})")
+                + $" Change it to {ReleasedState} in Vault by hand; if it is linked to an item, check the item.";
             result["state_after"] = ActualState(host, info);
             if (editError is not null) result["edit_error"] = editError;
             if (applied is not null) result["version"] = applied.Version >= 0 ? applied.Version : null;
+            result["property_compliance"] = null;
             return result;
         }
         result["state_after"] = back!.State;
         result["revision_after"] = back.Revision;
+        string? compliance = null;
+        try { compliance = host.ReadPropertyCompliance(Refresh(host, info)); } catch (Exception) { }
+        result["property_compliance"] = compliance;
         if (editError is not null)
         {
             result["status"] = "error";
@@ -354,6 +387,8 @@ public static class DataCardFix
         if (applied.Warning is not null) result["warning"] = applied.Warning;
         return result;
     }
+
+    private static JsonArray TransitionsJson(RevisePlan plan) => new(plan.ToWorkInProgress, plan.ToReleased);
 
     private static DataCardFileInfo Refresh(IDataCardHost host, DataCardFileInfo info)
     {

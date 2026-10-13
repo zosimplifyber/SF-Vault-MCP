@@ -171,6 +171,7 @@ public class BridgeOpsTests : IDisposable
         public RevisePlan PlanRevise(DataCardFileInfo file) => new("none");
         public DataCardStateChange ChangeState(DataCardFileInfo file, string toStateName, string comment) => new(toStateName, "");
         public bool? LinkedToItem(DataCardFileInfo file) => null;
+        public string? ReadPropertyCompliance(DataCardFileInfo file) => null;
     }
 
     [Fact]

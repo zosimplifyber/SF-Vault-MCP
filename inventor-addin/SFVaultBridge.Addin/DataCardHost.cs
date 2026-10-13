@@ -288,6 +288,21 @@ internal sealed class DataCardHost : IDataCardHost
         catch (Exception) { return null; }
     }
 
+    public string? ReadPropertyCompliance(DataCardFileInfo file)
+    {
+        try
+        {
+            var latest = Latest(file);
+            var ps = Conn.WebServiceManager.PropertyService;
+            var def = ps.GetPropertyDefinitionsByEntityClassId("FILE")?
+                .FirstOrDefault(d => string.Equals(d.DispName, "Property Compliance", StringComparison.OrdinalIgnoreCase));
+            if (def is null) return null;
+            var inst = ps.GetPropertiesByEntityIds("FILE", new[] { latest.Id })?.FirstOrDefault(i => i.PropDefId == def.Id);
+            return inst?.Val?.ToString();
+        }
+        catch (Exception) { return null; }
+    }
+
     // ---- Apply ----
 
     public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment)

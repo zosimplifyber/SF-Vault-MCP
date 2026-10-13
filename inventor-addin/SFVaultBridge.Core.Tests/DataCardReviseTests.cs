@@ -263,4 +263,112 @@ public partial class DataCardFixTests
         Assert.Null(r["would_revise"]);
         Assert.DoesNotContain(h.Calls, c => c.StartsWith("state") || c.StartsWith("plan"));
     }
+
+    // ---- fix round 1 ----
+
+    [Fact]
+    public void Apply_gets_the_refreshed_version_after_a_state_change_bumps_it()
+    {
+        var (h, req) = ReleasedCase(dry: false);
+        h.BumpVersionOnState = true;
+        var r = DataCardFix.Run(req, h)["results"]![0]!;
+        Assert.Equal(new long[] { 4 }, h.ApplyVersions);
+        Assert.Equal("fixed", r["status"]!.GetValue<string>());
+        Assert.Equal(5, r["version"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public void Revised_result_carries_transitions_revisions_state_and_compliance()
+    {
+        var (h, req) = ReleasedCase(dry: false);
+        h.Linked = true;
+        var r = DataCardFix.Run(req, h)["results"]![0]!;
+        Assert.Equal(new[] { "Released -> Work in Progress", "Work in Progress -> Released" },
+            r["transitions"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray());
+        Assert.Equal("A", r["revision_before"]!.GetValue<string>());
+        Assert.Equal("B", r["revision_after"]!.GetValue<string>());
+        Assert.Equal("Released", r["state_after"]!.GetValue<string>());
+        Assert.True(r["linked_to_item"]!.GetValue<bool>());
+        Assert.Equal("Compliant", r["property_compliance"]!.GetValue<string>());
+        var (h2, req2) = ReleasedCase(dry: false);
+        h2.Compliance = null;
+        var r2 = DataCardFix.Run(req2, h2)["results"]![0]!;
+        Assert.True(r2.AsObject().ContainsKey("property_compliance"));
+        Assert.Null(r2["property_compliance"]);
+    }
+
+    [Fact]
+    public void A_first_move_that_committed_but_reported_failure_is_returned_to_released_without_editing()
+    {
+        var (h, req) = ReleasedCase(dry: false);
+        h.ThrowAfterChangeTo = "Work in Progress";
+        var r = DataCardFix.Run(req, h)["results"]![0]!;
+        Assert.Equal("error", r["status"]!.GetValue<string>());
+        Assert.Equal("revise", r["step"]!.GetValue<string>());
+        Assert.True(r["re_released"]!.GetValue<bool>());
+        Assert.Equal("Released", r["state_after"]!.GetValue<string>());
+        Assert.Contains("timed out", r["message"]!.GetValue<string>());
+        Assert.Equal(new[] { "state a.ipt -> Work in Progress", "state a.ipt -> Released" }, Moves(h));
+    }
+
+    [Fact]
+    public void A_committed_first_move_that_cannot_be_returned_reports_re_release()
+    {
+        var (h, req) = ReleasedCase(dry: false);
+        h.ThrowAfterChangeTo = "Work in Progress";
+        h.FailChangeTo = "Released";
+        var r = DataCardFix.Run(req, h)["results"]![0]!;
+        Assert.Equal("re_release", r["step"]!.GetValue<string>());
+        Assert.Equal("Work in Progress", r["state_after"]!.GetValue<string>());
+        Assert.Contains("by hand", r["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Host_skip_after_the_first_move_reports_skipped_and_re_released()
+    {
+        var (h, req) = ReleasedCase(dry: false);
+        h.ApplySkips = true;
+        var r = DataCardFix.Run(req, h)["results"]![0]!;
+        Assert.Equal("skipped", r["step"]!.GetValue<string>());
+        Assert.True(r["re_released"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void After_a_re_release_failure_later_revisions_stop_but_plain_fixes_continue()
+    {
+        var h = new FakeHost();
+        foreach (var n in new[] { "a.ipt", "b.ipt" })
+        {
+            h.Files[n] = new() { Info(n, "$/" + n, state: "Released", released: true, ver: 3) };
+            h.StateByPath["$/" + n] = "Released";
+        }
+        h.Files["w.ipt"] = new() { Info("w.ipt", "$/w.ipt") };
+        h.Files["c.ipt"] = new() { Info("c.ipt", "$/c.ipt", state: "Released", released: true) };
+        h.StateByPath["$/c.ipt"] = "Released";
+        h.Current = new() { [new PropRef(PropSet.Design, "Cost")] = "1" };
+        h.FailChangeTo = "Released";
+        var req = Req(new[] { "a.ipt", "b.ipt", "w.ipt", "c.ipt" }, dry: false, pn: false, design: new() { ["Cost"] = "2.5" }, revise: true);
+        var res = DataCardFix.Run(req, h)["results"]!.AsArray();
+        Assert.Equal("re_release", res[0]!["step"]!.GetValue<string>());
+        Assert.Equal("skipped", res[1]!["status"]!.GetValue<string>());
+        Assert.Equal("stopped: an earlier file could not be returned to Released", res[1]!["reason"]!.GetValue<string>());
+        Assert.Equal("fixed", res[2]!["status"]!.GetValue<string>());
+        Assert.Equal("skipped", res[3]!["status"]!.GetValue<string>());
+        Assert.DoesNotContain(h.Calls, c => c.StartsWith("state b.ipt") || c.StartsWith("state c.ipt"));
+        Assert.DoesNotContain(h.Calls, c => c.StartsWith("apply b.ipt"));
+    }
+
+    [Fact]
+    public void Cost_is_rounded_to_four_decimals_before_compare_and_write()
+    {
+        var cost = new PropRef(PropSet.Design, "Cost");
+        var h = new FakeHost();
+        h.Files["a.ipt"] = new() { Info("a.ipt", "$/a.ipt") };
+        var want = new Dictionary<string, string> { ["Cost"] = "12.34567" };
+        h.Current = new() { [cost] = "1" };
+        Assert.Equal("12.3457", DataCardFix.Run(Req(new[] { "a.ipt" }, pn: false, design: want), h)["results"]![0]!["changes"]!["Cost"]!["to"]!.GetValue<string>());
+        h.Current = new() { [cost] = "12.3457" };
+        Assert.Equal("no_change", Status(DataCardFix.Run(Req(new[] { "a.ipt" }, pn: false, design: want), h)));
+        Assert.Equal(0.0001, DataCardFix.RoundCurrency(0.00005));
+    }
 }

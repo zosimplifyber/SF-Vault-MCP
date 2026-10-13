@@ -26,6 +26,11 @@ public partial class DataCardFixTests
         public string? FailChangeTo;                                  // ChangeState to this state throws
         public bool? Linked;
         public bool ApplySkips;
+        public List<long> ApplyVersions = new();
+        public string? Compliance = "Compliant";
+        public bool BumpVersionOnState;                               // a state change creates a new version, as in real Vault
+        public string? ThrowAfterChangeTo;                            // the state changes, then ChangeState reports failure
+        public Dictionary<string, long> VersionByPath = new();
 
         public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file)
         {
@@ -33,7 +38,8 @@ public partial class DataCardFixTests
             var l = Files.TryGetValue(file.Text, out var x) ? x
                   : Files.Values.SelectMany(v => v).Where(i => string.Equals(i.VaultPath, file.Text, StringComparison.OrdinalIgnoreCase)).ToList();
             return l.Select(i => StateByPath.TryGetValue(i.VaultPath, out var st)
-                ? i with { State = st, Released = st == "Released", Revision = st == "Released" ? "B" : "A" } : i).ToList();
+                ? i with { State = st, Released = st == "Released", Revision = st == "Released" ? "B" : "A" } : i)
+                .Select(i => VersionByPath.TryGetValue(i.VaultPath, out var v) ? i with { Version = v } : i).ToList();
         }
 
         public RevisePlan PlanRevise(DataCardFileInfo f) { Calls.Add("plan " + f.Name); return Plan; }
@@ -43,10 +49,13 @@ public partial class DataCardFixTests
             Calls.Add($"state {f.Name} -> {toStateName}");
             if (FailChangeTo == toStateName) throw new DataCardStepException("revise", "Vault refused");
             StateByPath[f.VaultPath] = toStateName;
+            if (BumpVersionOnState) VersionByPath[f.VaultPath] = f.Version + 1;
+            if (ThrowAfterChangeTo == toStateName) throw new DataCardStepException("revise", "timed out after the change was made");
             return new DataCardStateChange(toStateName, toStateName == "Released" ? "B" : "A");
         }
 
         public bool? LinkedToItem(DataCardFileInfo f) => Linked;
+        public string? ReadPropertyCompliance(DataCardFileInfo f) => Compliance;
 
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo f, IReadOnlyList<PropRef> props)
         {
@@ -58,6 +67,7 @@ public partial class DataCardFixTests
 
         public DataCardApplied Apply(DataCardFileInfo f, IReadOnlyList<PropChange> changes, string comment)
         {
+            ApplyVersions.Add(f.Version);
             if (ApplySkips) throw new DataCardSkipException("open and dirty");
             Calls.Add($"apply {f.Name} [{string.Join(",", changes.Select(c => c.Prop.Name))}] {comment}");
             if (FailApply) throw new DataCardStepException("checkin", "boom (the checkout was undone)");
@@ -254,6 +264,7 @@ public partial class DataCardFixTests
         public RevisePlan PlanRevise(DataCardFileInfo f) => new("none");
         public DataCardStateChange ChangeState(DataCardFileInfo f, string toStateName, string comment) => new(toStateName, "");
         public bool? LinkedToItem(DataCardFileInfo f) => null;
+        public string? ReadPropertyCompliance(DataCardFileInfo f) => null;
     }
 
     [Fact]
