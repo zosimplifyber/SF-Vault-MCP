@@ -10,28 +10,28 @@ internal sealed class RibbonActions
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
     private static readonly TimeSpan ToolTimeout = TimeSpan.FromMinutes(10);
     private readonly Inv.Application _app;
-    private readonly IReadOnlyList<Inv.RibbonPanel> _panels;
+    private readonly Func<string, IReadOnlyList<Inv.RibbonPanel>> _panels;
     private readonly Action<string> _log;
     private readonly List<(Inv.ButtonDefinition Def, Inv.ButtonDefinitionSink_OnExecuteEventHandler Handler)> _buttons = new();
     private bool _running;
 
-    public RibbonActions(Inv.Application app, IReadOnlyList<Inv.RibbonPanel> panels, Action<string> log)
+    public RibbonActions(Inv.Application app, Func<string, IReadOnlyList<Inv.RibbonPanel>> panels, Action<string> log)
     {
         _app = app; _panels = panels; _log = log;
     }
 
     public void Create()
     {
-        Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
-        Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
-        Add("Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
-        Add("Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
-        Add("3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
-        Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
-        Add("Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
+        Add("Purchasing", "Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
+        Add("Review", "Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
+        Add("Review", "Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
+        Add("Manufacturing", "Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
+        Add("Manufacturing", "3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
+        Add("Parts", "Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
+        Add("Parts", "Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
     }
 
-    private void Add(string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument>? work, Action? custom = null)
+    private void Add(string group, string label, string internalName, string tip, Func<int, System.Drawing.Bitmap> draw, Action<Inv.AssemblyDocument>? work, Action? custom = null)
     {
         try
         {
@@ -45,7 +45,7 @@ internal sealed class RibbonActions
             Inv.ButtonDefinitionSink_OnExecuteEventHandler handler = _ => { if (custom is not null) ClickAny(label, custom); else Click(label, work!); };
             def.OnExecute += handler;
             _buttons.Add((def, handler));
-            foreach (var panel in _panels)
+            foreach (var panel in _panels(group))
             {
                 try { panel.CommandControls.AddButton(def, true); }
                 catch (Exception ex) { _log($"{label} button on a panel skipped: {ex.Message}"); }

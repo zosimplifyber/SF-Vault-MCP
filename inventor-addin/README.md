@@ -14,13 +14,13 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 - Log: `%APPDATA%\Simplifyber\VaultBridge\bridge.log` should say `started 0.1.0 on http://localhost:8790/`.
 - `py -3.14 -c "import sys; sys.path.insert(0, 'scripts'); import vault_bridge; print(vault_bridge.status())"`
-- Ribbon: the **SF Vault Bridge** panel on the Tools tab (Part, Assembly, Drawing, ZeroDoc) shows a dot, refreshed every 5 s.
+- Ribbon: its own **SF Vault Bridge** tab (Part, Assembly, Drawing and the no-document ribbon). The Status panel shows a dot, refreshed every 5 s.
   Green = Ready (listening, Vault signed in). Amber = Sign in to Vault (listening, not signed in). Red = Stopped (not listening; see bridge.log).
   Hover for details; click for a dialog with an option to open bridge.log.
 
 ## Buttons
 
-The SF Vault Bridge panel has seven action buttons (Purchasing Sheet, Design Review, Assembly Package, Partner Package, 3D Print Package, Import New Part, Fix Data Card) plus the status dot. All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge tab has five panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review, Assembly Package) and Manufacturing (Partner Package, 3D Print Package). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 

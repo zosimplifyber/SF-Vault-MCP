@@ -88,7 +88,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             _ribbon = new RibbonStatus(_app, () => _host, SafeVaultStatus, Prefix,
                 System.IO.Path.Combine(dataDir, "bridge.log"), _log.Write);
             _ribbon.Create();
-            _actions = new RibbonActions(_app, _ribbon.Panels, _log.Write);
+            _actions = new RibbonActions(_app, _ribbon.PanelsFor, _log.Write);
             _actions.Create();
         }
         catch (Exception ex) { _log?.Write("ribbon setup failed: " + ex); }
