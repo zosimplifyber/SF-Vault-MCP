@@ -112,6 +112,13 @@ public static class ImportRules
     public static string CleanComments(string? text) =>
         string.Join("\r\n", (text ?? "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0));
 
+    /// <summary>Title iProperty for purchased parts: "CD-001909-Black-Oxide Alloy Steel Socket Head Screw" (Zak, 2026-10-13).</summary>
+    public static string PartTitle(string partNumber, string? description)
+    {
+        var d = System.Text.RegularExpressions.Regex.Replace(CleanText(description ?? ""), @"\s+", " ");
+        return d.Length == 0 ? partNumber.Trim() : $"{partNumber.Trim()}-{d}";
+    }
+
     public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };
 
     /// <summary>Names of the data-card properties whose value (read through valueOf) is blank.</summary>

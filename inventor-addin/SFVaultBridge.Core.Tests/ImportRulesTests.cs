@@ -241,4 +241,12 @@ public class ImportRulesTests
     [Fact]
     public void Plan_comments_default_to_empty() =>
         Assert.Equal("", new ImportPlan("McMaster-Carr", "", "1A1", "d", "Steel", "As Finished", "Zak O.").Comments);
+
+    [Theory]
+    [InlineData("CD-001909", "Black-Oxide Alloy Steel Socket Head Screw", "CD-001909-Black-Oxide Alloy Steel Socket Head Screw")]
+    [InlineData(" CD-001909 ", "  Socket   Head Screw ", "CD-001909-Socket Head Screw")]
+    [InlineData("CD-001909", "", "CD-001909")]
+    [InlineData("CD-001909", null, "CD-001909")]
+    public void Part_title_is_cd_number_dash_description(string pn, string? desc, string expected) =>
+        Assert.Equal(expected, ImportRules.PartTitle(pn, desc));
 }

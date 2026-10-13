@@ -67,7 +67,7 @@ internal static class ImportPartRunner
                 ["Engr Approved By"] = "NOT REVIEWED",
             };
             custom["Material Finish"] = ImportRules.NormalizeFinish(plan.MaterialFinish);
-            var savedIpt = new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings, plan.Comments);
+            var savedIpt = new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings, plan.Comments, plan.Description);
             partDone = true;
             if (!string.Equals(savedIpt, localIpt, StringComparison.OrdinalIgnoreCase))
             {
