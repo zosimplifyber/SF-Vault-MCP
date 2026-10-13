@@ -415,6 +415,20 @@ public class ReleasePlanTests
         Assert.Equal(6, text.Split("\r\n").Length); // header, four rows, trailing newline
     }
 
+    [Fact]
+    public void Preview_rows_copy_as_ready_skipped_or_held_back()
+    {
+        var rows = Eval(Specs(A("S1", N("P1"))), s => s.FileName == "P1.ipt" ? Ok(s) with { OpenDirty = true } : Ok(s));
+        Assert.Equal("skipped: open in Inventor with unsaved changes", ReleasePlan.ResultLine(new ReleaseResult(rows[0], rows[0].Status, string.Join("; ", rows[0].Blockers))));
+        var ready = Eval(Specs(N("P2")))[0];
+        Assert.Equal("Ready", ReleasePlan.ResultLine(new ReleaseResult(ready, ready.Status, "")));
+    }
+
+    [Fact]
+    public void Open_document_save_failure_names_the_button() =>
+        Assert.Equal("Inventor kept the open file read-only; close it and click I Approve! again. (denied; the checkout was undone)",
+                     ReleasePlan.OpenDocumentSaveFailure("denied", "the checkout was undone"));
+
     // ---- Host rules ----
 
     private static DataCardFileInfo Info(string name, string state = "Work in Progress", bool released = false) =>

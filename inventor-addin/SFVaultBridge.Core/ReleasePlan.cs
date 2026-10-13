@@ -344,6 +344,7 @@ public static class ReleasePlan
     public static string ResultLine(ReleaseResult r) => r.Status switch
     {
         ReleaseStatus.Released => $"released ({Dash(r.Row.Facts.Revision)} -> {Dash(r.RevisionAfter)})" + (r.Detail.Length > 0 ? "; " + r.Detail : ""),
+        ReleaseStatus.Ready => "Ready",
         ReleaseStatus.AlreadyReleased => "already Released",
         ReleaseStatus.Blocked => "skipped: " + r.Detail,
         ReleaseStatus.HeldBack => r.Detail,
