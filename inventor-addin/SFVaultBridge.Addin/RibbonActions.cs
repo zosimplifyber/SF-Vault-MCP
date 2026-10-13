@@ -192,7 +192,7 @@ internal sealed class RibbonActions
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             BomFile.Write(bom, lines);
             var name = VaultPaths.PurchasingName(asm.FullFileName);
-            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath, source), resultPath, ToolTimeout), "workbook", "lines");
+            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath, source, BridgeSettings.Load(BridgeSettings.DefaultPath, _log).SalesTaxRate), resultPath, ToolTimeout), "workbook", "lines");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The purchasing tool failed.");
             Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Purchasing sheet for {stem}",
                     $"{result.Count} BOM lines." + (result.Note is null ? "" : $"\n{result.Note}") + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));

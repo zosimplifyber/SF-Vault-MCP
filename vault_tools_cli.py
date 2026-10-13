@@ -36,8 +36,10 @@ def reference_note(source: str, signin_needed: bool) -> str:
 
 
 def run_purchasing(bom: str, assembly: str, out_dir: str, name: str,
-                   source: str | None = None) -> dict[str, Any]:
-    res = bp.generate_from_file(bom, assembly, out_dir, source=source)
+                   source: str | None = None,
+                   sales_tax_rate: float = bp.DEFAULT_SALES_TAX_RATE) -> dict[str, Any]:
+    res = bp.generate_from_file(bom, assembly, out_dir, source=source,
+                                sales_tax_rate=sales_tax_rate)
     if res.get("error"):
         return {"ok": False, "error": str(res.get("message") or "The purchasing engine failed.")}
     src = Path(res["output_path"])
@@ -70,6 +72,7 @@ def _parser() -> argparse.ArgumentParser:
     pur.add_argument("--name", required=True)
     pur.add_argument("--result", required=True)
     pur.add_argument("--source", default=None)
+    pur.add_argument("--sales-tax-rate", type=float, default=bp.DEFAULT_SALES_TAX_RATE)
     rev = sub.add_parser("review")
     rev.add_argument("--bom", required=True)
     rev.add_argument("--manifest", required=True)
@@ -86,7 +89,8 @@ def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "purchasing":
-            result = run_purchasing(args.bom, args.assembly, args.out, args.name, args.source)
+            result = run_purchasing(args.bom, args.assembly, args.out, args.name, args.source,
+                                    args.sales_tax_rate)
         elif args.command == "package":
             import manufacturing_package
             result = manufacturing_package.run_package(args.manifest, args.out)

@@ -217,6 +217,8 @@ public class OutputsTests
             ToolResults.PurchasingArgs("b", "A", "o", "n", "r"));
         Assert.Equal(new[] { "purchasing", "--bom", "b", "--assembly", "A", "--out", "o", "--name", "n", "--result", "r", "--source", "S" },
             ToolResults.PurchasingArgs("b", "A", "o", "n", "r", "S"));
+        Assert.Equal(new[] { "purchasing", "--bom", "b", "--assembly", "A", "--out", "o", "--name", "n", "--result", "r", "--sales-tax-rate", "0.0825" },
+            ToolResults.PurchasingArgs("b", "A", "o", "n", "r", null, 0.0825));
         Assert.Equal(new[] { "review", "--bom", "b", "--manifest", "m", "--out", "p", "--result", "r" },
             ToolResults.ReviewArgs("b", "m", "p", "r"));
     }
