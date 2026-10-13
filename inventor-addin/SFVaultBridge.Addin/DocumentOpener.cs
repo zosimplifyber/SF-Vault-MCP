@@ -6,9 +6,14 @@ namespace SFVaultBridge.Addin;
 internal sealed class OpenedDocument : IDisposable
 {
     private readonly Inv.Document? _toClose;
+    private readonly Inv.Application _app;
+    private readonly bool _previousSilent;
 
-    public OpenedDocument(Inv.Document document, bool openedHere)
+    /// <param name="previousSilent">The app's SilentOperation before the open; restored last, after the Close.</param>
+    public OpenedDocument(Inv.Application app, Inv.Document document, bool openedHere, bool previousSilent)
     {
+        _app = app;
+        _previousSilent = previousSilent;
         Document = document;
         OpenedHere = openedHere;
         _toClose = openedHere ? document : null;
@@ -20,6 +25,7 @@ internal sealed class OpenedDocument : IDisposable
     public void Dispose()
     {
         try { _toClose?.Close(true); } catch { }
+        try { _app.SilentOperation = _previousSilent; } catch { }
     }
 }
 
@@ -54,7 +60,10 @@ internal static class DocumentOpener
         return ids;
     }
 
-    /// <summary>Reuses an open document (never closed); otherwise opens it invisibly and closes it on Dispose.</summary>
+    /// <summary>
+    /// Reuses an open document (never closed); otherwise opens it invisibly and closes it on Dispose.
+    /// SilentOperation stays true until Dispose (after the Close), so exports and the close cannot raise dialogs.
+    /// </summary>
     public static OpenedDocument Open(Inv.Application app, string path)
     {
         var silent = app.SilentOperation;
@@ -62,7 +71,7 @@ internal static class DocumentOpener
         try
         {
             var doc = FindOpen(app, path);
-            if (doc is not null) return new OpenedDocument(doc, false);
+            if (doc is not null) return new OpenedDocument(app, doc, false, silent);
             var before = OpenIds(app);
             doc = app.Documents.Open(path, false);
             var wasOpen = true;
@@ -70,11 +79,12 @@ internal static class DocumentOpener
             {
                 try { wasOpen = before.Contains(doc.InternalName); } catch { wasOpen = true; }
             }
-            return new OpenedDocument(doc, !wasOpen);
+            return new OpenedDocument(app, doc, !wasOpen, silent);
         }
-        finally
+        catch
         {
             try { app.SilentOperation = silent; } catch { }
+            throw;
         }
     }
 }

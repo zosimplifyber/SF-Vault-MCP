@@ -30,7 +30,7 @@ internal static class BomEnricher
     {
         if (string.IsNullOrWhiteSpace(n.FullPath) || string.IsNullOrWhiteSpace(n.FileName)) return null;
         if (cache.TryGetValue(n.FullPath, out var hit)) return hit;
-        if (session.Down) return null;
+        if (session.Down) { if (categories is not null) categories[n.FullPath] = null; return null; }
         Facts? facts = null;
         try
         {

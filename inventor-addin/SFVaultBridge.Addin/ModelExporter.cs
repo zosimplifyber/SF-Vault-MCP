@@ -12,11 +12,28 @@ internal static class ModelExporter
     public const string StlTranslatorId = "{533E9A98-FC3B-11D4-8E7E-0010B541CD80}";
 
     private static readonly HashSet<string> LoggedOptionSets = new(StringComparer.Ordinal);
+    private static readonly object LogLock = new();
+
+    /// <summary>The translator with this id, or null when Inventor has none (ItemById can throw for an unknown id).</summary>
+    private static Inv.TranslatorAddIn? FindTranslator(Inv.Application app, string id, Action<string> log)
+    {
+        try { return app.ApplicationAddIns.ItemById[id] as Inv.TranslatorAddIn; }
+        catch (Exception ex)
+        {
+            log($"Translator {id} lookup failed: {ex.Message}");
+            return null;
+        }
+    }
 
     public static void Step(Inv.Application app, string modelPath, string outStp, Action<string> log)
     {
-        var translator = app.ApplicationAddIns.ItemById[StepTranslatorId] as Inv.TranslatorAddIn
-                         ?? throw new BridgeException("no_step_translator", "Inventor's STEP translator add-in is not available.");
+        var translator = FindTranslator(app, StepTranslatorId, log);
+        if (translator is null)
+        {
+            log($"STEP translator {StepTranslatorId} not found.");
+            throw new BridgeException("no_step_translator", "Inventor's STEP translator add-in is not available.");
+        }
+        log($"STEP translator: {translator.DisplayName} {StepTranslatorId}");
         if (!translator.Activated) translator.Activate();
         using var d = DocumentOpener.Open(app, modelPath);
         var ctx = app.TransientObjects.CreateTranslationContext();
@@ -60,7 +77,8 @@ internal static class ModelExporter
             catch { }
         }
         log("No 3MF translator found among Inventor's add-ins; falling back to STL.");
-        if (app.ApplicationAddIns.ItemById[StlTranslatorId] is Inv.TranslatorAddIn stl) return new PrintFormat(stl, ".stl");
+        var stl = FindTranslator(app, StlTranslatorId, log);
+        if (stl is not null) return new PrintFormat(stl, ".stl");
         throw new BridgeException("no_print_translator", "Inventor has neither a 3MF nor an STL translator.");
     }
 
@@ -90,12 +108,18 @@ internal static class ModelExporter
     /// <summary>Logs the translator's option names once per kind, so the live values (AP214, STL flags) can be confirmed.</summary>
     private static void LogOptions(Inv.NameValueMap options, string kind, Action<string> log)
     {
-        if (!LoggedOptionSets.Add(kind)) return;
+        lock (LogLock) { if (!LoggedOptionSets.Add(kind)) return; }
         try
         {
-            var names = new List<string>();
-            for (var i = 1; i <= options.Count; i++) names.Add(options.Name[i]);
-            log($"{kind} translator options: {string.Join(", ", names)}");
+            var items = new List<string>();
+            for (var i = 1; i <= options.Count; i++)
+            {
+                var name = options.Name[i];
+                string value;
+                try { value = Convert.ToString(options.Value[name]) ?? ""; } catch { value = "?"; }
+                items.Add($"{name}={value}");
+            }
+            log($"{kind} translator options: {string.Join(", ", items)}");
         }
         catch (Exception ex) { log($"{kind} translator options unreadable: {ex.Message}"); }
     }
