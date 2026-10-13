@@ -118,6 +118,32 @@ public class PackageScopeTests
     }
 
     [Theory]
+    [InlineData("Purchased")]
+    [InlineData("Reference")]
+    [InlineData("Phantom")]
+    public void Single_part_with_non_make_structure_is_not_a_make_part(string structure)
+    {
+        var pick = PackageScope.PickPart(Cands(N("CD-8.ipt", structure: structure)));
+        Assert.Empty(pick.Candidates);
+        Assert.Equal(new[] { "not a Make part: CD-8" }, pick.Skipped);
+    }
+
+    [Fact]
+    public void Skipped_text_is_capped_and_scope_line_counts_skipped_picks()
+    {
+        var many = Enumerable.Range(1, 13).Select(i => $"x{i}").ToList();
+        var lines = PackageScope.SkippedText(many).Split(Environment.NewLine);
+        Assert.Equal(11, lines.Length);
+        Assert.Equal("and 3 more", lines[^1]);
+        Assert.Equal("3 selected parts in CD-1 (2 skipped)", PackageScope.ScopeLine(PackageScopeKind.Selected, "CD-1", 3, 2));
+    }
+
+    [Theory]
+    [InlineData("100000", true)]
+    [InlineData("100001", false)]
+    public void ParseQty_has_an_upper_bound(string text, bool ok) => Assert.Equal(ok, PackageScope.ParseQty(text).Value is not null);
+
+    [Theory]
     [InlineData(1.0, 1)]
     [InlineData(12.0, 12)]
     [InlineData(2.5, 3)]
@@ -142,6 +168,7 @@ public class PackageScopeTests
     [InlineData("1.5")]
     [InlineData("two")]
     [InlineData("99999999999")]
+    [InlineData("2147483647")]
     public void ParseQty_rejects_everything_else(string? text)
     {
         var (value, error) = PackageScope.ParseQty(text);

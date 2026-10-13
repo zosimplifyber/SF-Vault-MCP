@@ -77,7 +77,7 @@ internal sealed class PackageBuilder
         return ctx with
         {
             Scope = PackageScopeKind.Selected,
-            ScopeLine = PackageScope.ScopeLine(PackageScopeKind.Selected, ctx.Stem, pick.Candidates.Count),
+            ScopeLine = PackageScope.ScopeLine(PackageScopeKind.Selected, ctx.Stem, pick.Candidates.Count, pick.Skipped.Count),
             Pick = pick,
         };
     }
@@ -287,7 +287,8 @@ internal sealed class PackageBuilder
             var user = "";
             try { user = VaultSession.Connection.UserName ?? ""; } catch (Exception ex) { _log($"user name unavailable: {ex.Message}"); }
             var quoteLocal = quote && localCopies.Count > 0;
-            var source = quoteLocal ? ctx.Source + " | Local copy (open in Inventor, checked out or edited locally): " + string.Join(", ", localCopies) : ctx.Source;
+            var localText = "Local copy (open in Inventor, checked out or edited locally): " + string.Join(", ", localCopies);
+            var source = quoteLocal ? (string.IsNullOrWhiteSpace(ctx.Source) ? localText : ctx.Source + " | " + localText) : ctx.Source;
             var manifest = System.IO.Path.Combine(temp, "manifest.json");
             System.IO.File.WriteAllText(manifest, PackageManifest.ToJson(new PackageManifestData(
                 print ? "print" : "partner", ctx.Stem, ctx.Top.Description, VaultFiles.RevisionOf(ctx.AssemblyFile),

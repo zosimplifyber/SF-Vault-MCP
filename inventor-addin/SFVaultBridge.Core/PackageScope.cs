@@ -23,6 +23,7 @@ public sealed record ScopeRow(ScopeCandidate Candidate, int DefaultQty, PackageF
 /// <summary>Pure rules for the Partner Package scopes: whole assembly, selected parts, one part.</summary>
 public static class PackageScope
 {
+    public const int MaxQty = 100000;
     public const string OpenMessage = "Open an assembly or a part.";
 
     /// <summary>Assembly with components selected = those parts; assembly alone = whole assembly; part = that part; anything else = a message.</summary>
@@ -66,6 +67,16 @@ public static class PackageScope
         var make = all.Where(c => c.Class.Kind != PackageKind.None).ToList();
         var skipped = all.Where(c => c.Class.Kind == PackageKind.None).Select(c => NotMake(c.Node.PartNumber)).ToList();
         return new ScopePick(make, skipped);
+    }
+
+    public const int MaxSkippedLines = 10;
+
+    /// <summary>The skipped picks, one per line, at most <see cref="MaxSkippedLines"/> then "and N more".</summary>
+    public static string SkippedText(IReadOnlyList<string> skipped)
+    {
+        var lines = skipped.Take(MaxSkippedLines).ToList();
+        if (skipped.Count > MaxSkippedLines) lines.Add($"and {skipped.Count - MaxSkippedLines} more");
+        return string.Join(Environment.NewLine, lines);
     }
 
     public static string NotMake(string name) => $"not a Make part: {name}";
@@ -112,7 +123,8 @@ public static class PackageScope
         if (t.Length == 0) return (null, "Quantity is required.");
         if (!int.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
             return (null, "Quantity must be a whole number of 1 or more.");
-        return n >= 1 ? (n, null) : (null, "Quantity must be 1 or more.");
+        if (n < 1) return (null, "Quantity must be 1 or more.");
+        return n <= MaxQty ? (n, null) : (null, $"Quantity must be {MaxQty} or less.");
     }
 
     /// <summary>The included rows as package parts, in order, with the entered quantities (the default where none was entered).</summary>
@@ -122,9 +134,9 @@ public static class PackageScope
             .ToList();
 
     /// <summary>The line at the top of the form and in the BOM title: "Whole assembly CD-1" / "3 selected parts in CD-1" / "Part CD-2".</summary>
-    public static string ScopeLine(PackageScopeKind kind, string stem, int selectedParts = 0) => kind switch
+    public static string ScopeLine(PackageScopeKind kind, string stem, int selectedParts = 0, int skipped = 0) => kind switch
     {
-        PackageScopeKind.Selected => $"{selectedParts} selected part{(selectedParts == 1 ? "" : "s")} in {stem}",
+        PackageScopeKind.Selected => $"{selectedParts} selected part{(selectedParts == 1 ? "" : "s")} in {stem}{(skipped > 0 ? $" ({skipped} skipped)" : "")}",
         PackageScopeKind.Part => $"Part {stem}",
         _ => $"Whole assembly {stem}",
     };

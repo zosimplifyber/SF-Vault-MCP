@@ -138,7 +138,7 @@ internal sealed class PartnerPackageForm : Form
             table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             table.Controls.Add(_skippedLabel);
             table.SetColumnSpan(_skippedLabel, 2);
-            _skippedLabel.Text = string.Join(Environment.NewLine, _skipped);
+            _skippedLabel.Text = PackageScope.SkippedText(_skipped);
             _skippedLabel.Visible = _skipped.Count > 0;
         }
 
