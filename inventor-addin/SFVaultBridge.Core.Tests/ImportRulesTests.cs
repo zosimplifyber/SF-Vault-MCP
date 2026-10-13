@@ -207,4 +207,15 @@ public class ImportRulesTests
         Assert.Equal(new[] { "Vendor", "Vendor Number", "Material", "Material Finish" },
             ImportRules.EmptyCardProperties(n => values.GetValueOrDefault(n)));
     }
+
+    [Theory]
+    [InlineData("Zak Olech", "Zak O.")]
+    [InlineData("  zak   olech ", "zak O.")]
+    [InlineData("Mary Ann Smith", "Mary S.")]
+    [InlineData("Zak O.", "Zak O.")]
+    [InlineData("Zak", "Zak")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void Designer_name_is_first_name_and_last_initial(string? input, string expected) =>
+        Assert.Equal(expected, ImportRules.DesignerName(input));
 }

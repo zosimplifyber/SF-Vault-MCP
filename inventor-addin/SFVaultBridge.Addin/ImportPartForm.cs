@@ -42,7 +42,7 @@ internal sealed class ImportPartForm : Form
 
     private static string DesignerOf(Inv.Application app, Action<string> log)
     {
-        try { return app.GeneralOptions.UserName ?? ""; }
+        try { return ImportRules.DesignerName(app.GeneralOptions.UserName); }
         catch (Exception ex) { log($"import form: user name unavailable: {ex.Message}"); return ""; }
     }
 

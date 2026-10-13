@@ -91,6 +91,15 @@ public static class ImportRules
             ?? list.FirstOrDefault();
     }
 
+    /// <summary>Designer in the "First L." form used on existing parts: "Zak Olech" becomes "Zak O.". One word or an already short name is kept as is.</summary>
+    public static string DesignerName(string? userName)
+    {
+        var parts = (userName ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2) return parts.Length == 1 ? parts[0] : "";
+        var last = parts[^1].TrimEnd('.');
+        return last.Length == 0 ? parts[0] : $"{parts[0]} {char.ToUpperInvariant(last[0])}.";
+    }
+
     public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };
 
     /// <summary>Names of the data-card properties whose value (read through valueOf) is blank.</summary>

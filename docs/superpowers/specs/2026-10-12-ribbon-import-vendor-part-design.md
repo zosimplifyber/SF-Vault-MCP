@@ -28,7 +28,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
    - **Description**: from the file name (McMaster: the text after the first `_`, extension removed), editable, required.
    - **Material**: required pick-only dropdown of the active material library, preselected to Steel when present, else the first item. A material that cannot be applied at run time fails step part before anything is added for the part.
    - **Material Finish**: text, defaults to As Finished, editable; empty becomes As Finished.
-   - **Designer**: Inventor's user name (General Options), read-only.
+   - **Designer**: Inventor's user name (General Options) in "First L." form ("Zak Olech" becomes "Zak O."), read-only.
    - **Engr Approved By**: `NOT REVIEWED`, read-only.
    - Shows where it will go: `$/DESIGNS/Simplifyber Library/<Vendor>/<Subfolder>/CD-<next>.ipt` and the PDF name.
 4. **Import** runs, on Inventor's session, in this order, each step reported in the result:
@@ -55,7 +55,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 | Source | custom "Source" | `Buy` |
 | Material | part material | form (required) |
 | Material Finish | custom "Material Finish" | form |
-| Designer | Design Tracking "Designer" | Inventor user name |
+| Designer | Design Tracking "Designer" | Inventor user name as "First L." (Zak, 2026-10-13) |
 | Engr Approved By | custom "Engr Approved By" | `NOT REVIEWED` |
 
 ## Architecture
