@@ -37,7 +37,17 @@ The third action button builds the package to hand to whoever assembles the prod
 
 ### Partner Package
 
-Builds a zip for a manufacturing partner and checks it into Vault. It needs an open assembly that is in Vault. A run blocks Inventor like the other package buttons.
+Builds a zip for a manufacturing partner and checks it into Vault. It needs an open assembly or part that is in Vault. A run blocks Inventor like the other package buttons.
+
+Scope, decided by what is open:
+- Assembly, nothing selected: the whole assembly (the form has no grid).
+- Assembly with components selected (occurrences and picks inside a sub-assembly; deduped by file): only those parts. A selected sub-assembly is its own row (its STEP and drawing, not its children). Picks that are not Make parts (purchased, Content Center, Phantom, Reference, virtual) are skipped and listed under the grid as `not a Make part: <name>`.
+- Part open: that part only.
+- Drawing or nothing open: `Open an assembly or a part.`
+
+For a selected or single-part scope the form shows the scope line and a grid (Part Number, Description, Mode files, Quantity, Note). Quantity is an editable whole number of 1 or more; the default is the part's total quantity in the assembly (1 for a single part). A part the chosen Parts mode excludes is greyed with the reason (`not CNC`, `not sheet metal`) and not built; with nothing left, Build is disabled. The release gate, quote override, Get Latest refresh, local-edit block and Dropbox step apply unchanged to every scope. The BOM.xlsx title and the cover name the scope, and the BOM Qty column uses the entered quantities.
+
+Zip names: whole assembly `<assembly> <Partner> <Mode> Package.zip`; single part `<CD> <Partner> <Mode> Package.zip`, checked into the part's own Vault folder; selected parts `<assembly> <Partner> <Mode> Selected Package.zip`, next to the assembly. `Quote` goes before `Package` in quote mode.
 
 Form fields: Partner (required, remembered in the recent list), Parts, the For quote only checkbox (never remembered), the Upload to Dropbox checkbox (enabled only when `dropboxAppKey` is set) and a Sign out of Dropbox button (enabled when signed in). The preview line shows the file counts for the chosen Parts.
 

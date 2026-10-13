@@ -97,7 +97,8 @@ def _write_sheet(path: Path, m: dict[str, Any], rows: list[dict[str, Any]], part
     asm = m.get("assembly", "")
     if partner:
         kind = "Quote package" if quote else "package"
-        title = f"{asm} {m.get('partner', '')} {m.get('mode', '')} {kind}"
+        scope = str(m.get("scope") or "").strip()
+        title = f"{scope} | {m.get('partner', '')} {m.get('mode', '')} {kind}" if scope else f"{asm} {m.get('partner', '')} {m.get('mode', '')} {kind}"
     else:
         title = f"{asm} 3D print list"
     ws.merge_cells(f"A1:{last}1")
@@ -162,11 +163,13 @@ def _cover(m: dict[str, Any], counts: dict[str, int], rows: int, failed: list[di
     N = st["Normal"]
     title = f"Quote package: {m.get('assembly', '')}" if quote else f"Partner package: {m.get('assembly', '')}"
     mode = str(m.get("mode") or "")
+    scope = str(m.get("scope") or "").strip()
     story = [rp._para(title, st["Title"]),
              rp._para(m.get("description") or "", st["Heading2"]),
              rp._para(f"Partner: {m.get('partner', '')}", N),
              rp._para(f"Parts: {MODE_LABELS.get(mode, mode)}", N),
-             rp._para(f"Assembly {m.get('assembly', '')} Rev {m.get('revision') or '-'} "
+             *([rp._para(f"Scope: {scope}", N)] if scope else []),
+             rp._para(f"{'Part' if scope.startswith('Part ') else 'Assembly'} {m.get('assembly', '')} Rev {m.get('revision') or '-'} "
                       f"({str(m.get('state') or '').strip() or 'unknown'})", N),
              rp._para(f"Created {m.get('created', '')} by {m.get('user', '')}", N),
              rp._para(f"{rows} parts: {counts['step']} STEP, {counts['pdf']} PDF, {counts['dxf']} DXF", N)]

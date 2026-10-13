@@ -5,10 +5,15 @@ using WsFile = Autodesk.Connectivity.WebServices.File;
 
 namespace SFVaultBridge.Addin;
 
-internal sealed record PackageContext(Inv.AssemblyDocument Assembly, string Folder, string VaultFolder, string Stem,
+/// <summary>
+/// Document is the open assembly or, for a single part, the part (Stem, Folder, VaultFolder, AssemblyFile and Top then describe that part).
+/// Pick is set for the Selected and Part scopes: the Make rows in scope and the picks that were skipped.
+/// </summary>
+internal sealed record PackageContext(Inv.Document Document, string Folder, string VaultFolder, string Stem,
                                       WsFile? AssemblyFile, BomNode Top, IReadOnlyList<BomNode> Roots,
                                       IReadOnlyDictionary<string, string?> Categories, string Source,
-                                      BridgeSettings Settings, PrintMaterials Materials);
+                                      BridgeSettings Settings, PrintMaterials Materials,
+                                      PackageScopeKind Scope = PackageScopeKind.Assembly, string ScopeLine = "", ScopePick? Pick = null);
 
 internal sealed record PackageOutcome(string ZipName, string? VaultPath, int? Version, string? DownloadsCopy,
                                       string Summary, IReadOnlyList<string> Warnings,
@@ -32,17 +37,61 @@ internal sealed class PackageBuilder
         try
         {
             SetStatus("Partner Package: reading BOM");
-            var (folder, vaultFolder, stem) = RibbonActions.Locate(asm);
+            var (folder, vaultFolder, stem) = RibbonActions.Locate((Inv.Document)asm);
             var settings = BridgeSettings.Load(BridgeSettings.DefaultPath, _log);
             var categories = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             var roots = BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log, categories);
             var asmFile = VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(asm.FullFileName));
             var top = BomReader.TopNode(asm, VaultFiles.RevisionOf(asmFile), asmFile is null ? "" : VaultFiles.StateOf(asmFile));
-            return new PackageContext(asm, folder, vaultFolder, stem, asmFile, top, roots, categories, BomReader.SourceLine(asm),
+            return new PackageContext((Inv.Document)asm, folder, vaultFolder, stem, asmFile, top, roots, categories, BomReader.SourceLine(asm),
                                       settings, new PrintMaterials(settings.PrintMaterials));
         }
         finally { SetStatus(previous); }
     }
+
+    /// <summary>The open part: Vault location, its BOM row (Vault state, revision and category from the same enrichment as a BOM row) and the Part scope.</summary>
+    public PackageContext PreparePart(Inv.PartDocument part)
+    {
+        var previous = StatusText();
+        try
+        {
+            SetStatus("Partner Package: reading part");
+            var (folder, vaultFolder, stem) = RibbonActions.Locate((Inv.Document)part);
+            var settings = BridgeSettings.Load(BridgeSettings.DefaultPath, _log);
+            var categories = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var roots = BomEnricher.Apply(new[] { BomReader.PartNode(part) }, VaultFiles.WorkingFolderRoot(), _log, categories);
+            var file = VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(part.FullFileName));
+            var materials = new PrintMaterials(settings.PrintMaterials);
+            var pick = PackageScope.PickPart(Candidates(roots, materials, categories));
+            return new PackageContext((Inv.Document)part, folder, vaultFolder, stem, file, roots[0], roots, categories, "", settings, materials,
+                                      PackageScopeKind.Part, PackageScope.ScopeLine(PackageScopeKind.Part, stem), pick);
+        }
+        finally { SetStatus(previous); }
+    }
+
+    /// <summary>The assembly narrowed to the selected components (their files; null for a component without one).</summary>
+    public PackageContext PrepareSelected(Inv.AssemblyDocument asm, IEnumerable<string?> selectedFiles)
+    {
+        var ctx = Prepare(asm);
+        var pick = PackageScope.PickSelected(Candidates(ctx.Roots, ctx.Materials, ctx.Categories), selectedFiles);
+        return ctx with
+        {
+            Scope = PackageScopeKind.Selected,
+            ScopeLine = PackageScope.ScopeLine(PackageScopeKind.Selected, ctx.Stem, pick.Candidates.Count),
+            Pick = pick,
+        };
+    }
+
+    private static IReadOnlyList<ScopeCandidate> Candidates(IReadOnlyList<BomNode> roots, PrintMaterials materials, IReadOnlyDictionary<string, string?> categories) =>
+        PackageRules.Candidates(roots, materials, n => categories.TryGetValue(n.FullPath, out var c) ? c : null);
+
+    /// <summary>The grid rows for a Selected or Part scope under the chosen Parts mode.</summary>
+    public IReadOnlyList<ScopeRow> ScopeRows(PackageContext ctx, ManufacturingMode mode) =>
+        PackageScope.Rows(ctx.Pick?.Candidates ?? Array.Empty<ScopeCandidate>(), mode, ctx.Scope == PackageScopeKind.Part);
+
+    /// <summary>The parts to build for a Selected or Part scope, with the quantities entered in the form.</summary>
+    public IReadOnlyList<PackagePart> ScopeParts(PackageContext ctx, ManufacturingMode mode, Func<ScopeRow, int?> quantity) =>
+        PackageScope.ToParts(ScopeRows(ctx, mode), quantity);
 
     public IReadOnlyList<PackagePart> Parts(PackageContext ctx, ManufacturingMode mode) =>
         PackageRules.Select(ctx.Roots, mode, ctx.Materials, n => ctx.Categories.TryGetValue(n.FullPath, out var c) ? c : null,
@@ -243,9 +292,10 @@ internal sealed class PackageBuilder
             System.IO.File.WriteAllText(manifest, PackageManifest.ToJson(new PackageManifestData(
                 print ? "print" : "partner", ctx.Stem, ctx.Top.Description, VaultFiles.RevisionOf(ctx.AssemblyFile),
                 ctx.AssemblyFile is null ? "" : VaultFiles.StateOf(ctx.AssemblyFile), partner, PackageRules.ModeName(mode), source,
-                user, DateTime.Now, rows, files, guessed, missingDrawings, noFlatPattern, failed, quote)));
+                user, DateTime.Now, rows, files, guessed, missingDrawings, noFlatPattern, failed, quote,
+                ctx.Scope == PackageScopeKind.Assembly ? "" : ctx.ScopeLine)));
 
-            var zipName = print ? PackageRules.PrintZipName(ctx.Stem) : PackageRules.PartnerZipName(ctx.Stem, partner, mode, quote);
+            var zipName = print ? PackageRules.PrintZipName(ctx.Stem) : PackageScope.ZipName(ctx.Scope, ctx.Stem, partner, mode, quote);
             var tempZip = System.IO.Path.Combine(temp, zipName);
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             var json = ToolRunner.Run(ToolResults.PackageArgs(manifest, tempZip, resultPath), resultPath, ToolTimeout);
@@ -295,7 +345,7 @@ internal sealed class PackageBuilder
             string? vaultPath = null;
             int? version = null;
             var comment = print ? $"3D print package for {ctx.Stem}"
-                                : $"{partner} {PackageRules.ModeName(mode)} {(quote ? "quote " : "")}package for {ctx.Stem}";
+                                : $"{partner} {PackageRules.ModeName(mode)} {(quote ? "quote " : "")}package for {(ctx.Scope == PackageScopeKind.Assembly ? ctx.Stem : ctx.ScopeLine)}";
             try
             {
                 var pub = VaultFiles.Publish(tempZip, System.IO.Path.Combine(ctx.Folder, zipName), ctx.VaultFolder, zipName, comment);

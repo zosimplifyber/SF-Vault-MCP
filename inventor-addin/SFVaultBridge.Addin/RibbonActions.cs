@@ -25,7 +25,7 @@ internal sealed class RibbonActions
         Add("Purchasing", "Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
         Add("Review", "Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
         Add("Review", "Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
-        Add("Manufacturing", "Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
+        Add("Manufacturing", "Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault. Covers the whole assembly, the parts selected in it, or the open part.", Icons.BoxOut, null, PartnerPackage);
         Add("Manufacturing", "3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
         Add("Parts", "Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
         Add("Parts", "Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
@@ -177,7 +177,7 @@ internal sealed class RibbonActions
         var doc = _app.ActiveDocument;
         var kind = doc is null ? FixCardDocKind.None : doc is Inv.PartDocument ? FixCardDocKind.Part : doc is Inv.AssemblyDocument ? FixCardDocKind.Assembly : FixCardDocKind.Other;
         var selected = new List<string?>();
-        if (kind == FixCardDocKind.Assembly) selected.AddRange(SelectedComponentFiles(doc!));
+        if (kind == FixCardDocKind.Assembly) selected.AddRange(ComponentSelection.Files(doc!, m => _log("fix data card: " + m)));
         var pick = FixCardRules.Pick(kind, kind == FixCardDocKind.None ? null : doc!.FullFileName, selected);
         if (pick.Message is not null) { Msg(pick.Message, title); return; }
 
@@ -194,49 +194,20 @@ internal sealed class RibbonActions
         if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
     }
 
-    /// <summary>The file of each selected component occurrence (null when it has none, for example a virtual component). Other selected items are ignored.</summary>
-    private IEnumerable<string?> SelectedComponentFiles(Inv.Document doc)
+    internal static (string Folder, string VaultFolder, string Stem) Locate(Inv.Document doc)
     {
-        var set = doc.SelectSet;
-        for (var i = 1; i <= set.Count; i++)
-        {
-            if (!TryComponentFile(set[i], out var file)) continue;
-            yield return file;
-        }
-    }
-
-    /// <summary>True for a component occurrence or a proxy of one (a pick inside a sub-assembly); file is null when it has none (virtual).</summary>
-    private bool TryComponentFile(object item, out string? file)
-    {
-        file = null;
-        var isComponent = item is Inv.ComponentOccurrenceProxy or Inv.ComponentOccurrence;
-        if (!isComponent) return false;
-        try
-        {
-            if (item is Inv.ComponentOccurrenceProxy proxy)
-            {
-                try { file = proxy.NativeObject.ReferencedDocumentDescriptor.FullDocumentName; }
-                catch (Exception) { file = ((Inv.Document)proxy.Definition.Document).FullFileName; }
-            }
-            else file = ((Inv.ComponentOccurrence)item).ReferencedDocumentDescriptor.FullDocumentName;
-        }
-        catch (Exception ex) { _log("fix data card: selected component has no file: " + ex.Message); file = null; }
-        return true;
-    }
-
-    internal static (string Folder, string VaultFolder, string Stem) Locate(Inv.AssemblyDocument asm)
-    {
-        var file = asm.FullFileName;
-        if (string.IsNullOrWhiteSpace(file)) throw new BridgeException("not_in_vault", "Save the assembly and check it in to Vault first.");
+        var noun = doc is Inv.PartDocument ? "part" : "assembly";
+        var file = doc.FullFileName;
+        if (string.IsNullOrWhiteSpace(file)) throw new BridgeException("not_in_vault", $"Save the {noun} and check it in to Vault first.");
         var vaultFolder = VaultPaths.ToVaultFolder(file, VaultFiles.WorkingFolderRoot());
         if (VaultFiles.FindLatest(vaultFolder + "/" + System.IO.Path.GetFileName(file)) is null)
-            throw new BridgeException("not_in_vault", "Check the assembly in to Vault first.");
+            throw new BridgeException("not_in_vault", $"Check the {noun} in to Vault first.");
         return (System.IO.Path.GetDirectoryName(file)!, vaultFolder, System.IO.Path.GetFileNameWithoutExtension(file));
     }
 
     private void Purchasing(Inv.AssemblyDocument asm)
     {
-        var (folder, vaultFolder, stem) = Locate(asm);
+        var (folder, vaultFolder, stem) = Locate((Inv.Document)asm);
         var lines = BomOrdering.Flatten(BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log));
         if (lines.Count == 0) throw new BridgeException("no_bom", "The assembly has no BOM rows.");
         var source = BomReader.SourceLine(asm);
@@ -256,25 +227,56 @@ internal sealed class RibbonActions
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }
 
-    private void PartnerPackage(Inv.AssemblyDocument asm)
+    /// <summary>Whole assembly, the components selected in it, or the open part (see PackageScope.Decide).</summary>
+    private void PartnerPackage()
     {
+        const string title = "Partner Package";
+        var doc = _app.ActiveDocument;
+        var kind = doc is Inv.AssemblyDocument ? ScopeDoc.Assembly : doc is Inv.PartDocument ? ScopeDoc.Part : doc is null ? ScopeDoc.None : ScopeDoc.Other;
+        var selected = kind == ScopeDoc.Assembly ? ComponentSelection.Files(doc!, m => _log("partner package: " + m)) : Array.Empty<string?>();
+        var decision = PackageScope.Decide(kind, selected.Count);
+        if (decision.Kind is null) { Msg(decision.Message ?? PackageScope.OpenMessage, title); return; }
+
+        var cursor = Cursor.Current;
+        PackageContext ctx;
         var builder = new PackageBuilder(_app, _log);
-        var ctx = builder.Prepare(asm);
+        try
+        {
+            Cursor.Current = Cursors.WaitCursor;
+            ctx = decision.Kind switch
+            {
+                PackageScopeKind.Part => builder.PreparePart((Inv.PartDocument)doc!),
+                PackageScopeKind.Selected => builder.PrepareSelected((Inv.AssemblyDocument)doc!, selected),
+                _ => builder.Prepare((Inv.AssemblyDocument)doc!),
+            };
+        }
+        finally { Cursor.Current = cursor; }
+        var scoped = ctx.Scope != PackageScopeKind.Assembly;
+
         string partner;
         ManufacturingMode mode;
         bool quote, upload;
+        IReadOnlyList<PackagePart> parts;
         using (var form = new PartnerPackageForm(ctx.Settings.RecentPartners, m =>
         {
-            try { return builder.Parts(ctx, m); }
+            try { return scoped ? Array.Empty<PackagePart>() : builder.Parts(ctx, m); }
             catch (Exception ex) { _log($"partner package parts for {m} failed: {ex}"); throw; }
-        }, ctx.Settings.DropboxAppKey))
+        }, ctx.Settings.DropboxAppKey,
+        scoped ? m =>
+        {
+            try { return builder.ScopeRows(ctx, m); }
+            catch (Exception ex) { _log($"partner package rows for {m} failed: {ex}"); throw; }
+        } : null,
+        scoped ? ctx.ScopeLine : "", scoped ? ctx.Pick?.Skipped : null))
         {
             var owner = OwnerWindow();
             var r = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
             if (r != DialogResult.OK || form.Partner is null) return;
             partner = form.Partner; mode = form.Mode; quote = form.Quote; upload = form.Upload;
+            var entered = form.Quantities;
+            parts = scoped ? builder.ScopeParts(ctx, mode, row => entered.TryGetValue(row.Candidate.Node.FullPath ?? "", out var q) ? q : null)
+                           : builder.Parts(ctx, mode);
         }
-        var parts = builder.Parts(ctx, mode);
         if (upload)
         {
             var signInProblem = builder.EnsureDropboxSignIn(ctx);
@@ -326,7 +328,7 @@ internal sealed class RibbonActions
     private void BuildPackage(Inv.AssemblyDocument asm, PackageMode mode)
     {
         var assemblyMode = mode == PackageMode.Assembly;
-        var (folder, vaultFolder, stem) = Locate(asm);
+        var (folder, vaultFolder, stem) = Locate((Inv.Document)asm);
         var lines = BomOrdering.Flatten(BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log));
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(temp);

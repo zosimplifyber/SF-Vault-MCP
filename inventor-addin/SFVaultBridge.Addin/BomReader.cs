@@ -60,6 +60,30 @@ internal static class BomReader
             MaterialFinish: Prop("Inventor User Defined Properties", "Material Finish"));
     }
 
+    /// <summary>The open part as a childless BOM row of quantity 1 (unsaved edits included), read the same way a BOM row is.</summary>
+    internal static BomNode PartNode(Inv.PartDocument part)
+    {
+        string Prop(string set, string name)
+        {
+            try { return Convert.ToString(part.PropertySets[set][name].Value) ?? ""; } catch { return ""; }
+        }
+        var fullPath = "";
+        try { fullPath = part.FullFileName ?? ""; } catch { }
+        var fileName = fullPath.Length > 0 ? System.IO.Path.GetFileName(fullPath) : "";
+        var partNumber = Prop("Design Tracking Properties", "Part Number");
+        if (string.IsNullOrWhiteSpace(partNumber)) partNumber = fileName.Length > 0 ? System.IO.Path.GetFileNameWithoutExtension(fileName) : "";
+        var isSheetMetal = false;
+        try { isSheetMetal = string.Equals(part.SubType, SheetMetalSubType, StringComparison.OrdinalIgnoreCase); } catch { }
+        double? cost = null;
+        try { cost = ParseCost(part.PropertySets["Design Tracking Properties"]["Cost"].Value); } catch { }
+        return new BomNode(partNumber, Prop("Design Tracking Properties", "Description"), 1, "Each", "Normal",
+            Prop("Inventor Summary Information", "Revision Number"), Prop("Design Tracking Properties", "Material"), fileName, fullPath,
+            Array.Empty<BomNode>(), Prop("Design Tracking Properties", "Vendor"),
+            SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number")),
+            Process: Prop("Inventor User Defined Properties", "Process"), MaterialFinish: Prop("Inventor User Defined Properties", "Material Finish"),
+            IsSheetMetal: isSheetMetal, Cost: cost, HsCode: Prop("Inventor User Defined Properties", "HS/HTS Code").Trim());
+    }
+
     private static IReadOnlyList<BomNode> Rows(Inv.BOMRowsEnumerator? rows)
     {
         var list = new List<BomNode>();

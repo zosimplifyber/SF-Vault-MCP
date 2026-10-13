@@ -235,3 +235,29 @@ def test_unreadable_pdf_goes_to_failed(tmp_path):
 
 def test_qty_tolerates_nan_and_inf():
     assert mp._qty(float("nan")) == 0 and mp._qty(float("inf")) == 0 and mp._qty(4.0) == 4
+
+
+def test_scope_names_bom_title_and_cover(tmp_path):
+    out = tmp_path / "p.zip"
+    mp.run_package(str(_partner_manifest(tmp_path, scope="3 selected parts in CD-001882")), str(out))
+    z = zipfile.ZipFile(out)
+    ws = openpyxl.load_workbook(BytesIO(z.read("BOM.xlsx")))["BOM"]
+    assert ws["A1"].value == "3 selected parts in CD-001882 | Acme Machining CNC package"
+    assert ws["D4"].value == 4
+    text = "".join(p.extract_text() or "" for p in PdfReader(BytesIO(z.read("00 Cover.pdf"))).pages)
+    assert "Scope: 3 selected parts in CD-001882" in text and "Assembly CD-001882 Rev A" in text
+
+
+def test_part_scope_cover_says_part(tmp_path):
+    out = tmp_path / "p.zip"
+    mp.run_package(str(_partner_manifest(tmp_path, assembly="CD-001885", scope="Part CD-001885")), str(out))
+    text = "".join(p.extract_text() or "" for p in PdfReader(BytesIO(zipfile.ZipFile(out).read("00 Cover.pdf"))).pages)
+    assert "Scope: Part CD-001885" in text and "Part CD-001885 Rev A" in text
+
+
+def test_manifest_without_scope_is_unchanged(tmp_path):
+    out = tmp_path / "p.zip"
+    mp.run_package(str(_partner_manifest(tmp_path)), str(out))
+    z = zipfile.ZipFile(out)
+    text = "".join(p.extract_text() or "" for p in PdfReader(BytesIO(z.read("00 Cover.pdf"))).pages)
+    assert "Scope:" not in text and "Assembly CD-001882 Rev A" in text

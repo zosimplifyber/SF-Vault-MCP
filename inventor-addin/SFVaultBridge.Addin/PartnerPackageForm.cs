@@ -4,7 +4,10 @@ using SFVaultBridge.Core;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The Partner Package form: partner name, which parts, a live preview and the quote override. Never throws into Inventor.</summary>
+/// <summary>
+/// The Partner Package form: partner name, which parts, a live preview and the quote override. For a selected or single-part scope it also
+/// shows the scope line and a grid (Part Number, Description, Mode files, editable Quantity). Never throws into Inventor.
+/// </summary>
 internal sealed class PartnerPackageForm : Form
 {
     private const int InputWidth = 380;   // logical px; AutoScaleMode.Dpi scales it
@@ -29,16 +32,32 @@ internal sealed class PartnerPackageForm : Form
     private readonly Button _build = new() { Text = "Build", DialogResult = DialogResult.None };
     private readonly Button _cancel = new() { Text = "Cancel", DialogResult = DialogResult.Cancel };
 
+    // Selected / single-part scope only.
+    private readonly string _scopeLine;
+    private readonly Func<ManufacturingMode, IReadOnlyList<ScopeRow>>? _rowsFor;
+    private readonly IReadOnlyList<string> _skipped;
+    private readonly Dictionary<ManufacturingMode, IReadOnlyList<ScopeRow>> _rowCache = new();
+    private readonly Dictionary<string, string> _qtyText = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DataGridView _grid = new();
+    private readonly Label _skippedLabel = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+    private bool _filling;
+    private bool Scoped => _rowsFor is not null;
+
     public string? Partner { get; private set; }
     public ManufacturingMode Mode { get; private set; } = ManufacturingMode.AllMake;
     /// <summary>"For quote only" ticked. Never remembered between runs.</summary>
     public bool Quote { get; private set; }
     /// <summary>"Upload to Dropbox" ticked (only possible when a dropboxAppKey is set).</summary>
     public bool Upload { get; private set; }
+    /// <summary>Selected / single-part scope: the entered quantity for each included part, keyed by the part's file path.</summary>
+    public Dictionary<string, int> Quantities { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public PartnerPackageForm(IReadOnlyList<string> recentPartners, Func<ManufacturingMode, IReadOnlyList<PackagePart>> partsFor, string dropboxAppKey = "")
+    public PartnerPackageForm(IReadOnlyList<string> recentPartners, Func<ManufacturingMode, IReadOnlyList<PackagePart>> partsFor, string dropboxAppKey = "",
+                                Func<ManufacturingMode, IReadOnlyList<ScopeRow>>? rowsFor = null, string scopeLine = "",
+                                IReadOnlyList<string>? skipped = null)
     {
         _partsFor = partsFor;
+        _rowsFor = rowsFor; _scopeLine = scopeLine; _skipped = skipped ?? Array.Empty<string>();
         _dropboxAppKey = (dropboxAppKey ?? "").Trim();
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -97,8 +116,31 @@ internal sealed class PartnerPackageForm : Form
             c.Width = InputWidth;
             table.Controls.Add(c);
         }
+        if (Scoped)
+        {
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var scope = new Label { Text = _scopeLine, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 6) };
+            table.Controls.Add(scope);
+            table.SetColumnSpan(scope, 2);
+        }
         Row("Partner", _partner, 0);
         Row("Parts", _parts, 1);
+
+        if (Scoped)
+        {
+            ConfigureGrid();
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _grid.Margin = new Padding(0, 6, 0, 3);
+            table.Controls.Add(_grid);
+            table.SetColumnSpan(_grid, 2);
+            _skippedLabel.MaximumSize = new Size(GridWidth, 0);
+            _skippedLabel.Margin = new Padding(0, 0, 0, 3);
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            table.Controls.Add(_skippedLabel);
+            table.SetColumnSpan(_skippedLabel, 2);
+            _skippedLabel.Text = string.Join(Environment.NewLine, _skipped);
+            _skippedLabel.Visible = _skipped.Count > 0;
+        }
 
         _previewLabel.MaximumSize = new Size(InputWidth, 0);
         _error.MaximumSize = new Size(InputWidth, 0);
@@ -152,8 +194,90 @@ internal sealed class PartnerPackageForm : Form
         Controls.Add(root);
     }
 
+    private const int GridWidth = 600;
+    private const int ColPart = 0, ColDescription = 1, ColFiles = 2, ColQty = 3, ColNote = 4;
+
+    private void ConfigureGrid()
+    {
+        _grid.AllowUserToAddRows = false; _grid.AllowUserToDeleteRows = false; _grid.AllowUserToResizeRows = false;
+        _grid.RowHeadersVisible = false; _grid.MultiSelect = false; _grid.EditMode = DataGridViewEditMode.EditOnEnter;
+        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+        _grid.BackgroundColor = SystemColors.Window; _grid.BorderStyle = BorderStyle.FixedSingle;
+        _grid.TabIndex = 7;
+        void Col(string header, int width, bool readOnly)
+        {
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = header, Width = width, ReadOnly = readOnly, SortMode = DataGridViewColumnSortMode.NotSortable });
+        }
+        Col("Part Number", 110, true); Col("Description", 180, true); Col("Mode files", 90, true); Col("Quantity", 70, false); Col("Note", 140, true);
+        _grid.CellEndEdit += (_, e) => Safe(() => { if (!_filling && e.ColumnIndex == ColQty) RememberQty(e.RowIndex); });
+        _grid.Size = new Size(GridWidth, 120);
+    }
+
+    private IReadOnlyList<ScopeRow> RowsFor(ManufacturingMode mode)
+    {
+        if (!_rowCache.TryGetValue(mode, out var rows)) _rowCache[mode] = rows = _rowsFor!(mode);
+        return rows;
+    }
+
+    private static string Key(ScopeRow r) => r.Candidate.Node.FullPath ?? "";
+
+    private static string DefaultText(ScopeRow r) => r.DefaultQty.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private void RememberQty(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= _grid.Rows.Count || _grid.Rows[rowIndex].Tag is not string key) return;
+        var row = _grid.Rows[rowIndex];
+        if (row.Cells[ColQty].ReadOnly) return;
+        _qtyText[key] = Convert.ToString(row.Cells[ColQty].Value) ?? "";
+    }
+
+    private void FillGrid(IReadOnlyList<ScopeRow> rows)
+    {
+        _filling = true;
+        try
+        {
+            _grid.Rows.Clear();
+            foreach (var r in rows)
+            {
+                var qty = _qtyText.TryGetValue(Key(r), out var t) ? t : DefaultText(r);
+                var i = _grid.Rows.Add(r.Candidate.Node.PartNumber, r.Candidate.Node.Description, PackageScope.FilesText(r.Files), r.Included ? qty : "", r.Note ?? "");
+                var row = _grid.Rows[i];
+                row.Tag = Key(r);
+                if (!r.Included)
+                {
+                    row.Cells[ColQty].ReadOnly = true;
+                    row.DefaultCellStyle.ForeColor = SystemColors.GrayText;
+                    row.DefaultCellStyle.BackColor = SystemColors.Control;
+                }
+            }
+            var visible = Math.Max(1, Math.Min(rows.Count, 8));
+            _grid.Height = (int)((_grid.ColumnHeadersHeight + visible * 22 + 4) * 96f / DeviceDpi);
+        }
+        finally { _filling = false; }
+    }
+
+    private void UpdateScopedPreview()
+    {
+        var mode = Selected;
+        IReadOnlyList<ScopeRow> rows;
+        try { rows = RowsFor(mode); }
+        catch (Exception ex)
+        {
+            _error.Text = "Could not read the parts: " + ex.Message;
+            _previewLabel.Text = ""; _build.Enabled = false; _grid.Rows.Clear();
+            return;
+        }
+        _error.Text = "";
+        FillGrid(rows);
+        var parts = PackageScope.ToParts(rows, _ => null);
+        _previewLabel.Text = PackageRules.PreviewText(parts, mode);
+        _build.Enabled = parts.Count > 0;
+    }
+
     private void UpdatePreview()
     {
+        if (Scoped) { UpdateScopedPreview(); return; }
         var mode = Selected;
         if (!_preview.TryGetValue(mode, out var p))
         {
@@ -193,9 +317,26 @@ internal sealed class PartnerPackageForm : Form
     private void OnBuild()
     {
         var mode = Selected;
-        if (!_preview.TryGetValue(mode, out var p) || p.Count == 0) return;
+        if (Scoped)
+        {
+            _grid.EndEdit();
+            for (var i = 0; i < _grid.Rows.Count; i++) RememberQty(i);
+        }
+        else if (!_preview.TryGetValue(mode, out var p) || p.Count == 0) return;
         var error = PackageRules.PartnerError(_partner.Text);
         if (error is not null) { _error.Text = error; return; }
+        Quantities.Clear();
+        if (Scoped)
+        {
+            var included = RowsFor(mode).Where(r => r.Included).ToList();
+            if (included.Count == 0) return;
+            foreach (var r in included)
+            {
+                var (value, qtyError) = PackageScope.ParseQty(_qtyText.TryGetValue(Key(r), out var t) ? t : DefaultText(r));
+                if (value is null) { _error.Text = $"{r.Candidate.Node.PartNumber}: {qtyError}"; Quantities.Clear(); return; }
+                Quantities[Key(r)] = value.Value;
+            }
+        }
         Partner = _partner.Text.Trim();
         Mode = mode;
         Quote = _quote.Checked;

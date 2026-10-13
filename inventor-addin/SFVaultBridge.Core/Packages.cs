@@ -34,6 +34,9 @@ public sealed class PrintMaterials
         !string.IsNullOrWhiteSpace(material) && _patterns.Any(p => p.IsMatch(material));
 }
 
+/// <summary>One BOM row that is part of the package scope: its item number, node, class and total quantity in the assembly (not pruned by a Purchased, Reference or Buy parent).</summary>
+public sealed record ScopeCandidate(string Item, BomNode Node, PackageClass Class, double Total);
+
 public static class PackageRules
 {
     public const string TopItem = "Top";
@@ -80,22 +83,17 @@ public static class PackageRules
         };
     }
 
-    private sealed class Entry
-    {
-        public string Item = "";
-        public BomNode Node = null!;
-        public PackageClass Class;
-        public double Total;
-    }
-
-    public static IReadOnlyList<PackagePart> Select(IReadOnlyList<BomNode> roots, ManufacturingMode mode, PrintMaterials materials,
-                                                    Func<BomNode, string?> categoryOf, BomNode? top = null)
+    /// <summary>
+    /// Every unique file in the BOM that is not under a pruned parent, in BOM order, with its class and total quantity.
+    /// Non-Make rows are included (class None) so a selection can say why a pick was skipped.
+    /// </summary>
+    public static IReadOnlyList<ScopeCandidate> Candidates(IReadOnlyList<BomNode> roots, PrintMaterials materials, Func<BomNode, string?> categoryOf)
     {
         var lines = BomOrdering.Flatten(roots);
         var mult = new List<double>();
         var pruned = new List<bool>();
-        var byPath = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
-        var order = new List<Entry>();
+        var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<ScopeCandidate>();
         foreach (var line in lines)
         {
             var d = line.Depth;
@@ -112,15 +110,20 @@ public static class PackageRules
             mult.Add(m);
             pruned.Add(prunes);
             if (skipped) continue;
-            if (byPath.TryGetValue(node.FullPath ?? "", out var e)) { e.Total += m; continue; }
-            e = new Entry { Item = line.Item, Node = node, Class = Classify(node, category, materials, node.IsSheetMetal), Total = m };
-            byPath[node.FullPath ?? ""] = e;
-            order.Add(e);
+            if (byPath.TryGetValue(node.FullPath ?? "", out var at)) { order[at] = order[at] with { Total = order[at].Total + m }; continue; }
+            byPath[node.FullPath ?? ""] = order.Count;
+            order.Add(new ScopeCandidate(line.Item, node, Classify(node, category, materials, node.IsSheetMetal), m));
         }
+        return order;
+    }
+
+    public static IReadOnlyList<PackagePart> Select(IReadOnlyList<BomNode> roots, ManufacturingMode mode, PrintMaterials materials,
+                                                    Func<BomNode, string?> categoryOf, BomNode? top = null)
+    {
         var parts = new List<PackagePart>();
         if (top is not null && mode == ManufacturingMode.AllMake)
             parts.Add(new PackagePart(TopItem, top, Classify(top, null, materials, false), PackageFiles.Step | PackageFiles.Pdf, 1));
-        foreach (var e in order)
+        foreach (var e in Candidates(roots, materials, categoryOf))
         {
             var files = FilesFor(mode, e.Class.Kind);
             if (files != PackageFiles.None) parts.Add(new PackagePart(e.Item, e.Node, e.Class, files, e.Total));
@@ -220,10 +223,16 @@ public sealed record PackageManifestData(string Kind, string Assembly, string De
                                          IReadOnlyList<PackageRow> Rows, IReadOnlyList<PackageFile> Files,
                                          IReadOnlyList<string> Guessed, IReadOnlyList<string> MissingDrawings,
                                          IReadOnlyList<string> NoFlatPattern, IReadOnlyList<PackageFailure> Failed,
-                                         bool Quote = false);
+                                         bool Quote = false, string Scope = "");
 
 public static class PackageManifest
 {
+    private static JsonObject WithScope(this JsonObject o, string scope)
+    {
+        if (!string.IsNullOrWhiteSpace(scope)) o["scope"] = scope.Trim();
+        return o;
+    }
+
     private static JsonArray Strings(IEnumerable<string> items) => new(items.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray());
 
     public static string ToJson(PackageManifestData m) =>
@@ -244,7 +253,7 @@ public static class PackageManifest
             ["no_flat_pattern"] = Strings(m.NoFlatPattern),
             ["failed"] = new JsonArray(m.Failed.Select(f => (JsonNode?)new JsonObject { ["part"] = f.Part, ["reason"] = f.Reason }).ToArray()),
             ["quote"] = m.Quote,
-        }.ToJsonString();
+        }.WithScope(m.Scope).ToJsonString();
 }
 
 /// <summary>What the release gate needs to know about one included part. Drawing fields are ignored when no drawing is required.</summary>
