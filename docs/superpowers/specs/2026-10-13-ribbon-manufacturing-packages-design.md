@@ -103,3 +103,23 @@ Print materials (settings file, editable; match is "material display name contai
 
 - Shop traveler, CNC in-house package, per-partner part selection, Parasolid/native exports, emailing the zip.
 - Creating the Vault UDP (Zak does it; README steps).
+
+## Addendum: Dropbox upload for Partner Packages (Zak, 2026-10-13)
+
+Decisions: upload through the Dropbox API (no desktop app); folder `/Suppliers/<Partner>/` in the team space; after upload, create a view-only shared link and copy it to the clipboard.
+
+- **One-time setup (Zak, README steps):** at dropbox.com/developers create an app "SF Vault Bridge": Scoped access, Full Dropbox; permissions `account_info.read`, `files.content.read`, `files.content.write`, `sharing.read`, `sharing.write`; redirect URI `http://localhost:53682/`. Put the App key in settings.json `dropboxAppKey`. No app secret is used (PKCE). A development app is enough for the team's engineer count.
+- **Sign-in per engineer:** OAuth 2 authorization code with PKCE, `token_access_type=offline`, opened in the default browser; the add-in listens once on `http://localhost:53682/` for the code (timeout 3 minutes), exchanges it, and stores the refresh token encrypted with Windows DPAPI (CurrentUser) in `%APPDATA%\Simplifyber\VaultBridge\dropbox.token`. Access tokens are refreshed as needed and never written to disk or the log. A **Sign out of Dropbox** action deletes the token file.
+- **Team space:** after sign-in, call `users/get_current_account`; when `root_info.root_namespace_id` differs from `home_namespace_id`, send `Dropbox-API-Path-Root: {".tag": "root", "root": "<root_namespace_id>"}` on file and sharing calls so `/Suppliers` resolves in the team space.
+- **Partner Package form:** checkbox **Upload to Dropbox /Suppliers/<Partner>/** (checked by default when `dropboxAppKey` is set; disabled with a hint when it is not). If not signed in, Build first runs the sign-in.
+- **Upload step** (after the zip exists and the Downloads copy is made; independent of the Vault check-in): create the folder path if missing; files under 150 MB via `files/upload`, larger via upload sessions (8 MB chunks); `mode: overwrite` so a rerun replaces the file and the shared link keeps working (Dropbox keeps version history). Then `sharing/create_shared_link_with_settings` with `requested_visibility: public`, `access: viewer`; if a link already exists (`shared_link_already_exists`), use it; if team policy forbids public links, retry with `team_only` and say in the result which visibility the link has. Copy the URL to the clipboard and show it in the result.
+- **Failures:** an upload or link failure is a warning in the result (the zip is still in Downloads and Vault), with the Dropbox error summary; 401 triggers one refresh then a sign-in prompt.
+- **Architecture:** Core (tested): `DropboxPaths` (partner folder, file path, name cleaning), `Pkce` (verifier/challenge per RFC 7636), request/response JSON shapes, path-root header, link-exists parsing, chunk plan. Add-in: `DropboxClient` (HttpClient), `DropboxAuth` (browser + loopback HttpListener + DPAPI token store), form checkbox and PackageBuilder step, ribbon or result-dialog Sign out.
+- **Testing:** Core unit tests for every pure piece; add-in build-verified; live test with Zak after he creates the app.
+
+## Addendum: release gate for Partner Packages (Zak, 2026-10-13)
+
+- A part counts as released only when its model file AND its drawing are Released (state name `Released`, case-insensitive, trimmed) on the **latest** Vault version (a newer Work in Progress version on top means not released). A Make part with no drawing is not released. Sub-assemblies follow the same rule. Checked out, or open and modified in Inventor, also counts as not released.
+- **Default: block.** Build stops before exporting anything and shows every unreleased part and drawing with its state (and "no drawing" / "checked out by X"). Nothing is written to Vault, Downloads or Dropbox.
+- **Quote override:** form checkbox **For quote only (allow unreleased)**, off by default and not remembered. When checked the package builds; every PDF page gets a `FOR QUOTE - NOT FOR PRODUCTION` diagonal stamp (same colour and opacity as NOT RELEASED, replacing it), the cover, BOM.xlsx title and the zip name say `Quote` (e.g. `CD-001882 Acme Machining CNC Quote Package.zip`), BOM.xlsx keeps the yellow rows, and Dropbox upload works as normal.
+- The rule is pure Core (`ReleaseGate.Check(...)` over parts with model state, drawing state, checkout flags -> list of blockers), unit-tested. The 3D Print Package (internal) is not gated; it keeps the yellow rows.

@@ -800,3 +800,25 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ## Live check with Zak (after all tasks; not run by the implementer)
 
 On CD-001882, after Zak installs: Partner Package in each of the three modes (check zip layout, BOM.xlsx yellow rows, cover lists, NOT RELEASED on unreleased drawings, Downloads copy, Vault version on rerun), 3D Print Package, and the logged STEP/STL/3MF option names and 3MF ClassId in bridge.log.
+
+---
+
+### Task 7: Dropbox upload for Partner Packages
+
+**Spec:** Addendum "Dropbox upload for Partner Packages" in `docs/superpowers/specs/2026-10-13-ribbon-manufacturing-packages-design.md` (exact values there are binding: scopes, redirect `http://localhost:53682/`, token file path, DPAPI CurrentUser, folder `/Suppliers/<Partner>/`, 150 MB / 8 MB chunks, overwrite mode, viewer link, team path-root header).
+
+**Files:**
+- Create: `inventor-addin/SFVaultBridge.Core/Dropbox.cs` (`DropboxPaths`, `Pkce`, `DropboxJson` builders/parsers, `UploadPlan`), tests `inventor-addin/SFVaultBridge.Core.Tests/DropboxTests.cs`.
+- Create: `inventor-addin/SFVaultBridge.Addin/DropboxClient.cs`, `DropboxAuth.cs`.
+- Modify: `BridgeSettings` (Core) for `dropboxAppKey` (string, default ""), `PartnerPackageForm.cs` (checkbox), `PackageBuilder.cs` (upload step after the Downloads copy; result gains `DropboxPath`, `ShareUrl`, warnings), `RibbonActions.cs` (Sign out of Dropbox reachable from the Partner Package result or form), `inventor-addin/README.md` (app creation steps, sign-in, sign-out).
+
+**Interfaces:**
+- `DropboxPaths.PartnerFolder(string partner) -> string` (`/Suppliers/<clean partner>`), `DropboxPaths.FilePath(string partner, string zipName) -> string`.
+- `Pkce.NewVerifier() -> string` (43-128 chars, unreserved set), `Pkce.Challenge(string verifier) -> string` (base64url SHA-256, no padding).
+- `DropboxJson.UploadArg(string path) -> string` (`{"path":...,"mode":"overwrite","autorename":false,"mute":true}`), `DropboxJson.PathRoot(string rootNs) -> string`, `DropboxJson.SharedLinkArgs(string path, string visibility) -> string`, `DropboxJson.TryExistingLinkUrl(string errorJson, out string url) -> bool`, `DropboxJson.NeedsPathRoot(string accountJson, out string rootNs) -> bool`.
+- `UploadPlan.Chunks(long length, long single = 150_000_000, int chunk = 8_388_608) -> IReadOnlyList<(long Offset, int Length)>` (empty list means single upload).
+
+- [ ] Core: write failing tests (partner name with illegal Dropbox chars, PKCE challenge against the RFC 7636 Appendix B vector (verifier `dBjftJeZ4CVP-mJ92K9DqTVxeyFbVwP8i6tWbBqkpsQ` -> challenge `E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuJGXUX5c0c`), upload arg JSON, path-root detection with equal and different namespace ids, existing-link parsing, chunk plan at 0, 150 MB, 150 MB + 1, 20 MB), implement, pass.
+- [ ] Add-in: DropboxAuth (PKCE, browser via `Process.Start` with UseShellExecute, `HttpListener` on the redirect prefix with 3 min timeout, token exchange at `https://api.dropboxapi.com/oauth2/token`, DPAPI `ProtectedData` CurrentUser, refresh), DropboxClient (get_current_account, create_folder_v2 ignoring conflict, upload / upload sessions with `Dropbox-API-Arg`, shared links with public then team_only fallback). Never log tokens.
+- [ ] Wire into the form and PackageBuilder per the addendum; clipboard on the UI thread.
+- [ ] README; gates (Release build 0 errors, dotnet test green, pytest green); commit `Partner Package: Dropbox upload with share link`.
