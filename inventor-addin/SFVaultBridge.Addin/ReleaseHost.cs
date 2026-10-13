@@ -98,7 +98,8 @@ internal sealed class ReleaseHost : IReleaseWriter
             catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
             catch (Exception ex) { childrenProblem = ex.Message; _log($"approve: children of {f.Name} unreadable: {ex}"); }
             var released = info.Released && info.Unreadable is null;
-            if (released && spec.Kind != ReleaseKind.Drawing) return basic;
+            // An already-Released file open at an older version is a blocker: its parents would be checked in against that copy.
+            if (released && spec.Kind != ReleaseKind.Drawing) return basic with { OpenOlder = LocalState.OpenOlder(_app, local, f) };
 
             LfCycTrans? trans;
             LfCycDef? def;
@@ -132,7 +133,9 @@ internal sealed class ReleaseHost : IReleaseWriter
                 if (rows.TryGetValue(Key(SafeLocal(c)), out var rowKey)) { rowDeps.Add(rowKey); continue; }
                 var id = c.FileLfCyc?.LfCycStateId ?? 0;
                 var category = VaultFiles.CategoryName(c) ?? "";
-                others.Add(id <= 0 ? new ReleaseChild(c.Name + " (no lifecycle)", false, category) : new ReleaseChild(c.Name, _card.StateReleased(id), category));
+                var older = LocalState.OpenOlder(_app, SafeLocal(c), c);
+                others.Add(id <= 0 ? new ReleaseChild(c.Name + " (no lifecycle)", false, category, older)
+                                   : new ReleaseChild(c.Name, _card.StateReleased(id), category, older));
             }
             return basic with
             {
@@ -292,7 +295,8 @@ internal sealed class ReleaseHost : IReleaseWriter
                     () => _card.ChangeState(info, DataCardFix.WorkInProgressState, comment),
                     () => StateNow(path),
                     () => SignOff(Fresh(path), change, comment, master.Value),
-                    () => { var r = _card.ChangeState(Fresh(path), DataCardFix.ReleasedState, comment).Revision; _touched.Add(master.Value); return r; });
+                    () => { var r = _card.ChangeState(Fresh(path), DataCardFix.ReleasedState, comment).Revision; _touched.Add(master.Value); return r; },
+                    () => VaultFiles.RevisionOf(VaultFiles.FindLatest(path)));
                 if (!o.Ok) RequireSignedIn(o.Message);
                 return o;
             }
