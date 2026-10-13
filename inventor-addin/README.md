@@ -65,6 +65,23 @@ py -3.14 scripts/vault_bridge.py fix-data-card CD-001885.ipt CD-001897.ipt --app
 
 Part Number is set to the file name unless you pass `--no-part-number`. A file is a bare name or a full `$/` path. Files that are checked out, Released, Content Center, an assembly (.iam is not supported yet), not an .ipt, a local copy that differs from Vault, or open in Inventor with unsaved changes are skipped with the reason. On a failure after checkout the checkout is undone.
 
+## Dropbox upload (Partner Packages)
+
+Partner Packages can upload the zip to `/Suppliers/<Partner>/` in the team Dropbox and make a view-only shared link. The upload code is in the add-in; the Partner Package form does not call it yet.
+
+One-time app setup (Zak, once for the whole team):
+
+1. Go to dropbox.com/developers/apps and choose Create app: Scoped access, Full Dropbox, name "SF Vault Bridge".
+2. On the Permissions tab turn on `account_info.read`, `files.content.read`, `files.content.write`, `sharing.read`, `sharing.write`, then Submit.
+3. On the Settings tab add the redirect URI `http://localhost:53682/`.
+4. Copy the App key into `%APPDATA%\Simplifyber\VaultBridge\settings.json` as `"dropboxAppKey": "<key>"`. No app secret is used. A development app is enough for the team size.
+
+Each engineer signs in once: the first upload opens the browser, they approve, and the add-in stores a refresh token encrypted with Windows DPAPI (current user only) in `%APPDATA%\Simplifyber\VaultBridge\dropbox.token`. The sign-in waits 3 minutes. Access tokens stay in memory and no token is logged.
+
+Sign out of Dropbox by deleting `dropbox.token` (the add-in's sign-out does the same). The next upload asks for sign-in again.
+
+A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. Upload or link failures are warnings; the zip stays in Downloads and Vault.
+
 ## Uninstall
 
 Close Inventor, then delete `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge` (DLLs and manifest) and
