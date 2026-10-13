@@ -11,11 +11,14 @@ internal sealed class ImportPartForm : Form
     private const string NewVendor = "New vendor...";
     private const string VendorFolder = "(vendor folder)";
     private const string NewSubfolder = "New subfolder...";
+    private const int InputWidth = 380;   // logical px; AutoScaleMode.Dpi scales it
 
     /// <summary>Last vendor chosen in this Inventor session.</summary>
     private static string? _lastVendor;
 
     private readonly Action<string> _log;
+    private readonly Func<IReadOnlyList<string>> _vendorsFn;
+    private readonly Func<string, IReadOnlyList<string>> _subfoldersFn;
     private readonly ComboBox _vendor = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox _sub = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _number = new();
@@ -24,8 +27,8 @@ internal sealed class ImportPartForm : Form
     private readonly TextBox _finish = new();
     private readonly TextBox _designer = new() { ReadOnly = true };
     private readonly TextBox _approved = new() { ReadOnly = true, Text = "NOT REVIEWED" };
-    private readonly Label _will = new() { AutoSize = false };
-    private readonly Label _error = new() { AutoSize = false, ForeColor = Color.Firebrick };
+    private readonly Label _will = new() { AutoSize = true };
+    private readonly Label _error = new() { AutoSize = true, ForeColor = Color.Firebrick };
     private readonly Button _import = new() { Text = "Import", DialogResult = DialogResult.None };
     private readonly Button _cancel = new() { Text = "Cancel", DialogResult = DialogResult.Cancel };
     private string _vendorSel = "";
@@ -35,18 +38,43 @@ internal sealed class ImportPartForm : Form
     public ImportPlan? Plan { get; private set; }
 
     public ImportPartForm(Inv.Application app, string stepFile, string pdfFile, Action<string> log)
+        : this(DesignerOf(app, log), MaterialsOf(app, log), VaultFiles.LibraryVendors, VaultFiles.Subfolders, stepFile, pdfFile, log) { }
+
+    private static string DesignerOf(Inv.Application app, Action<string> log)
+    {
+        try { return app.GeneralOptions.UserName ?? ""; }
+        catch (Exception ex) { log($"import form: user name unavailable: {ex.Message}"); return ""; }
+    }
+
+    private static IReadOnlyList<string> MaterialsOf(Inv.Application app, Action<string> log)
+    {
+        var list = new List<string>();
+        try { foreach (Inv.Asset a in app.ActiveMaterialLibrary.MaterialAssets) list.Add(a.DisplayName); }
+        catch (Exception ex) { log($"import form: material list unavailable: {ex.Message}"); }
+        return list;
+    }
+
+    /// <summary>Builds the form without Inventor or Vault (fake lists), for the layout preview harness.</summary>
+    internal static ImportPartForm Preview(string designer, IReadOnlyList<string> materials, IReadOnlyList<string> vendors,
+                                           IReadOnlyList<string> subfolders, string stepFile, string pdfFile) =>
+        new(designer, materials, () => vendors, _ => subfolders, stepFile, pdfFile, _ => { });
+
+    private ImportPartForm(string designer, IReadOnlyList<string> materials, Func<IReadOnlyList<string>> vendorsFn,
+                           Func<string, IReadOnlyList<string>> subfoldersFn, string stepFile, string pdfFile, Action<string> log)
     {
         _log = log;
+        _vendorsFn = vendorsFn;
+        _subfoldersFn = subfoldersFn;
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Import New Part";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 470);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         AcceptButton = _import; CancelButton = _cancel;
         Font = SystemFonts.MessageBoxFont ?? Font;
-
-        var designer = "";
-        try { designer = app.GeneralOptions.UserName ?? ""; } catch (Exception ex) { log($"import form: user name unavailable: {ex.Message}"); }
         _designer.Text = designer;
 
         var prefill = VendorFileNames.FromFiles(stepFile, pdfFile);
@@ -54,7 +82,7 @@ internal sealed class ImportPartForm : Form
         _desc.Text = prefill.Description;
 
         IReadOnlyList<string> vendors = Array.Empty<string>();
-        try { vendors = VaultFiles.LibraryVendors(); }
+        try { vendors = _vendorsFn(); }
         catch (Exception ex) { log($"import form: vendor list failed: {ex}"); _error.Text = "Could not read the vendor folders from Vault: " + ex.Message; }
         _loading = true;
         foreach (var v in vendors) _vendor.Items.Add(v);
@@ -65,11 +93,7 @@ internal sealed class ImportPartForm : Form
         _loading = false;
         FillSubfolders();
 
-        try
-        {
-            foreach (Inv.Asset a in app.ActiveMaterialLibrary.MaterialAssets) _material.Items.Add(a.DisplayName);
-        }
-        catch (Exception ex) { log($"import form: material list unavailable: {ex.Message}"); }
+        foreach (var m in materials) _material.Items.Add(m);
 
         Build(stepFile, pdfFile);
         _vendor.SelectedIndexChanged += (_, _) => Safe(OnVendorChanged);
@@ -87,17 +111,30 @@ internal sealed class ImportPartForm : Form
 
     private void Build(string stepFile, string pdfFile)
     {
-        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // Sizes are logical (96 dpi) pixels scaled by AutoScaleMode.Dpi; every label sizes itself from its text.
+        var table = new TableLayoutPanel
+        {
+            ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right, Padding = new Padding(12, 12, 12, 4),
+        };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         void Row(string label, Control c, int tab)
         {
             table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            table.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 0, 6) });
-            c.Dock = DockStyle.Fill; c.Margin = new Padding(0, 3, 0, 3); c.TabIndex = tab;
+            table.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Margin = new Padding(0, 6, 12, 6) });
+            c.Anchor = AnchorStyles.Left | AnchorStyles.Right; c.Margin = new Padding(0, 3, 0, 3); c.TabIndex = tab;
+            c.Width = InputWidth;
             table.Controls.Add(c);
         }
-        var files = new Label { Text = $"{System.IO.Path.GetFileName(stepFile)}\n{System.IO.Path.GetFileName(pdfFile)}", AutoSize = true, ForeColor = SystemColors.GrayText, TabStop = false };
+        var lineHeight = TextRenderer.MeasureText("Ag", Font).Height;
+        var files = new TextBox
+        {
+            Text = System.IO.Path.GetFileName(stepFile) + "\r\n" + System.IO.Path.GetFileName(pdfFile),
+            Multiline = true, ReadOnly = true, WordWrap = false, BorderStyle = BorderStyle.None, TabStop = false,
+            ScrollBars = ScrollBars.None, BackColor = SystemColors.Control, ForeColor = SystemColors.GrayText,
+            Height = lineHeight * 2 + 6,
+        };
         Row("Files", files, 100);
         Row("Vendor", _vendor, 0);
         Row("Subfolder", _sub, 1);
@@ -109,20 +146,35 @@ internal sealed class ImportPartForm : Form
         Row("Engr Approved By", _approved, 7);
         _designer.TabStop = false; _approved.TabStop = false;
 
-        _will.Height = 54; _error.Height = 40;
+        _will.MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0);
+        _error.MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0);
+        _will.Margin = new Padding(0, 6, 0, 6);
+        _error.Margin = new Padding(0, 3, 0, 3);
+        _error.MinimumSize = new Size(0, lineHeight);
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        table.Controls.Add(new Label { Text = "Will create", AutoSize = true, Margin = new Padding(0, 6, 0, 6) });
+        table.Controls.Add(new Label { Text = "Will create", AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Margin = new Padding(0, 6, 12, 6) });
         table.Controls.Add(_will);
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        table.Controls.Add(new Label());
+        table.Controls.Add(new Label { AutoSize = true, Margin = Padding.Empty });
         table.Controls.Add(_error);
 
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, Height = 44, Padding = new Padding(8) };
+        var buttons = new FlowLayoutPanel
+        {
+            Anchor = AnchorStyles.Right, FlowDirection = FlowDirection.RightToLeft, WrapContents = false,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(8, 4, 8, 8),
+        };
+        foreach (var b in new[] { _cancel, _import })
+        {
+            b.AutoSize = true; b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            b.MinimumSize = new Size(80, 0); b.Margin = new Padding(6, 3, 6, 3);
+        }
         _cancel.TabIndex = 9; _import.TabIndex = 8;
         buttons.Controls.Add(_cancel);
         buttons.Controls.Add(_import);
-        Controls.Add(table);
-        Controls.Add(buttons);
+        var root = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Location = Point.Empty };
+        root.Controls.Add(table);
+        root.Controls.Add(buttons);
+        Controls.Add(root);
     }
 
     private void OnVendorChanged()
@@ -163,7 +215,7 @@ internal sealed class ImportPartForm : Form
         _sub.Items.Add(VendorFolder);
         if (_vendorSel.Length > 0)
         {
-            try { foreach (var s in VaultFiles.Subfolders(_vendorSel)) _sub.Items.Add(s); }
+            try { foreach (var s in _subfoldersFn(_vendorSel)) _sub.Items.Add(s); }
             catch (Exception ex) { _log($"import form: subfolders of {_vendorSel} failed: {ex.Message}"); }
         }
         _sub.Items.Add(NewSubfolder);
@@ -225,13 +277,22 @@ internal sealed class ImportPartForm : Form
         private readonly TextBox _box = new();
         private InputDialog(string title, string prompt)
         {
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            Font = SystemFonts.MessageBoxFont ?? Font;
             Text = title; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(380, 120);
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(210, 84) };
-            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(295, 84) };
-            Controls.Add(new Label { Text = prompt, Location = new Point(12, 10), Size = new Size(356, 36) });
-            _box.Location = new Point(12, 50); _box.Width = 356;
-            Controls.Add(_box); Controls.Add(ok); Controls.Add(cancel);
+            StartPosition = FormStartPosition.CenterParent;
+            AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(80, 0) };
+            var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(80, 0) };
+            var table = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Padding = new Padding(12) };
+            table.Controls.Add(new Label { Text = prompt, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0), Margin = new Padding(0, 0, 0, 6) });
+            _box.MinimumSize = new Size(InputWidth, 0); _box.Dock = DockStyle.Fill;
+            table.Controls.Add(_box);
+            var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
+            buttons.Controls.Add(cancel); buttons.Controls.Add(ok);
+            table.Controls.Add(buttons);
+            Controls.Add(table);
             AcceptButton = ok; CancelButton = cancel;
         }
 

@@ -62,6 +62,8 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 
 ```
 Ribbon button -> ImportPartForm (WinForms, owned by Inventor's window)
+
+Form layout: DPI-safe. AutoScaleMode Dpi, a two-column TableLayoutPanel (labels AutoSize, inputs a fixed logical width), form AutoSize GrowAndShrink with no fixed ClientSize, buttons in an AutoSize right-aligned FlowLayoutPanel, Files in a read-only multiline TextBox. All rows (Files through the error line and buttons) stay visible at 100% and 150%.
               -> ImportPartRunner (add-in, UI thread)
                    VaultFiles (+ new: LibraryVendors, Subfolders, FindByVendorNumber, GenerateNumber, AddFolder)
                    StepImporter (+ material)
