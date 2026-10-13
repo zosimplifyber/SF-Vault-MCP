@@ -386,7 +386,7 @@ internal sealed class RibbonActions
             var name = assemblyMode ? VaultPaths.AssemblyPackageName(asm.FullFileName) : VaultPaths.ReviewName(asm.FullFileName);
             var outPdf = System.IO.Path.Combine(temp, name);
             var resultPath = System.IO.Path.Combine(temp, "result.json");
-            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath), resultPath, ToolTimeout), "pdf", "pages");
+            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.ReviewArgs(bom, manifest, outPdf, resultPath, BridgeSettings.Load(BridgeSettings.DefaultPath, _log).SalesTaxRate), resultPath, ToolTimeout), "pdf", "pages");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? (assemblyMode ? "The assembly package tool failed." : "The review tool failed."));
             if (assemblyMode && result.Mode != "assembly")
                 throw new BridgeException("tool_failed", "SFVaultTools.exe is out of date. Close Inventor and rerun Install-VaultBridge.ps1.");

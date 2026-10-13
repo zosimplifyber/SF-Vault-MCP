@@ -192,6 +192,10 @@ public static class ToolResults
         return counts;
     }
 
-    public static IReadOnlyList<string> ReviewArgs(string bom, string manifest, string outPdf, string resultPath) =>
-        new[] { "review", "--bom", bom, "--manifest", manifest, "--out", outPdf, "--result", resultPath };
+    public static IReadOnlyList<string> ReviewArgs(string bom, string manifest, string outPdf, string resultPath, double? salesTaxRate = null)
+    {
+        var args = new List<string> { "review", "--bom", bom, "--manifest", manifest, "--out", outPdf, "--result", resultPath };
+        if (salesTaxRate is double rate) { args.Add("--sales-tax-rate"); args.Add(rate.ToString("R", System.Globalization.CultureInfo.InvariantCulture)); }
+        return args;
+    }
 }

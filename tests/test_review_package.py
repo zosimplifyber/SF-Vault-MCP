@@ -4,7 +4,21 @@ from pathlib import Path
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
+import pytest
+
+import bom_purchasing as bp
 import review_package as rp
+
+
+@pytest.fixture(autouse=True)
+def _no_price_list(monkeypatch):
+    """The review's budget page asks bom_purchasing for the price list; never reach a live one."""
+    def none(df, reference_path="", info=None):
+        if info is not None:
+            info["source"] = "none"
+            info["signin_needed"] = False
+        return df, 0, 0, [], []
+    monkeypatch.setattr(bp, "_enrich_with_reference", none)
 
 HEADER = "Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tMaterial\tFile Name\r\n"
 
@@ -45,7 +59,7 @@ def test_order_bookmarks_watermark_and_cover_lists(tmp_path):
     assert res["ok"] is True, res
     reader = PdfReader(str(out))
     titles = [o.title for o in reader.outline]
-    assert titles == ["Cover", "BOM", "CD-001887 - CD-001887.idw", "CD-001891 - CD-001891.idw"]
+    assert titles == ["Cover", "BOM", "Budget estimate", "CD-001887 - CD-001887.idw", "CD-001891 - CD-001891.idw"]
     texts = [page.extract_text() or "" for page in reader.pages]
     assert all("DRAFT" in t for t in texts)
     assert "CD-001889" in texts[0] and "CD-001890.idw" in texts[0] and "could not open" in texts[0]
@@ -71,7 +85,7 @@ def test_no_drawings_still_builds_cover_and_bom(tmp_path):
     out = tmp_path / "r.pdf"
     res = rp.run_review(str(_bom(tmp_path / "bom.txt", 2)), str(_manifest(tmp_path, [], missing=["CD-1"])), str(out))
     assert res["ok"] is True and res["drawings"] == 0
-    assert [o.title for o in PdfReader(str(out)).outline] == ["Cover", "BOM"]
+    assert [o.title for o in PdfReader(str(out)).outline] == ["Cover", "BOM", "Budget estimate"]
 
 
 def test_missing_drawing_pdf_is_counted_as_failed(tmp_path):
@@ -117,7 +131,7 @@ def test_purchased_section_bookmarks_and_no_vendor_list(tmp_path):
     assert res["ok"] is True, res
     reader = PdfReader(str(out))
     titles = [o.title for o in reader.outline]
-    assert titles == ["Cover", "BOM", "CD-1 - CD-1.idw",
+    assert titles == ["Cover", "BOM", "Budget estimate", "CD-1 - CD-1.idw",
                       "Purchased: CD-7 (McMaster 91251A)", "Purchased: CD-8 (Acme <Co> W-1)", "Purchased: CD-9"]
     texts = [p.extract_text() or "" for p in reader.pages]
     assert all("DRAFT" in t for t in texts)

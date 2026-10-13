@@ -1267,10 +1267,12 @@ def generate_from_vault_bom(
 
     return {
         "output_path": out_file,
-        "matched_parts": matched,
-        "total_purchased_parts": total,
-        "unmatched_parts": unmatched,
-        "warnings": warnings,
+        "matched_parts": info["matched_parts"],
+        "total_purchased_parts": info["total_purchased_parts"],
+        "unmatched_parts": info["unmatched_parts"],
+        "warnings": info["warnings"],
+        "reference_source": info["reference_source"],
+        "reference_signin_needed": info["reference_signin_needed"],
     }
 
 
@@ -1404,22 +1406,23 @@ def generate_from_file(
     )
 
 
-def generate_from_dataframe(
+def price_bom_dataframe(
     raw: pd.DataFrame,
-    assembly_number: str,
-    output_dir: str = "",
     reference_path: str = "",
-    source: str | None = None,
-    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
-) -> dict[str, Any]:
-    """Build a purchasing sheet from an Inventor-export-shaped DataFrame.
+    fill_state: bool = True,
+) -> tuple[pd.DataFrame | None, str | None, dict[str, Any]]:
+    """Normalise a raw BOM and apply the purchasing rules to every row.
 
-    Same path as a file export (used by the CAD BOM tool, which reads the BOM
-    Inventor stored in Vault). ``output_dir`` defaults to the Desktop.
+    The shared front half of the Purchasing Sheet: reference lookup, file
+    Vendor / HS code fill, file Cost wins over the list Cost Per, Price source.
+    Returns (df, error, info); ``df`` is None when ``error`` is set. ``info``
+    carries matched_parts, total_purchased_parts, unmatched_parts, warnings,
+    reference_source and reference_signin_needed. ``fill_state=False`` skips the
+    Vault lifecycle-state lookup (the Design Review budget never needs it).
     """
     df, err = coerce_bom_dataframe(raw)
     if err:
-        return {"error": True, "message": err}
+        return None, err, {}
 
     # Material precedence: the export's Material wins where non-blank; the
     # reference file only fills blanks.
@@ -1443,8 +1446,36 @@ def generate_from_dataframe(
         fill = have & blank
         df[col] = df[col].astype(object)
         df.loc[fill, col] = own[fill]
-    warnings.extend(_fill_state_from_vault(df))
+    if fill_state:
+        warnings.extend(_fill_state_from_vault(df))
     apply_price_source(df, file_cost)
+    info = {
+        "matched_parts": matched,
+        "total_purchased_parts": total,
+        "unmatched_parts": unmatched,
+        "warnings": warnings,
+        "reference_source": ref_info.get("source", "none"),
+        "reference_signin_needed": bool(ref_info.get("signin_needed")),
+    }
+    return df, None, info
+
+
+def generate_from_dataframe(
+    raw: pd.DataFrame,
+    assembly_number: str,
+    output_dir: str = "",
+    reference_path: str = "",
+    source: str | None = None,
+    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
+) -> dict[str, Any]:
+    """Build a purchasing sheet from an Inventor-export-shaped DataFrame.
+
+    Same path as a file export (used by the CAD BOM tool, which reads the BOM
+    Inventor stored in Vault). ``output_dir`` defaults to the Desktop.
+    """
+    df, err, info = price_bom_dataframe(raw, reference_path=reference_path)
+    if err:
+        return {"error": True, "message": err}
 
     # The sheet's Name column is Title. The add-in's BOM file has no Title column
     # (only Part Number and File Name), so Title is blank on every row unless the
@@ -1465,12 +1496,12 @@ def generate_from_dataframe(
 
     return {
         "output_path": out_file,
-        "matched_parts": matched,
-        "total_purchased_parts": total,
-        "unmatched_parts": unmatched,
-        "warnings": warnings,
-        "reference_source": ref_info.get("source", "none"),
-        "reference_signin_needed": bool(ref_info.get("signin_needed")),
+        "matched_parts": info["matched_parts"],
+        "total_purchased_parts": info["total_purchased_parts"],
+        "unmatched_parts": info["unmatched_parts"],
+        "warnings": info["warnings"],
+        "reference_source": info["reference_source"],
+        "reference_signin_needed": info["reference_signin_needed"],
     }
 
 

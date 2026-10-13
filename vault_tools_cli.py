@@ -85,6 +85,7 @@ def _parser() -> argparse.ArgumentParser:
     rev.add_argument("--manifest", required=True)
     rev.add_argument("--out", required=True)
     rev.add_argument("--result", required=True)
+    rev.add_argument("--sales-tax-rate", type=_rate, default=bp.DEFAULT_SALES_TAX_RATE)
     pkg = sub.add_parser("package")
     pkg.add_argument("--manifest", required=True)
     pkg.add_argument("--out", required=True)
@@ -103,7 +104,7 @@ def main(argv: list[str]) -> int:
             result = manufacturing_package.run_package(args.manifest, args.out)
         else:
             import review_package
-            result = review_package.run_review(args.bom, args.manifest, args.out)
+            result = review_package.run_review(args.bom, args.manifest, args.out, args.sales_tax_rate)
     except Exception as exc:  # the add-in must always get a result file
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     write_result(args.result, result)

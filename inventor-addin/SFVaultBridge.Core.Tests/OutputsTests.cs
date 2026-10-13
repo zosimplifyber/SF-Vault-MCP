@@ -221,6 +221,8 @@ public class OutputsTests
             ToolResults.PurchasingArgs("b", "A", "o", "n", "r", null, 0.0825));
         Assert.Equal(new[] { "review", "--bom", "b", "--manifest", "m", "--out", "p", "--result", "r" },
             ToolResults.ReviewArgs("b", "m", "p", "r"));
+        Assert.Equal(new[] { "review", "--bom", "b", "--manifest", "m", "--out", "p", "--result", "r", "--sales-tax-rate", "0.0825" },
+            ToolResults.ReviewArgs("b", "m", "p", "r", 0.0825));
     }
 
     [Fact]
