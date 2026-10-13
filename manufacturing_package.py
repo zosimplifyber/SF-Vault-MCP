@@ -8,6 +8,7 @@ docs/superpowers/specs/2026-10-13-ribbon-manufacturing-packages-design.md
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -23,6 +24,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from pypdf import PdfReader
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import Spacer
 
 import bom_purchasing as bp
@@ -37,6 +39,9 @@ PARTNER_COLUMNS = ["Item", "Part Number", "Description", "Qty", "Material", "Mat
 PARTNER_WIDTHS = [8, 18, 44, 8, 22, 18, 16, 8, 18, 48]
 PRINT_COLUMNS = ["Part Number", "Description", "Qty", "Material", "Process", "REV", "State", "File"]
 PRINT_WIDTHS = [18, 44, 8, 22, 16, 8, 18, 48]
+
+
+ILLEGAL_NAME = re.compile(r'[<>:"|?*\\\x00-\x1f]')
 
 
 class _BadManifest(Exception):
@@ -57,14 +62,28 @@ def _qty(v: Any) -> Any:
         f = float(v)
     except (TypeError, ValueError):
         return v
+    if math.isnan(f) or math.isinf(f):
+        return 0  # not a usable quantity; the row still lists the part
     return int(f) if f == int(f) else f
 
 
+def _fit_size(text: str, page_w: float, page_h: float, cap: int) -> int:
+    """Largest font size (<= cap) whose 45 degree text fits in 90% of the page."""
+    unit = stringWidth(text, "Helvetica-Bold", 1.0)
+    limit = 0.9 * min(page_w, page_h)
+    return max(8, min(cap, int(limit / ((unit + 1.0) * math.sqrt(0.5)))))
+
+
 def _stamp(data: bytes, quote: bool) -> bytes:
-    text, size = (QUOTE_TEXT, QUOTE_FONT_SIZE) if quote else (rp.UNRELEASED_TEXT, 120)
-    n = len(PdfReader(BytesIO(data)).pages)
-    return apply_watermark_to_pages(data, text, range(n), font_size=size,
-                                    color=rp.WATERMARK_COLOR, opacity=rp.WATERMARK_OPACITY)
+    text, cap = (QUOTE_TEXT, QUOTE_FONT_SIZE) if quote else (rp.UNRELEASED_TEXT, 120)
+    groups: dict[int, list[int]] = {}
+    for i, page in enumerate(PdfReader(BytesIO(data)).pages):
+        size = _fit_size(text, float(page.mediabox.width), float(page.mediabox.height), cap)
+        groups.setdefault(size, []).append(i)
+    for size, idx in groups.items():
+        data = apply_watermark_to_pages(data, text, idx, font_size=size,
+                                        color=rp.WATERMARK_COLOR, opacity=rp.WATERMARK_OPACITY)
+    return data
 
 
 def _write_sheet(path: Path, m: dict[str, Any], rows: list[dict[str, Any]], partner: bool, quote: bool) -> None:
@@ -191,9 +210,18 @@ def run_package(manifest: str, out_zip: str) -> dict[str, Any]:
         dropped: set[str] = set()
         written: list[str] = []
         stamped = 0
+        seen: set[str] = set()
         for e, dest in entries:
             target = staging / dest
             stem = PurePosixPath(dest).stem
+            if any(ILLEGAL_NAME.search(seg) for seg in dest.split("/")):
+                failed.append({"part": stem, "reason": "illegal characters in file name"})
+                dropped.add(dest)
+                continue
+            if dest.lower() in seen:
+                failed.append({"part": stem, "reason": "duplicate file name in package"})
+                continue
+            seen.add(dest.lower())
             try:
                 data = Path(e.get("src", "")).read_bytes()
             except OSError:
@@ -208,8 +236,13 @@ def run_package(manifest: str, out_zip: str) -> dict[str, Any]:
                     dropped.add(dest)
                     continue
                 stamped += 1
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            except OSError as exc:
+                failed.append({"part": stem, "reason": f"could not write file: {exc}"})
+                dropped.add(dest)
+                continue
             written.append(dest)
         rows = []
         for r in m.get("rows") or []:

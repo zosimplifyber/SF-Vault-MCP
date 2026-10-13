@@ -182,3 +182,56 @@ def test_cli_package_writes_result(tmp_path):
     code = cli.main(["package", "--manifest", str(_partner_manifest(tmp_path)), "--out", str(out), "--result", str(r)])
     res = json.loads(r.read_text(encoding="utf-8"))
     assert code == 0 and res["ok"] is True and res["mode"] == "package" and Path(res["zip"]) == out
+
+
+def _text(data: bytes) -> str:
+    return "".join(p.extract_text() or "" for p in PdfReader(BytesIO(data)).pages)
+
+
+def test_quote_stamp_fits_letter_pages(tmp_path):
+    for size in ((612, 792), (792, 612)):
+        c = canvas.Canvas(str(tmp_path / "d.pdf"), pagesize=size)
+        c.drawString(50, 50, "drawing"); c.showPage(); c.save()
+        out = mp._stamp((tmp_path / "d.pdf").read_bytes(), True)
+        t = _text(out)
+        assert "FOR" in t and "PRODUCTION" in t and "QUOTE" in t
+        page = PdfReader(BytesIO(out)).pages[0]
+        assert mp._fit_size(mp.QUOTE_TEXT, size[0], size[1], 60) * 1.0 <= 60
+        # rotated bbox of the stamp stays inside the page
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        fs = mp._fit_size(mp.QUOTE_TEXT, size[0], size[1], 60)
+        half = (stringWidth(mp.QUOTE_TEXT, "Helvetica-Bold", fs) + fs) * 0.7071 / 2
+        assert half <= min(size) / 2 and float(page.mediabox.width) == size[0]
+
+
+def _manifest_with_files(tmp_path, files):
+    m = json.loads(_partner_manifest(tmp_path).read_text(encoding="utf-8"))
+    m["files"] = files
+    m["rows"] = []
+    p = tmp_path / "mf.json"; p.write_text(json.dumps(m), encoding="utf-8")
+    return p
+
+
+def test_illegal_chars_and_duplicates_reported_in_failed(tmp_path):
+    a = tmp_path / "a.stp"; a.write_bytes(b"x")
+    files = [{"src": str(a), "dest": "STEP/a:b.stp", "stamp": False},
+             {"src": str(a), "dest": "STEP/a?b.stp", "stamp": False},
+             {"src": str(a), "dest": "STEP/ok.stp", "stamp": False},
+             {"src": str(a), "dest": "STEP/OK.stp", "stamp": False}]
+    out = tmp_path / "p.zip"
+    res = mp.run_package(str(_manifest_with_files(tmp_path, files)), str(out))
+    assert res["ok"] is True and res["step"] == 1 and res["failed"] == 1 + 3
+    assert [n for n in zipfile.ZipFile(out).namelist() if n.startswith("STEP")] == ["STEP/ok.stp"]
+
+
+def test_unreadable_pdf_goes_to_failed(tmp_path):
+    bad = tmp_path / "bad.pdf"; bad.write_bytes(b"not a pdf")
+    files = [{"src": str(bad), "dest": "PDF/bad.pdf", "stamp": True}]
+    out = tmp_path / "p.zip"
+    res = mp.run_package(str(_manifest_with_files(tmp_path, files)), str(out))
+    assert res["ok"] is True and res["pdf"] == 0 and res["stamped"] == 0 and res["failed"] == 2
+    assert "PDF/bad.pdf" not in zipfile.ZipFile(out).namelist()
+
+
+def test_qty_tolerates_nan_and_inf():
+    assert mp._qty(float("nan")) == 0 and mp._qty(float("inf")) == 0 and mp._qty(4.0) == 4
