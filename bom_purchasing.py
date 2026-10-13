@@ -490,7 +490,8 @@ def _add_logo(ws, logo_filename: str = "Simplifyber_Logo_White.png") -> None:
 
 
 def build_purchasing_sheet(
-    df: pd.DataFrame, output_path: str, assembly_number: str
+    df: pd.DataFrame, output_path: str, assembly_number: str,
+    source: str | None = None,
 ) -> str:
     """Write the formatted purchasing workbook (Purchasing + By Vendor tabs)."""
     df = df.reset_index(drop=True)
@@ -513,6 +514,8 @@ def build_purchasing_sheet(
     ws.merge_cells(f"A2:{get_column_letter(n_cols)}2")
     c = ws["A2"]
     c.value = f"Generated: {datetime.now().strftime('%B %d, %Y')}"
+    if source and str(source).strip():
+        c.value += f" | {str(source).strip()}"
     c.font = Font(name="Arial", size=9, color=DARK_GRAY, italic=True)
     c.fill = PatternFill("solid", fgColor=LIGHT_GRAY)
     c.alignment = Alignment(horizontal="right", vertical="center")
@@ -1295,6 +1298,7 @@ def generate_from_file(
     assembly_number: str,
     output_dir: str = "",
     reference_path: str = "",
+    source: str | None = None,
 ) -> dict[str, Any]:
     """Build a purchasing sheet from an exported BOM file.
 
@@ -1316,6 +1320,7 @@ def generate_from_file(
         assembly_number=assembly_number,
         output_dir=output_dir or os.path.dirname(bom_file_path),
         reference_path=reference_path,
+        source=source,
     )
 
 
@@ -1324,6 +1329,7 @@ def generate_from_dataframe(
     assembly_number: str,
     output_dir: str = "",
     reference_path: str = "",
+    source: str | None = None,
 ) -> dict[str, Any]:
     """Build a purchasing sheet from an Inventor-export-shaped DataFrame.
 
@@ -1356,12 +1362,21 @@ def generate_from_dataframe(
         df.loc[fill, col] = own[fill]
     warnings.extend(_fill_state_from_vault(df))
 
+    # The sheet's Name column is Title. The add-in's BOM file has no Title column
+    # (only Part Number and File Name), so Title is blank on every row unless the
+    # reference matched; the part number stands in, the same value By Vendor
+    # shows as Number. Done last so the state lookup's Title aliases stay as-is.
+    blank_title = df["Title"].isna() | (df["Title"].astype(str).str.strip() == "")
+    if blank_title.any():
+        df["Title"] = df["Title"].astype(object)
+        df.loc[blank_title, "Title"] = df.loc[blank_title, "Number"]
+
     if not output_dir:
         output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, f"{assembly_number}-PurchasingExport.xlsx")
 
-    build_purchasing_sheet(df, out_file, assembly_number)
+    build_purchasing_sheet(df, out_file, assembly_number, source=source)
 
     return {
         "output_path": out_file,

@@ -326,12 +326,10 @@ def test_cd001608_end_to_end(tmp_path, monkeypatch):
     qtys = [ws.cell(r, qty_col).value for r in range(4, 4 + n_rows)]
     assert 120 in qtys                           # a real quantity from QTY
 
-    # Consequence of hiding Number: this export carries no Title column, so the
-    # sheet's identity column is empty on every row. The part numbers are still
-    # in the data (they drive matching) and still appear on the By Vendor tab
-    # for anything with a vendor.
+    # This export carries no Title column, so the Name column falls back to the
+    # part number (the same value By Vendor shows as Number).
     title_col = header.index("Name") + 1     # the Title column is headed "Name"
-    assert all(ws.cell(r, title_col).value is None for r in range(4, 4 + n_rows))
+    assert all(ws.cell(r, title_col).value for r in range(4, 4 + n_rows))
 
     acost = "\n".join(
         str(c.value) for col in wb["Assembly Costs"].iter_cols()
