@@ -108,7 +108,14 @@ internal sealed class DataCardHost : IDataCardHost
 
     private static void DeleteQuietly(string dir)
     {
-        try { System.IO.Directory.Delete(dir, true); } catch (Exception) { }
+        try
+        {
+            // Vault downloads are read-only; clear the flag so the folder can be removed.
+            foreach (var f in System.IO.Directory.EnumerateFiles(dir, "*", System.IO.SearchOption.AllDirectories))
+                System.IO.File.SetAttributes(f, System.IO.FileAttributes.Normal);
+            System.IO.Directory.Delete(dir, true);
+        }
+        catch (Exception) { }
     }
 
     /// <summary>Downloads Vault's copy of the latest version (no children) into a private temp folder; the user's working copy is never touched.</summary>
@@ -122,13 +129,17 @@ internal sealed class DataCardHost : IDataCardHost
             settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = false;
             settings.OptionsRelationshipGathering.FileRelationshipSettings.RecurseChildren = false;
             settings.OptionsRelationshipGathering.FileRelationshipSettings.VersionGatheringOption = VDF.Vault.Currency.VersionGatheringOption.Latest;
-            settings.OptionsResolution.OverwriteOption = VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.ForceOverwriteAll;
+            // NoOverwrite: the temp folder is empty, and if Vault ever ignored LocalPath it must not replace the user's working copy.
+            settings.OptionsResolution.OverwriteOption = VDF.Vault.Settings.AcquireFilesSettings.AcquireFileResolutionOptions.OverwriteOptions.NoOverwrite;
             settings.AddFileToAcquire(new VDF.Vault.Currency.Entities.FileIteration(conn, latest), VDF.Vault.Settings.AcquireFilesSettings.AcquisitionOption.Download);
             var r = conn.FileManager.AcquireFiles(settings).FileResults.FirstOrDefault()
                     ?? throw new InvalidOperationException("Vault returned no result for the download.");
             if (r.Status != VDF.Vault.Results.FileAcquisitionResult.AcquisitionStatus.Success)
                 throw new InvalidOperationException($"Vault download failed ({r.Status}){(r.Exception is null ? "" : ": " + r.Exception.Message)}.");
             var path = r.LocalPath.FullPath;
+            var root = System.IO.Path.GetFullPath(tempDir).TrimEnd('\\') + "\\";
+            if (!System.IO.Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Vault downloaded the baseline to {path} instead of the temp folder; stopped before touching the file.");
             if (!System.IO.File.Exists(path)) throw new InvalidOperationException($"Vault did not write {path}.");
             return path;
         }
