@@ -130,3 +130,58 @@ def update_file_categories(master_ids: Iterable[int | str], category_id: int | s
 def import_step_as_part(step_path: str | Path, out_ipt: str | Path, iproperties: dict) -> Path:
     out = _call("import_step_as_part", {"stepPath": str(step_path), "outIpt": str(out_ipt), "iproperties": iproperties})
     return Path(out.get("outIpt") or out_ipt)
+
+
+def fix_data_card(files: Iterable[str], design: dict[str, str] | None = None, custom: dict[str, str] | None = None,
+                  part_number_from_file_name: bool = True, dry_run: bool = True, comment: str | None = None) -> dict[str, Any]:
+    """Fix iProperties of existing Vault parts (check out, edit in Inventor, check in). Dry run by default."""
+    names = [str(f) for f in files]
+    if not names:
+        raise ValueError("files must not be empty")
+    body: dict[str, Any] = {"files": names, "partNumberFromFileName": bool(part_number_from_file_name), "dryRun": bool(dry_run)}
+    if design:
+        body["design"] = dict(design)
+    if custom:
+        body["custom"] = dict(custom)
+    if comment:
+        body["comment"] = comment
+    return _call("fix_data_card", body)
+
+
+def _pairs(items: Iterable[str], flag: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep or not name.strip():
+            raise SystemExit(f"{flag} expects NAME=VALUE, got {item!r}")
+        out[name.strip()] = value
+    return out
+
+
+def build_parser():
+    import argparse
+    parser = argparse.ArgumentParser(description="SF Vault Bridge client")
+    sub = parser.add_subparsers(dest="command", required=True)
+    fix = sub.add_parser("fix-data-card", help="Fix iProperties of existing Vault parts (dry run unless --apply)")
+    fix.add_argument("files", nargs="+", help="file names (CD-001885.ipt) or full $/ paths")
+    fix.add_argument("--set", action="append", default=[], metavar="NAME=VALUE", help="Design Tracking iProperty to set (repeatable)")
+    fix.add_argument("--custom", action="append", default=[], metavar="NAME=VALUE", help="custom iProperty to set or add (repeatable)")
+    fix.add_argument("--no-part-number", action="store_true", help="do not set Part Number to the file name")
+    fix.add_argument("--apply", action="store_true", help="check out, fix and check in (default is a preview)")
+    fix.add_argument("--comment", default=None, help="check-in comment")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "fix-data-card":
+        result = fix_data_card(args.files, design=_pairs(args.set, "--set"), custom=_pairs(args.custom, "--custom"),
+                               part_number_from_file_name=not args.no_part_number, dry_run=not args.apply, comment=args.comment)
+        print(json.dumps(result, indent=2))
+        counts = result.get("counts", {})
+        return 1 if counts.get("error") else 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

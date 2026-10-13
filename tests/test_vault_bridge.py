@@ -194,3 +194,37 @@ def test_timeout_is_uncertain_not_unavailable(server):
     with pytest.raises(vb.BridgeError) as info:
         vb._call("status", {}, timeout=0.2)
     assert info.value.code == "timeout"
+
+
+def test_fix_data_card_request_body(server):
+    server.replies["fix_data_card"] = (200, {"results": [], "counts": {"preview": 0, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    vb.fix_data_card(["CD-001885.ipt"])
+    vb.fix_data_card(("CD-001897.ipt", "$/A/B.ipt"), design={"Vendor": "X"}, custom={"Source": "Buy"},
+                     part_number_from_file_name=False, dry_run=False, comment="c")
+    assert [(o, b) for o, b, _ in server.seen] == [
+        ("fix_data_card", {"files": ["CD-001885.ipt"], "partNumberFromFileName": True, "dryRun": True}),
+        ("fix_data_card", {"files": ["CD-001897.ipt", "$/A/B.ipt"], "partNumberFromFileName": False, "dryRun": False,
+                           "design": {"Vendor": "X"}, "custom": {"Source": "Buy"}, "comment": "c"}),
+    ]
+
+
+def test_fix_data_card_rejects_empty(server):
+    with pytest.raises(ValueError):
+        vb.fix_data_card([])
+    assert server.seen == []
+
+
+def test_fix_data_card_cli_parsing(server, capsys):
+    server.replies["fix_data_card"] = (200, {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    assert vb.main(["fix-data-card", "CD-001885.ipt", "CD-001897.ipt"]) == 0
+    assert vb.main(["fix-data-card", "CD-001885.ipt", "--set", "Vendor=McMASTER-CARR", "--custom", "Source=Buy=x",
+                    "--no-part-number", "--apply", "--comment", "Data card fix"]) == 0
+    assert server.seen[0][1] == {"files": ["CD-001885.ipt", "CD-001897.ipt"], "partNumberFromFileName": True, "dryRun": True}
+    assert server.seen[1][1] == {"files": ["CD-001885.ipt"], "partNumberFromFileName": False, "dryRun": False,
+                                 "design": {"Vendor": "McMASTER-CARR"}, "custom": {"Source": "Buy=x"}, "comment": "Data card fix"}
+    assert '"counts"' in capsys.readouterr().out
+
+
+def test_fix_data_card_cli_rejects_bad_pair():
+    with pytest.raises(SystemExit):
+        vb.main(["fix-data-card", "a.ipt", "--set", "novalue"])
