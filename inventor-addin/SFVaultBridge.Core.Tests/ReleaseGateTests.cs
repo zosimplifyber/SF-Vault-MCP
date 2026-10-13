@@ -112,4 +112,51 @@ public class ReleaseGateTests
     [InlineData(false, true, LocalCopyAction.KeepCheckedOutCopy)]
     public void Local_copy_refresh_decision(bool open, bool checkedOut, LocalCopyAction expected) =>
         Assert.Equal(expected, LocalCopy.Decide(open, checkedOut));
+
+    [Fact]
+    public void Local_edits_without_checkout_block()
+    {
+        var b = ReleaseGate.Check(new[] { Ok() with { ModelLocalEdits = true, DrawingLocalEdits = true } });
+        Assert.Equal(new[] { "CD-1: model has local edits without checkout; check it out or discard the edits; drawing has local edits without checkout; check it out or discard the edits" }, b);
+    }
+
+    [Fact]
+    public void Local_edits_detection_uses_two_second_slack()
+    {
+        var t = new DateTime(2026, 10, 13, 12, 0, 0, DateTimeKind.Utc);
+        Assert.True(LocalCopy.HasLocalEdits(t.AddMinutes(5), t));
+        Assert.False(LocalCopy.HasLocalEdits(t.AddSeconds(1), t));
+        Assert.False(LocalCopy.HasLocalEdits(t.AddMinutes(-5), t));
+    }
+
+    [Theory]
+    [InlineData(false, "Released", false, false, false, false)]
+    [InlineData(false, "Work in Progress", true, true, true, false)]
+    [InlineData(true, "Released", false, false, false, false)]
+    [InlineData(true, "Work in Progress", false, false, false, true)]
+    [InlineData(true, "Released", true, false, false, true)]
+    [InlineData(true, "Released", false, true, false, true)]
+    [InlineData(true, "Released", false, false, true, true)]
+    public void Stamp_rule(bool quote, string state, bool checkedOut, bool dirty, bool older, bool expected) =>
+        Assert.Equal(expected, PackageRules.StampDrawing(quote, state, checkedOut, dirty, older));
+
+    [Fact]
+    public void Message_caps_the_list_at_25_and_counts_the_rest()
+    {
+        var many = Enumerable.Range(1, 40).Select(i => $"P{i}: no drawing").ToList();
+        var m = ReleaseGate.Message(many, copied: true);
+        Assert.Contains("P25: no drawing", m);
+        Assert.DoesNotContain("P26: no drawing", m);
+        Assert.Contains("and 15 more", m);
+        Assert.Contains("copied to the clipboard", m);
+        Assert.Equal(40, ReleaseGate.FullList(many).Split((char)10).Length);
+    }
+
+    [Fact]
+    public void Short_message_has_no_more_line_or_clipboard_note()
+    {
+        var m = ReleaseGate.Message(new[] { "A: no drawing" }, copied: true);
+        Assert.DoesNotContain("more", m);
+        Assert.DoesNotContain("clipboard", m);
+    }
 }

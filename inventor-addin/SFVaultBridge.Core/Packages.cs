@@ -38,6 +38,13 @@ public static class PackageRules
 {
     public const string TopItem = "Top";
 
+    /// <summary>
+    /// Whether an exported drawing PDF carries the red NOT RELEASED stamp. Normal builds never stamp: the release gate already certified
+    /// every drawing. Quote builds stamp a drawing the gate would have blocked (not Released, unsaved edits, older version, checked out).
+    /// </summary>
+    public static bool StampDrawing(bool quote, string? state, bool checkedOut, bool openDirty, bool openOlder) =>
+        quote && (!IsReleased(state) || checkedOut || openDirty || openOlder);
+
     public static bool IsReleased(string? state) => string.Equals(state?.Trim(), "Released", StringComparison.OrdinalIgnoreCase);
 
     public static PackageClass Classify(BomNode node, string? vaultCategory, PrintMaterials materials, bool isSheetMetal)
@@ -244,7 +251,8 @@ public static class PackageManifest
 public sealed record GatePart(string PartNumber, bool ModelFound, string ModelState, bool ModelCheckedOut, string? ModelCheckedOutBy,
                               bool ModelOpenDirty, bool DrawingRequired, bool HasDrawing, string DrawingState, bool DrawingCheckedOut,
                               string? DrawingCheckedOutBy, bool DrawingOpenDirty,
-                              bool ModelOpenOlder = false, bool DrawingOpenOlder = false);
+                              bool ModelOpenOlder = false, bool DrawingOpenOlder = false,
+                              bool ModelLocalEdits = false, bool DrawingLocalEdits = false);
 
 /// <summary>A part counts as released only when its model and its drawing are Released on the latest version and neither is checked out or open with edits.</summary>
 public static class ReleaseGate
@@ -256,28 +264,40 @@ public static class ReleaseGate
         {
             if (!p.ModelFound) { blockers.Add($"{p.PartNumber}: model not in Vault"); continue; }
             var reasons = new List<string>();
-            Item("model", p.ModelState, p.ModelCheckedOut, p.ModelCheckedOutBy, p.ModelOpenDirty, p.ModelOpenOlder, reasons);
+            Item("model", p.ModelState, p.ModelCheckedOut, p.ModelCheckedOutBy, p.ModelOpenDirty, p.ModelOpenOlder, p.ModelLocalEdits, reasons);
             if (p.DrawingRequired)
             {
                 if (!p.HasDrawing) reasons.Add("no drawing");
-                else Item("drawing", p.DrawingState, p.DrawingCheckedOut, p.DrawingCheckedOutBy, p.DrawingOpenDirty, p.DrawingOpenOlder, reasons);
+                else Item("drawing", p.DrawingState, p.DrawingCheckedOut, p.DrawingCheckedOutBy, p.DrawingOpenDirty, p.DrawingOpenOlder, p.DrawingLocalEdits, reasons);
             }
             if (reasons.Count > 0) blockers.Add($"{p.PartNumber}: {string.Join("; ", reasons)}");
         }
         return blockers;
     }
 
-    private static void Item(string what, string state, bool checkedOut, string? by, bool dirty, bool older, List<string> reasons)
+    private static void Item(string what, string state, bool checkedOut, string? by, bool dirty, bool older, bool localEdits, List<string> reasons)
     {
         if (!PackageRules.IsReleased(state)) reasons.Add($"{what} is {(string.IsNullOrWhiteSpace(state) ? "in an unknown state" : state.Trim())}");
         if (checkedOut) reasons.Add($"{what} is checked out" + (string.IsNullOrWhiteSpace(by) ? "" : $" by {by.Trim()}"));
         if (dirty) reasons.Add($"{what} is open in Inventor with unsaved changes");
         else if (older) reasons.Add($"{what} is open in Inventor at an older version; close it or Get Latest");
+        if (localEdits) reasons.Add($"{what} has local edits without checkout; check it out or discard the edits");
     }
 
-    public static string Message(IReadOnlyList<string> blockers) =>
-        "Not everything is released, so no package was built:" + NL + string.Join(NL, blockers)
-        + NL + NL + "Release these in Vault, or tick \"For quote only (allow unreleased)\" to build a stamped quote package.";
+    public const int MaxListed = 25;
+
+    /// <summary>The message box text: the first <see cref="MaxListed"/> blockers, then "and N more". <paramref name="copied"/> adds the clipboard note.</summary>
+    public static string Message(IReadOnlyList<string> blockers, bool copied = false)
+    {
+        var shown = blockers.Take(MaxListed).ToList();
+        var text = "Not everything is released, so no package was built:" + NL + string.Join(NL, shown);
+        if (blockers.Count > MaxListed) text += NL + $"and {blockers.Count - MaxListed} more";
+        if (copied && blockers.Count > MaxListed) text += NL + NL + "The full list was copied to the clipboard.";
+        return text + NL + NL + "Release these in Vault, or tick \"For quote only (allow unreleased)\" to build a stamped quote package.";
+    }
+
+    /// <summary>All blockers, one per line, for the clipboard.</summary>
+    public static string FullList(IReadOnlyList<string> blockers) => string.Join(NL, blockers);
 
     private const string NL = "\n";
 }
@@ -295,6 +315,13 @@ public static class LocalCopy
         openInInventor ? LocalCopyAction.KeepOpenCopy
         : checkedOut ? LocalCopyAction.KeepCheckedOutCopy
         : LocalCopyAction.Refresh;
+
+    /// <summary>
+    /// True when a closed, not checked-out workspace file was written after its Vault version (read-only cleared, offline work):
+    /// Get Latest would overwrite those edits, so the build must not.
+    /// </summary>
+    public static bool HasLocalEdits(DateTime localWriteUtc, DateTime vaultModifiedUtc) =>
+        localWriteUtc > vaultModifiedUtc + TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// True when the local file was last written before the latest Vault version was saved (beyond clock slack), i.e. the copy

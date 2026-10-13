@@ -221,6 +221,15 @@ internal sealed class RibbonActions
             partner = form.Partner; mode = form.Mode; quote = form.Quote; upload = form.Upload;
         }
         var parts = builder.Parts(ctx, mode);
+        if (upload)
+        {
+            var signInProblem = builder.EnsureDropboxSignIn(ctx);
+            if (signInProblem is not null)
+            {
+                if (Msg($"Dropbox sign-in did not finish ({signInProblem}).\n\nBuild the package without uploading it to Dropbox?", "SF Vault Bridge", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                upload = false;
+            }
+        }
         ShowOutcome(builder.Build(ctx, mode, partner, parts, quote, upload));
     }
 

@@ -128,7 +128,9 @@ internal sealed class PackageBuilder
                     {
                         if (f is null || local is null) return;
                         var open = DocumentOpener.FindOpen(_app, local) is not null;
-                        if (LocalCopy.Decide(open, f.CheckedOut) == LocalCopyAction.Refresh) toGet.Add(f);
+                        var action = LocalCopy.Decide(open, f.CheckedOut);
+                        if (action == LocalCopyAction.Refresh && HasLocalEdits(local, f)) localCopies.Add($"{pn} {what} (local edits, not overwritten)");
+                        else if (action == LocalCopyAction.Refresh) toGet.Add(f);
                         else localCopies.Add($"{pn} {what}");
                     }
                     Consider(r.Model, r.ModelLocal, "model");
@@ -202,7 +204,8 @@ internal sealed class PackageBuilder
                         var open = DocumentOpener.FindOpen(_app, local) is not null;
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}.pdf");
                         DrawingExporter.Export(_app, local, src);
-                        var stamp = open || drawing.CheckedOut || !PackageRules.IsReleased(VaultFiles.StateOf(drawing));
+                        var stamp = PackageRules.StampDrawing(quote, VaultFiles.StateOf(drawing), drawing.CheckedOut,
+                                                              open && OpenDirty(local), open && OpenOlder(local, drawing));
                         var dest = Unique(PackageRules.Dest(PackageFiles.Pdf, part));
                         files.Add(new PackageFile(src, dest, stamp)); partFiles.Add(dest);
                     });
@@ -235,7 +238,7 @@ internal sealed class PackageBuilder
             var user = "";
             try { user = VaultSession.Connection.UserName ?? ""; } catch (Exception ex) { _log($"user name unavailable: {ex.Message}"); }
             var quoteLocal = quote && localCopies.Count > 0;
-            var source = quoteLocal ? ctx.Source + " | Local copy (open in Inventor or checked out): " + string.Join(", ", localCopies) : ctx.Source;
+            var source = quoteLocal ? ctx.Source + " | Local copy (open in Inventor, checked out or edited locally): " + string.Join(", ", localCopies) : ctx.Source;
             var manifest = System.IO.Path.Combine(temp, "manifest.json");
             System.IO.File.WriteAllText(manifest, PackageManifest.ToJson(new PackageManifestData(
                 print ? "print" : "partner", ctx.Stem, ctx.Top.Description, VaultFiles.RevisionOf(ctx.AssemblyFile),
@@ -260,7 +263,7 @@ internal sealed class PackageBuilder
             var warnings = new List<string>();
             var downloadsCopy = Downloads.Keep(tempZip, zipName, _log);
 
-            if (quoteLocal) warnings.Add("Exported from the local copy (open in Inventor or checked out): " + string.Join(", ", localCopies));
+            if (quoteLocal || (print && localCopies.Count > 0)) warnings.Add("Exported from the local copy (open in Inventor, checked out or edited locally): " + string.Join(", ", localCopies));
 
             string? dropboxPath = null, shareUrl = null, visibility = null;
             var linkCopied = false;
@@ -349,7 +352,8 @@ internal sealed class PackageBuilder
                     gate.Add(new GatePart(pn, true, VaultFiles.StateOf(r.Model), r.Model.CheckedOut, CheckedOutBy(r.Model), OpenDirty(r.ModelLocal),
                                           needDrawing, d is not null, d is null ? "" : VaultFiles.StateOf(d),
                                           d?.CheckedOut ?? false, d is null ? null : CheckedOutBy(d), d is not null && OpenDirty(r.DrawingLocal),
-                                          OpenOlder(r.ModelLocal, r.Model), d is not null && OpenOlder(r.DrawingLocal, d)));
+                                          OpenOlder(r.ModelLocal, r.Model), d is not null && OpenOlder(r.DrawingLocal, d),
+                                          HasLocalEdits(r.ModelLocal, r.Model), d is not null && HasLocalEdits(r.DrawingLocal, d)));
                 }
                 catch (Exception ex)
                 {
@@ -361,7 +365,13 @@ internal sealed class PackageBuilder
             if (blockers.Count > 0)
             {
                 _log("release gate blocked: " + string.Join(" | ", blockers));
-                throw new BridgeException("not_released", ReleaseGate.Message(blockers));
+                var copied = false;
+                if (blockers.Count > ReleaseGate.MaxListed)
+                {
+                    try { Clipboard.SetText(ReleaseGate.FullList(blockers)); copied = true; }
+                    catch (Exception ex) { _log($"clipboard failed: {ex.Message}"); }
+                }
+                throw new BridgeException("not_released", ReleaseGate.Message(blockers, copied));
             }
         }
         finally { SetStatus(previous); }
@@ -396,6 +406,18 @@ internal sealed class PackageBuilder
         catch { return false; }
     }
 
+    /// <summary>A closed, not checked-out workspace file written after its Vault version: Get Latest would overwrite local edits.</summary>
+    private bool HasLocalEdits(string? local, WsFile latest)
+    {
+        if (string.IsNullOrEmpty(local) || latest.CheckedOut) return false;
+        try
+        {
+            if (!System.IO.File.Exists(local) || DocumentOpener.FindOpen(_app, local) is not null) return false;
+            return LocalCopy.HasLocalEdits(System.IO.File.GetLastWriteTimeUtc(local), latest.ModDate.ToUniversalTime());
+        }
+        catch { return false; }
+    }
+
     private bool OpenDirty(string? local)
     {
         if (string.IsNullOrEmpty(local)) return false;
@@ -421,8 +443,45 @@ internal sealed class PackageBuilder
         SetStatus("Partner Package: uploading to Dropbox");
         using var http = DropboxClient.NewHttpClient();
         var client = new DropboxClient(new DropboxAuth(key, http), http);
+        try
+        {
+            return RunWithCancelDialog("Uploading to Dropbox...\nIf this is your first time, finish the sign-in in your browser.",
+                                       ct => client.UploadAndShareAsync(localZip, partner, ct));
+        }
+        catch (OperationCanceledException) { return new DropboxUploadResult("", null, null, new[] { "Dropbox upload cancelled." }); }
+    }
+
+    /// <summary>
+    /// Signs in to Dropbox before a build starts when the upload box is ticked and no token exists. Returns null on success (or when
+    /// already signed in), otherwise the reason it failed or was cancelled so the caller can ask whether to build without the upload.
+    /// </summary>
+    public string? EnsureDropboxSignIn(PackageContext ctx)
+    {
+        var key = ctx.Settings.DropboxAppKey;
+        if (string.IsNullOrWhiteSpace(key)) return "no Dropbox app key is set";
+        try
+        {
+            using var http = DropboxClient.NewHttpClient();
+            var auth = new DropboxAuth(key, http);
+            if (auth.IsSignedIn) return null;
+            SetStatus("Partner Package: signing in to Dropbox");
+            RunWithCancelDialog("Signing in to Dropbox...\nFinish the sign-in in your browser.", async ct => { await auth.SignInAsync(ct); return true; });
+            return null;
+        }
+        catch (OperationCanceledException) { return "the sign-in was cancelled"; }
+        catch (Exception ex)
+        {
+            _log($"dropbox sign-in failed: {ex}");
+            return ex.Message;
+        }
+        finally { SetStatus(""); }
+    }
+
+    /// <summary>Runs work on a worker thread behind a small Cancel dialog while the UI keeps pumping. Cancel surfaces as OperationCanceledException.</summary>
+    private T RunWithCancelDialog<T>(string text, Func<CancellationToken, Task<T>> work)
+    {
         using var cts = new CancellationTokenSource();
-        var task = Task.Run(() => client.UploadAndShareAsync(localZip, partner, cts.Token));
+        var task = Task.Run(() => work(cts.Token));
         IWin32Window? owner = null;
         try { var h = _app.MainFrameHWND; if (h != 0) owner = new Owner(new IntPtr(h)); } catch { }
         using var dlg = new Form
@@ -435,18 +494,18 @@ internal sealed class PackageBuilder
         var cancel = new Button { Text = "Cancel", AutoSize = true, MinimumSize = new System.Drawing.Size(80, 0), Anchor = AnchorStyles.Right };
         cancel.Click += (_, _) => { try { cts.Cancel(); } catch { } cancel.Enabled = false; };
         var panel = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(12) };
-        panel.Controls.Add(new Label { Text = "Uploading to Dropbox...\nIf this is your first time, finish the sign-in in your browser.", AutoSize = true, Margin = new Padding(0, 0, 0, 8) });
+        panel.Controls.Add(new Label { Text = text, AutoSize = true, Margin = new Padding(0, 0, 0, 8) });
         panel.Controls.Add(cancel);
         dlg.Controls.Add(panel);
         dlg.CancelButton = cancel;
         if (owner is null) dlg.Show(); else dlg.Show(owner);
         try
         {
-            while (!task.Wait(30)) Application.DoEvents();
+            // Task.Wait would wrap a cancel in AggregateException; poll IsCompleted and unwrap with GetResult instead.
+            while (!task.IsCompleted) { Application.DoEvents(); Thread.Sleep(30); }
         }
         finally { dlg.Close(); }
-        try { return task.GetAwaiter().GetResult(); }
-        catch (OperationCanceledException) { return new DropboxUploadResult("", null, null, new[] { "Dropbox upload cancelled." }); }
+        return task.GetAwaiter().GetResult();
     }
 
     private string StatusText()

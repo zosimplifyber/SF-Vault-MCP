@@ -39,7 +39,7 @@ The third action button builds the package to hand to whoever assembles the prod
 
 Builds a zip for a manufacturing partner and checks it into Vault. It needs an open assembly that is in Vault. A run blocks Inventor like the other package buttons.
 
-Form fields: Partner (required, remembered in the recent list), Parts, and the For quote only checkbox (never remembered). The preview line shows the file counts for the chosen Parts.
+Form fields: Partner (required, remembered in the recent list), Parts, the For quote only checkbox (never remembered), the Upload to Dropbox checkbox (enabled only when `dropboxAppKey` is set) and a Sign out of Dropbox button (enabled when signed in). The preview line shows the file counts for the chosen Parts.
 
 - Parts, and the files each gives:
   - All Make parts: STEP for every Make part and Make sub-assembly plus the top assembly, the PDF drawing where one exists, and DXF for sheet metal.
@@ -48,8 +48,8 @@ Form fields: Partner (required, remembered in the recent list), Parts, and the F
 - Selection: the Process property decides when it is set (`CNC`, `Sheet Metal`, `3D Print`; any other value counts as Other make). When Process is blank the fallback is: sheet metal part -> sheet metal; material in the print list -> print; `.ipt` -> machined (CNC); `.iam` -> other make. Fallback picks are listed on the cover and in the BOM Process column as `guessed: <kind>`.
 - Skipped: Buy, Phantom, Reference, Content Center and virtual rows, and every child of a purchased sub-assembly.
 - Qty is the total in the assembly (all occurrences summed).
-- Release gate: the build stops before exporting anything unless every included part's model and drawing are Released on the latest Vault version, and none is checked out or open with unsaved edits. The message lists every blocker. Nothing is written. Tick For quote only to build anyway: every PDF page is stamped `FOR QUOTE - NOT FOR PRODUCTION`, and the zip name, cover and BOM title say Quote.
-- NOT RELEASED stamp: a drawing whose state is not Released, or that is open or checked out, is stamped diagonal red NOT RELEASED (only reachable in quote mode, where the quote stamp replaces it).
+- Release gate: the build stops before exporting anything unless every included part's model and drawing are Released on the latest Vault version, and none is checked out, open with unsaved edits, open in Inventor at an older version, or edited locally without a checkout (the local file is newer than its Vault version, so Get Latest would overwrite it). The message lists the first 25 blockers and "and N more"; the full list is copied to the clipboard. Nothing is written. Tick For quote only to build anyway: every PDF page is stamped `FOR QUOTE - NOT FOR PRODUCTION`, and the zip name, cover and BOM title say Quote.
+- NOT RELEASED stamp: a normal build never stamps a drawing, because the gate has certified it (open and clean at the latest version is fine). In quote mode every page carries the quote stamp instead, and files exported as they are (open, checked out, or edited locally) are listed on the cover source line and in the result.
 - File names: `<CD> Rev <rev>.stp`, `.pdf`, `.dxf` (`-` when there is no revision), unique within each folder.
 - Zip: `<assembly> <Partner> <Mode> Package.zip` (Mode is Make, CNC or Sheet Metal; `Quote` is added before `Package` in quote mode). Folders `STEP/`, `PDF/`, `DXF/` (empty ones omitted), plus `BOM.xlsx` and `00 Cover.pdf` at the root.
 - Cover lists: Process not set (guessed), Missing drawings, No flat pattern, Could not export (with the reason).
@@ -131,7 +131,7 @@ The Vault `Cost` property is mapped to Inventor's Estimated Cost.
 
 ## Dropbox upload (Partner Packages)
 
-Partner Packages can upload the zip to `/Suppliers/<Partner>/` in the team Dropbox and make a view-only shared link. The upload code is in the add-in; the Partner Package form does not call it yet.
+Partner Packages can upload the zip to `/Suppliers/<Partner>/` in the team Dropbox and make a view-only shared link. Tick Upload to Dropbox on the Partner Package form. If you are not signed in yet, the sign-in happens before the build starts; if it fails or is cancelled you are asked whether to build without the upload.
 
 One-time app setup (Zak, once for the whole team):
 
@@ -142,7 +142,7 @@ One-time app setup (Zak, once for the whole team):
 
 Each engineer signs in once: the first upload opens the browser, they approve, and the add-in stores a refresh token encrypted with Windows DPAPI (current user only) in `%APPDATA%\Simplifyber\VaultBridge\dropbox.token`. The sign-in waits 3 minutes. Access tokens stay in memory and no token is logged.
 
-Sign out of Dropbox by deleting `dropbox.token` (the add-in's sign-out does the same). The next upload asks for sign-in again.
+Sign out of Dropbox with the form's Sign out button, which asks Dropbox to revoke the token (best effort) and then deletes `dropbox.token`; deleting the file by hand also works. The next upload asks for sign-in again.
 
 A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. The sign-in listener on `localhost:53682` filters by host name, not network interface; a request still needs the one-time `state` value, so this is low risk. Sign-out also asks Dropbox to revoke the token (best effort). Upload or link failures are warnings; the zip stays in Downloads and Vault.
 

@@ -42,9 +42,11 @@ public sealed class DropboxAuth
     public bool IsSignedIn => File.Exists(_tokenPath);
 
     /// <summary>Deletes the stored refresh token and forgets the access token.</summary>
-    public void SignOut()
+    public void SignOut() => SignOut(revoke: true);
+
+    private void SignOut(bool revoke)
     {
-        RevokeBestEffort();
+        if (revoke) RevokeBestEffort();
         AccountChanged?.Invoke();
         _access = null;
         _accessExpiresUtc = DateTime.MinValue;
@@ -55,16 +57,35 @@ public sealed class DropboxAuth
     /// <summary>Tells Dropbox to drop the current access token (which also ends its refresh token). Failures are ignored.</summary>
     private void RevokeBestEffort()
     {
-        var access = _access;
-        if (access is null) return;
         try
         {
+            var access = _access ?? RefreshForRevokeBestEffort();
+            if (access is null) return;
             using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.dropboxapi.com/2/auth/token/revoke");
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             _http.Send(req, cts.Token).Dispose();
         }
         catch (Exception e) when (e is HttpRequestException or OperationCanceledException) { }
+    }
+
+    /// <summary>Loads the stored refresh token and trades it for an access token so it can be revoked. Null when none or on any failure.</summary>
+    private string? RefreshForRevokeBestEffort()
+    {
+        try
+        {
+            var refresh = ReadRefreshToken();
+            if (refresh is null || _appKey.Length == 0) return null;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var json = Task.Run(() => PostTokenAsync(new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["refresh_token"] = refresh,
+                ["client_id"] = _appKey,
+            }, cts.Token)).GetAwaiter().GetResult();
+            return json?["access_token"]?.GetValue<string>();
+        }
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException) { return null; }
     }
 
     /// <summary>Returns a valid access token, refreshing or signing in as needed. forceRefresh drops the cached token first.</summary>
@@ -85,7 +106,7 @@ public sealed class DropboxAuth
             }, ct).ConfigureAwait(false);
             if (json is null) // refresh token revoked or expired: sign in again
             {
-                SignOut();
+                SignOut(revoke: false); // the token is already dead
                 return await SignInCoreAsync(ct).ConfigureAwait(false);
             }
             return Remember(json);
