@@ -260,18 +260,13 @@ internal sealed class DataCardHost : IDataCardHost
         try
         {
             var latest = Latest(file);
-            var (_, problem) = Transition(latest, DataCardFix.WorkInProgressState);
-            if (problem is not null) return new RevisePlan(problem);
-            // The way back is checked from Work in Progress in the same definition, before anything is changed.
             var def = Definition(latest);
-            var wip = StateNamed(def, DataCardFix.WorkInProgressState)!;
-            var rel = StateNamed(def, DataCardFix.ReleasedState);
-            var back = rel is null ? null : def.TransArray?.FirstOrDefault(t => t.FromId == wip.Id && t.ToId == rel.Id);
-            if (back is null) return new RevisePlan(DataCardFix.NoTransition(DataCardFix.WorkInProgressState, DataCardFix.ReleasedState));
+            var states = (def.StateArray ?? Array.Empty<LfCycState>())
+                .Select(x => new LifecycleState(x.Id, x.Name, x.ReleasedState, x.ObsoleteState, x.DispOrder)).ToList();
+            var trans = (def.TransArray ?? Array.Empty<LfCycTrans>()).Select(t => new LifecycleTransition(t.Id, t.FromId, t.ToId)).ToList();
             var allowed = Conn.WebServiceManager.DocumentServiceExtensions.GetAllowedFileLifeCycleStateTransitionIds();
-            if (allowed is null || !allowed.Contains(back.Id))
-                return new RevisePlan($"you are not allowed to change the state from {DataCardFix.WorkInProgressState} to {DataCardFix.ReleasedState}");
-            return new RevisePlan(null, $"{StateName(def, latest.FileLfCyc!.LfCycStateId)} -> {wip.Name}", $"{wip.Name} -> {rel!.Name}");
+            // The edit state is chosen by flags in the file's own lifecycle, and the way back is checked now, before anything is changed.
+            return LifecycleRevise.Plan(states, trans, new HashSet<long>(allowed ?? Array.Empty<long>()), latest.FileLfCyc?.LfCycStateId ?? 0);
         }
         catch (Exception ex) { return new RevisePlan("could not plan the revision: " + ex.Message); }
     }
@@ -563,7 +558,7 @@ internal sealed class DataCardHost : IDataCardHost
         return mapped;
     }
 
-    /// <summary>The transition between two states named in the file's lifecycle definition, or null (for the revise preview of a Released drawing).</summary>
+    /// <summary>The transition between two states named in the file's lifecycle definition, or null (for the revise preview of a released drawing).</summary>
     internal static LfCycTrans? TransitionBetween(WsFile f, string fromName, string toName)
     {
         try

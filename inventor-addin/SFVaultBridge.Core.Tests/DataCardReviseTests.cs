@@ -228,12 +228,12 @@ public partial class DataCardFixTests
     }
 
     [Fact]
-    public void Only_the_state_named_released_is_revised()
+    public void A_file_in_an_obsolete_state_is_not_revised()
     {
-        var h = new FakeHost();
-        h.Files["a.ipt"] = new() { Info("a.ipt", "$/a.ipt", state: "Obsolete", released: true) };
-        Assert.Equal("skipped", Status(DataCardFix.Run(Req(new[] { "a.ipt" }, dry: false, revise: true), h)));
-        Assert.Empty(h.Calls);
+        var obs = new LifecycleState(3, "Obsolete", true, true, 0);
+        var t = new[] { new LifecycleTransition(1, 3, 2), new LifecycleTransition(2, 2, 3) };
+        var p = LifecycleRevise.Plan(new[] { obs, new LifecycleState(2, "Work in Progress", false, false, 1) }, t, new HashSet<long> { 1, 2 }, 3);
+        Assert.Equal("Obsolete is an obsolete state; the file is not revised", p.Problem);
     }
 
     [Fact]

@@ -38,7 +38,7 @@ public partial class DataCardFixTests
             var l = Files.TryGetValue(file.Text, out var x) ? x
                   : Files.Values.SelectMany(v => v).Where(i => string.Equals(i.VaultPath, file.Text, StringComparison.OrdinalIgnoreCase)).ToList();
             return l.Select(i => StateByPath.TryGetValue(i.VaultPath, out var st)
-                ? i with { State = st, Released = st == "Released", Revision = st == "Released" ? "B" : "A" } : i)
+                ? i with { State = st, Released = st is not ("Work in Progress" or "Library Edit"), Revision = st is not ("Work in Progress" or "Library Edit") ? "B" : "A" } : i)
                 .Select(i => VersionByPath.TryGetValue(i.VaultPath, out var v) ? i with { Version = v } : i).ToList();
         }
 
@@ -95,8 +95,8 @@ public partial class DataCardFixTests
         Assert.Equal("assemblies are not supported yet", DataCardFix.SkipReason(Info("A.IAM", "$/A.IAM")));
         Assert.Equal("could not read lifecycle state", DataCardFix.SkipReason(Info() with { Unreadable = "could not read lifecycle state" }));
         Assert.Contains("checked out by Zak", DataCardFix.SkipReason(Info(co: true, by: "Zak"))!);
-        Assert.Contains("Released", DataCardFix.SkipReason(Info(state: "released"))!);
-        Assert.Contains("Released", DataCardFix.SkipReason(Info(state: "Anything", released: true))!);
+        Assert.Contains("state released (released)", DataCardFix.SkipReason(Info(state: "released"))!);
+        Assert.Equal("CD-001885.ipt is in state Anything (released). Tick Revise to edit it.", DataCardFix.SkipReason(Info(state: "Anything", released: true)));
         Assert.Contains("Content Center", DataCardFix.SkipReason(Info(category: "Part - Content Center"))!);
         Assert.Contains("Content Center", DataCardFix.SkipReason(Info(path: "$/content center files/x/CD-1.ipt"))!);
     }

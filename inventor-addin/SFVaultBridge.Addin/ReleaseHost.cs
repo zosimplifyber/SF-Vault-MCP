@@ -109,9 +109,11 @@ internal sealed class ReleaseHost : IReleaseWriter
             if (released)
             {
                 // A Released drawing is revised when its model changes: plan both moves by name, read the way back's child check and sync.
-                reviseProblem = _card.PlanRevise(info).Problem;
-                trans = DataCardHost.TransitionBetween(f, DataCardFix.WorkInProgressState, DataCardFix.ReleasedState);
-                var toWip = DataCardHost.TransitionBetween(f, DataCardFix.ReleasedState, DataCardFix.WorkInProgressState);
+                var plan = _card.PlanRevise(info);
+                reviseProblem = plan.Problem;
+                // Names come from the plan (edit state and original state of this file's own lifecycle), not from literal state names.
+                trans = DataCardHost.TransitionBetween(f, plan.EditState, plan.ReturnState);
+                var toWip = DataCardHost.TransitionBetween(f, plan.ReturnState, plan.EditState);
                 def = null; problem = null;
                 revisionAfter = toWip is null ? "Vault decides" : ReleasePlan.RevisionAfter(Bump(toWip.Bump), info.Revision, NextRevisions(f, toWip.Bump));
                 try { def = Conn.WebServiceManager.LifeCycleService.GetLifeCycleDefinitionsByIds(new[] { f.FileLfCyc!.LfCycDefId })?.FirstOrDefault(); }
@@ -291,12 +293,15 @@ internal sealed class ReleaseHost : IReleaseWriter
 
             if (row.Status == ReleaseStatus.Revise)
             {
+                var plan = _card.PlanRevise(info);
+                if (plan.Problem is not null) return ReleaseOutcome.Fail("revise", plan.Problem);
                 var o = ReleasePlan.ReviseAndRelease(
-                    () => _card.ChangeState(info, DataCardFix.WorkInProgressState, comment),
+                    () => _card.ChangeState(info, plan.EditState, comment),
                     () => StateNow(path),
                     () => SignOff(Fresh(path), change, comment, master.Value),
-                    () => { var r = _card.ChangeState(Fresh(path), DataCardFix.ReleasedState, comment).Revision; _touched.Add(master.Value); return r; },
-                    () => VaultFiles.RevisionOf(VaultFiles.FindLatest(path)));
+                    () => { var r = _card.ChangeState(Fresh(path), plan.ReturnState, comment).Revision; _touched.Add(master.Value); return r; },
+                    () => VaultFiles.RevisionOf(VaultFiles.FindLatest(path)),
+                    plan.EditState, plan.ReturnState);
                 if (!o.Ok) RequireSignedIn(o.Message);
                 return o;
             }

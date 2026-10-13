@@ -543,14 +543,15 @@ public static class ReleasePlan
     /// reported and the host rethrows. revisionNow reads the current revision for the message.
     /// </summary>
     public static ReleaseOutcome ReviseAndRelease(Action toWorkInProgress, Func<string> actualState, Action signOff, Func<string> toReleased,
-                                                  Func<string>? revisionNow = null)
+                                                  Func<string>? revisionNow = null, string editState = DataCardFix.WorkInProgressState,
+                                                  string returnState = DataCardFix.ReleasedState)
     {
         string Rev()
         {
             try { var r = revisionNow?.Invoke() ?? ""; return string.IsNullOrWhiteSpace(r) ? "its new revision" : r.Trim(); }
             catch (Exception) { return "its new revision"; }
         }
-        string LeftInWip(string why) => $"{why}. The drawing is left in {DataCardFix.WorkInProgressState} at {Rev()}; fix and re-run.";
+        string LeftInWip(string why) => $"{why}. The drawing is left in {editState} at {Rev()}; fix and re-run.";
         string? first = null;
         try { toWorkInProgress(); }
         catch (BridgeException ex) when (ex.Code == "not_signed_in") { throw; }
@@ -559,10 +560,10 @@ public static class ReleasePlan
         {
             string actual;
             try { actual = actualState(); } catch (Exception) { actual = "unknown"; }
-            if (!string.Equals(actual, DataCardFix.WorkInProgressState, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(actual, editState, StringComparison.OrdinalIgnoreCase))
                 return ReleaseOutcome.Fail("revise", $"{first} (the drawing is still {actual})");
         }
-        if (first is not null) return ReleaseOutcome.Fail("revise", LeftInWip(first.TrimEnd('.') + " (the drawing reached Work in Progress anyway and was not signed)"));
+        if (first is not null) return ReleaseOutcome.Fail("revise", LeftInWip(first.TrimEnd('.') + $" (the drawing reached {editState} anyway and was not signed)"));
         try { signOff(); }
         catch (BridgeException ex) when (ex.Code == "not_signed_in") { return ReleaseOutcome.Fail("sign off", LeftInWip(ex.Message.TrimEnd('.'))); }
         catch (Exception ex) { return ReleaseOutcome.Fail("sign off", LeftInWip(ex.Message.TrimEnd('.'))); }
@@ -572,8 +573,8 @@ public static class ReleasePlan
         {
             string actual;
             try { actual = actualState(); } catch (Exception) { actual = "unknown"; }
-            return ReleaseOutcome.Fail(ReReleaseStep, $"Could not return the signed drawing to {DataCardFix.ReleasedState}: {ex.Message}"
-                + $" It is in {actual}; change it to {DataCardFix.ReleasedState} in Vault by hand.");
+            return ReleaseOutcome.Fail(ReReleaseStep, $"Could not return the signed drawing to {returnState}: {ex.Message}"
+                + $" It is in {actual}; change it to {returnState} in Vault by hand.");
         }
         return ReleaseOutcome.Done(revision);
     }

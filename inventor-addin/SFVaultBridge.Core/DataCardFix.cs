@@ -17,8 +17,63 @@ public sealed record DataCardFileInfo(string VaultPath, string Name, string Cate
 /// <summary>State and revision of a file after a lifecycle change, as Vault reports them.</summary>
 public sealed record DataCardStateChange(string State, string Revision);
 
-/// <summary>Result of looking up the two lifecycle moves a revise needs, by state name. Problem is set when either is missing.</summary>
-public sealed record RevisePlan(string? Problem, string ToWorkInProgress = "", string ToReleased = "");
+/// <summary>Result of looking up the two lifecycle moves a revise needs. Problem is set when either is missing. EditState is the editable state in the
+/// file's own lifecycle (Work in Progress, Library Edit, ...); ReturnState is the exact state the file started in (Released, Library, ...).</summary>
+public sealed record RevisePlan(string? Problem, string ToWorkInProgress = "", string ToReleased = "",
+                                string EditState = DataCardFix.WorkInProgressState, string ReturnState = DataCardFix.ReleasedState);
+
+/// <summary>One state of a lifecycle definition as Vault reports it (LfCycState).</summary>
+public sealed record LifecycleState(long Id, string Name, bool Released, bool Obsolete, int Order);
+
+/// <summary>One transition of a lifecycle definition (LfCycTrans).</summary>
+public sealed record LifecycleTransition(long Id, long FromId, long ToId);
+
+/// <summary>Picks the edit state for a revise from the file's own lifecycle by flags, never by the names Released / Work in Progress.</summary>
+public static class LifecycleRevise
+{
+    public const string EditSuffix = " Edit";
+
+    /// <summary>True when the state with this id is flagged released (any name).</summary>
+    public static bool IsReleasedState(IReadOnlyList<LifecycleState> states, long stateId) =>
+        states.FirstOrDefault(s => s.Id == stateId)?.Released == true;
+
+    /// <summary>The edit state and the way back, or a Problem. Edit target: same definition, not released, not obsolete, reachable from the current
+    /// state by an allowed transition and with an allowed transition back to the original state. Preference: Work in Progress, then a name ending in
+    /// " Edit", then the lowest display order. Changes nothing.</summary>
+    public static RevisePlan Plan(IReadOnlyList<LifecycleState> states, IReadOnlyList<LifecycleTransition> transitions,
+                                  ISet<long> allowedTransitionIds, long currentStateId)
+    {
+        var cur = states.FirstOrDefault(s => s.Id == currentStateId);
+        if (cur is null) return new RevisePlan(DataCardFix.NoTransition("the current state", "an editable state"));
+        var curName = cur.Name;
+        if (cur.Obsolete) return new RevisePlan($"{curName} is an obsolete state; the file is not revised");
+        var forward = states.Where(s => !s.Released && !s.Obsolete && s.Id != cur.Id)
+            .Select(s => (State: s, Trans: transitions.FirstOrDefault(t => t.FromId == cur.Id && t.ToId == s.Id)))
+            .Where(x => x.Trans is not null).ToList();
+        if (forward.Count == 0) return new RevisePlan(DataCardFix.NoTransition(curName, "an editable state"));
+        var allowedForward = forward.Where(x => allowedTransitionIds.Contains(x.Trans!.Id)).ToList();
+        if (allowedForward.Count == 0)
+            return new RevisePlan($"you are not allowed to change the state from {curName} to {Preferred(forward.Select(x => x.State)).Name}");
+        var withBack = allowedForward
+            .Select(x => (x.State, Back: transitions.FirstOrDefault(t => t.FromId == x.State.Id && t.ToId == cur.Id)))
+            .ToList();
+        var usable = withBack.Where(x => x.Back is not null && allowedTransitionIds.Contains(x.Back.Id)).Select(x => x.State).ToList();
+        if (usable.Count == 0)
+        {
+            var pick = Preferred(allowedForward.Select(x => x.State));
+            var back = withBack.First(x => x.State.Id == pick.Id).Back;
+            return new RevisePlan(back is null ? DataCardFix.NoTransition(pick.Name, curName)
+                                               : $"you are not allowed to change the state from {pick.Name} to {curName}");
+        }
+        var edit = Preferred(usable);
+        return new RevisePlan(null, $"{curName} -> {edit.Name}", $"{edit.Name} -> {curName}", edit.Name, curName);
+    }
+
+    private static LifecycleState Preferred(IEnumerable<LifecycleState> candidates) => candidates
+        .OrderBy(s => string.Equals(s.Name, DataCardFix.WorkInProgressState, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+        .ThenBy(s => s.Name.EndsWith(EditSuffix, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+        .ThenBy(s => s.Order).ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase).First();
+}
 
 /// <summary>Result of a successful check-in. Version is -1 when it could not be read back; Warning says why.</summary>
 public sealed record DataCardApplied(long Version, string? Warning = null);
@@ -56,8 +111,8 @@ public interface IDataCardHost
     /// <summary>Check out, set, save, check in with the comment. Any failure before the check-in succeeds undoes the checkout; nothing after it does.</summary>
     DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment);
 
-    /// <summary>Looks up, by state NAME in the file's lifecycle definition (never by id), the transitions Released to Work in Progress and
-    /// Work in Progress to Released that the signed-in user may take. Changes nothing. Fails closed (Problem) on any read failure.</summary>
+    /// <summary>Looks up, in the file's own lifecycle definition and by state flags (see LifecycleRevise), the transition from its released state to an
+    /// editable state (Work in Progress, Library Edit, ...) and the way back to the exact original state, both of which the signed-in user may take. Changes nothing. Fails closed (Problem) on any read failure.</summary>
     RevisePlan PlanRevise(DataCardFileInfo file);
 
     /// <summary>Moves the file to the state with that name, only along an existing allowed transition. Throws DataCardStepException when it cannot.</summary>
@@ -168,14 +223,14 @@ public static class DataCardFix
             return $"{f.Name} is a Content Center file.";
         if (IsReleased(f))
         {
-            if (!reviseReleased) return $"{f.Name} is Released. Change its state before fixing it.";
-            // Only the state literally named Released is revised; any other released-type state (Obsolete, custom) is left alone.
-            if (!string.Equals(f.State, ReleasedState, StringComparison.OrdinalIgnoreCase))
-                return $"{f.Name} is in the released-type state '{f.State}', not '{ReleasedState}'; it is not revised.";
+            if (!reviseReleased) return $"{f.Name} is in state {StateText(f.State)} (released). Tick Revise to edit it.";
         }
         return null;
     }
 
+    private static string StateText(string state) => string.IsNullOrWhiteSpace(state) ? "unknown" : state.Trim();
+
+    /// <summary>Released means the state's released flag (any name: Released, Library, ...); a state literally named Released also counts, fail closed.</summary>
     public static bool IsReleased(DataCardFileInfo f) =>
         f.Released || string.Equals(f.State, ReleasedState, StringComparison.OrdinalIgnoreCase);
 
@@ -327,21 +382,21 @@ public static class DataCardFix
         return fixedResult;
     }
 
-    /// <summary>Released to Work in Progress, the normal checkout/edit/check-in, then back to Released. Once the first move was attempted and the file is
+    /// <summary>Released state to the edit state, the normal checkout/edit/check-in, then back to the original state. Once the first move was attempted and the file is
     /// found in Work in Progress, the way back is always attempted, whatever happened in the middle, and a failure to get back is reported loudly with
     /// the actual state.</summary>
     private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host, RevisePlan plan)
     {
         var revisionBefore = info.Revision;
         string? firstError = null;
-        try { host.ChangeState(info, WorkInProgressState, comment); }
+        try { host.ChangeState(info, plan.EditState, comment); }
         catch (Exception ex) { firstError = ex.Message; }
 
         if (firstError is not null)
         {
             // A move that committed but reported failure (timeout, odd read-back) leaves the file in Work in Progress: bring it back, do not edit it.
             var actual = ActualState(host, info);
-            if (!string.Equals(actual, WorkInProgressState, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(actual, plan.EditState, StringComparison.OrdinalIgnoreCase))
             {
                 var o = Error(info.VaultPath, "revise", firstError);
                 o["state_after"] = actual;
@@ -366,12 +421,12 @@ public static class DataCardFix
             catch (BridgeException ex) { editStep = ex.Code; editError = ex.Message; }
             catch (Exception ex) { editStep = "unexpected"; editError = ex.Message; }
         }
-        else { editStep = "revise"; editError = firstError + " (the file was found in " + WorkInProgressState + " and was not edited)"; }
+        else { editStep = "revise"; editError = firstError + " (the file was found in " + plan.EditState + " and was not edited)"; }
 
         // Step 3: back to Released, always.
         DataCardStateChange? back = null;
         string? backError = null;
-        try { back = host.ChangeState(Refresh(host, info), ReleasedState, comment); }
+        try { back = host.ChangeState(Refresh(host, info), plan.ReturnState, comment); }
         catch (Exception ex) { backError = ex.Message; }
 
         var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = ChangesJson(changes), ["revision_before"] = revisionBefore, ["transitions"] = TransitionsJson(plan) };
@@ -379,8 +434,8 @@ public static class DataCardFix
         {
             result["status"] = "error";
             result["step"] = "re_release";
-            result["message"] = $"Could not return the file to {ReleasedState}: {backError}" + (editError is null ? "" : $" (the edit also failed at {editStep}: {editError})")
-                + $" Change it to {ReleasedState} in Vault by hand; if it is linked to an item, check the item.";
+            result["message"] = $"Could not return the file to {plan.ReturnState}: {backError}" + (editError is null ? "" : $" (the edit also failed at {editStep}: {editError})")
+                + $" Change it to {plan.ReturnState} in Vault by hand; if it is linked to an item, check the item.";
             result["state_after"] = ActualState(host, info);
             if (editError is not null) result["edit_error"] = editError;
             if (applied is not null) result["version"] = applied.Version >= 0 ? applied.Version : null;
@@ -396,7 +451,7 @@ public static class DataCardFix
         {
             result["status"] = "error";
             result["step"] = editStep;
-            result["message"] = editError + $" (the file was returned to {ReleasedState})";
+            result["message"] = editError + $" (the file was returned to {plan.ReturnState})";
             result["re_released"] = true;
             return result;
         }
