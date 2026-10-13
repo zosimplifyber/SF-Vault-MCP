@@ -13,6 +13,11 @@ public static class Args
     public static string OptStr(JsonObject b, string key, string fallback = "") =>
         b[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : fallback;
 
+    public static bool Bool(JsonObject b, string key, bool fallback) =>
+        b[key] is null ? fallback
+        : b[key] is JsonValue v && v.TryGetValue<bool>(out var x) ? x
+        : throw Bad($"'{key}' must be true or false.");
+
     public static long Long(JsonObject b, string key) =>
         b[key] is JsonValue v && v.TryGetValue<long>(out var l) ? l : throw Bad($"'{key}' is required and must be an integer.");
 

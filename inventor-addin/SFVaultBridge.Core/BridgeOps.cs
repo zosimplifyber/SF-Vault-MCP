@@ -9,7 +9,8 @@ public static class BridgeOps
     public const string NotSignedInMessage = "Sign in to Vault in Inventor (Vault tab, Log In).";
 
     public static void RegisterAll(Router router, IVaultSession vault, IStepImporter inventor, PathGuard guard,
-                                   string bridgeVersion, Func<Func<JsonNode?>, JsonNode?> onUi)
+                                   string bridgeVersion, Func<Func<JsonNode?>, JsonNode?> onUi,
+                                   IDataCardHost? dataCard = null, Action<string>? log = null)
     {
         void Reg(string name, Func<JsonObject, JsonNode?> op) => router.Register(name, body => onUi(() => op(body)));
 
@@ -67,6 +68,12 @@ public static class BridgeOps
                 Args.StrMap(props, "design"),
                 Args.StrMap(props, "custom"));
             return new JsonObject { ["outIpt"] = outIpt };
+        });
+        Reg("fix_data_card", b =>
+        {
+            var req = DataCardFix.ParseRequest(b);
+            if (dataCard is null) throw new BridgeException("unavailable", "fix_data_card is not available in this build.");
+            return DataCardFix.Run(req, dataCard, log);
         });
     }
 

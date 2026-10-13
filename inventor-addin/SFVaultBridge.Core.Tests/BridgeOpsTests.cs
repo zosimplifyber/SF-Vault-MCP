@@ -162,4 +162,27 @@ public class BridgeOpsTests : IDisposable
         body["outIpt"] = @"C:\Windows\x.ipt";
         Assert.Equal("path_not_allowed", Call(r, "import_step_as_part", body, out _)["error"]!.GetValue<string>());
     }
+
+    private sealed class NoopCard : IDataCardHost
+    {
+        public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file) => Array.Empty<DataCardFileInfo>();
+        public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo file, IReadOnlyList<PropRef> props) => new Dictionary<PropRef, string?>();
+        public long Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) => 0;
+    }
+
+    [Fact]
+    public void Fix_data_card_is_registered_and_validates_files()
+    {
+        var router = new Router(Token);
+        BridgeOps.RegisterAll(router, new FakeVault(), new FakeInventor(), new PathGuard(new[] { _root }), "0.1.0", w => w(), new NoopCard());
+        var empty = Call(router, "fix_data_card", new JsonObject { ["files"] = new JsonArray() }, out var st);
+        Assert.Equal(400, st);
+        Assert.Equal("bad_request", empty["error"]!.GetValue<string>());
+        Call(router, "fix_data_card", new JsonObject(), out st);
+        Assert.Equal(400, st);
+        var ok = Call(router, "fix_data_card", new JsonObject { ["files"] = new JsonArray("CD-1.ipt") }, out st);
+        Assert.Equal(200, st);
+        Assert.Equal("skipped", ok["results"]![0]!["status"]!.GetValue<string>());
+        Assert.Equal(1, ok["counts"]!["skipped"]!.GetValue<int>());
+    }
 }
