@@ -146,6 +146,35 @@ internal static class Icons
         return bmp;
     }
 
+    /// <summary>Isometric box (same faces and colours as BoxDown) with a green arrow leaving it up and to the right.</summary>
+    public static Bitmap BoxOut(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var top = new[] { new PointF(S(14), S(13)), new PointF(S(25), S(18)), new PointF(S(14), S(23)), new PointF(S(3), S(18)) };
+            var left = new[] { new PointF(S(3), S(18)), new PointF(S(14), S(23)), new PointF(S(14), S(31)), new PointF(S(3), S(26)) };
+            var right = new[] { new PointF(S(25), S(18)), new PointF(S(14), S(23)), new PointF(S(14), S(31)), new PointF(S(25), S(26)) };
+            using (var b = new SolidBrush(Paper)) g.FillPolygon(b, top);
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, left);
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillPolygon(b, right);
+            g.DrawPolygon(pen, top); g.DrawPolygon(pen, left); g.DrawPolygon(pen, right);
+            // Arrow pointing up and to the right: shaft from the box top toward the corner, with a triangular head.
+            var arrow = new[]
+            {
+                new PointF(S(12), S(15)), new PointF(S(18), S(9)), new PointF(S(15), S(6)), new PointF(S(28), S(2)),
+                new PointF(S(24), S(15)), new PointF(S(21), S(12)), new PointF(S(15), S(18)),
+            };
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, arrow);
+            using var ap = new Pen(Color.FromArgb(255, 30, 100, 45), big ? 1f : 0.75f) { LineJoin = LineJoin.Round };
+            g.DrawPolygon(ap, arrow);
+        }
+        return bmp;
+    }
+
     /// <summary>Clipboard: dark board, paper sheet, metal clip and a green check mark.</summary>
     public static Bitmap ClipboardCheck(int size)
     {

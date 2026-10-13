@@ -181,8 +181,8 @@ public static class PackageRules
         return null;
     }
 
-    public static string PartnerZipName(string assemblyStem, string partner, ManufacturingMode mode) =>
-        $"{assemblyStem} {ImportRules.SafeFilePart(partner.Trim())} {ModeName(mode)} Package.zip";
+    public static string PartnerZipName(string assemblyStem, string partner, ManufacturingMode mode, bool quote = false) =>
+        $"{assemblyStem} {ImportRules.SafeFilePart(partner.Trim())} {ModeName(mode)} {(quote ? "Quote " : "")}Package.zip";
 
     public static string PrintZipName(string assemblyStem) => $"{assemblyStem} 3D Print Package.zip";
 
@@ -238,4 +238,44 @@ public static class PackageManifest
             ["failed"] = new JsonArray(m.Failed.Select(f => (JsonNode?)new JsonObject { ["part"] = f.Part, ["reason"] = f.Reason }).ToArray()),
             ["quote"] = m.Quote,
         }.ToJsonString();
+}
+
+/// <summary>What the release gate needs to know about one included part. Drawing fields are ignored when no drawing is required.</summary>
+public sealed record GatePart(string PartNumber, bool ModelFound, string ModelState, bool ModelCheckedOut, string? ModelCheckedOutBy,
+                              bool ModelOpenDirty, bool DrawingRequired, bool HasDrawing, string DrawingState, bool DrawingCheckedOut,
+                              string? DrawingCheckedOutBy, bool DrawingOpenDirty);
+
+/// <summary>A part counts as released only when its model and its drawing are Released on the latest version and neither is checked out or open with edits.</summary>
+public static class ReleaseGate
+{
+    public static IReadOnlyList<string> Check(IEnumerable<GatePart> parts)
+    {
+        var blockers = new List<string>();
+        foreach (var p in parts)
+        {
+            if (!p.ModelFound) { blockers.Add($"{p.PartNumber}: model not in Vault"); continue; }
+            var reasons = new List<string>();
+            Item("model", p.ModelState, p.ModelCheckedOut, p.ModelCheckedOutBy, p.ModelOpenDirty, reasons);
+            if (p.DrawingRequired)
+            {
+                if (!p.HasDrawing) reasons.Add("no drawing");
+                else Item("drawing", p.DrawingState, p.DrawingCheckedOut, p.DrawingCheckedOutBy, p.DrawingOpenDirty, reasons);
+            }
+            if (reasons.Count > 0) blockers.Add($"{p.PartNumber}: {string.Join("; ", reasons)}");
+        }
+        return blockers;
+    }
+
+    private static void Item(string what, string state, bool checkedOut, string? by, bool dirty, List<string> reasons)
+    {
+        if (!PackageRules.IsReleased(state)) reasons.Add($"{what} is {(string.IsNullOrWhiteSpace(state) ? "in an unknown state" : state.Trim())}");
+        if (checkedOut) reasons.Add($"{what} is checked out" + (string.IsNullOrWhiteSpace(by) ? "" : $" by {by.Trim()}"));
+        if (dirty) reasons.Add($"{what} is open in Inventor with unsaved changes");
+    }
+
+    public static string Message(IReadOnlyList<string> blockers) =>
+        "Not everything is released, so no package was built:" + NL + string.Join(NL, blockers)
+        + NL + NL + "Release these in Vault, or tick \"For quote only (allow unreleased)\" to build a stamped quote package.";
+
+    private const string NL = "\n";
 }

@@ -4,7 +4,7 @@ using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
 
-/// <summary>The five SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Import New Part and the Status button (see RibbonStatus).</summary>
+/// <summary>The SF Vault Bridge panel buttons: Purchasing Sheet, Design Review, Assembly Package, Partner Package, Import New Part and the Status button (see RibbonStatus).</summary>
 internal sealed class RibbonActions
 {
     private const string ClientId = "{6F1C2D9A-4B7E-4E2B-9C1A-5D3E8F7A2B10}";
@@ -25,6 +25,7 @@ internal sealed class RibbonActions
         Add("Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
         Add("Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
         Add("Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
+        Add("Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault.", Icons.BoxOut, PartnerPackage);
         Add("Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
     }
 
@@ -168,7 +169,7 @@ internal sealed class RibbonActions
         }
     }
 
-    private static (string Folder, string VaultFolder, string Stem) Locate(Inv.AssemblyDocument asm)
+    internal static (string Folder, string VaultFolder, string Stem) Locate(Inv.AssemblyDocument asm)
     {
         var file = asm.FullFileName;
         if (string.IsNullOrWhiteSpace(file)) throw new BridgeException("not_in_vault", "Save the assembly and check it in to Vault first.");
@@ -198,6 +199,49 @@ internal sealed class RibbonActions
                     $"{result.Count} BOM lines." + (result.Note is null ? "" : $"\n{result.Note}") + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
+    }
+
+    private void PartnerPackage(Inv.AssemblyDocument asm)
+    {
+        var builder = new PackageBuilder(_app, _log);
+        var ctx = builder.Prepare(asm);
+        string partner;
+        ManufacturingMode mode;
+        bool quote;
+        using (var form = new PartnerPackageForm(ctx.Settings.RecentPartners, m =>
+        {
+            try { return builder.Parts(ctx, m); }
+            catch (Exception ex) { _log($"partner package parts for {m} failed: {ex}"); throw; }
+        }))
+        {
+            var owner = OwnerWindow();
+            var r = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
+            if (r != DialogResult.OK || form.Partner is null) return;
+            partner = form.Partner; mode = form.Mode; quote = form.Quote;
+        }
+        var parts = builder.Parts(ctx, mode);
+        ShowOutcome(builder.Build(ctx, mode, partner, parts, quote));
+    }
+
+    private void ShowOutcome(PackageOutcome o)
+    {
+        const string nl = "\n";
+        var text = o.ZipName + nl
+                   + (o.VaultPath is null ? "" : $"Vault: {o.VaultPath}{(o.Version is null ? "" : $" (version {o.Version})")}{nl}")
+                   + (o.DownloadsCopy is null ? "" : $"Copy: {o.DownloadsCopy}{nl}")
+                   + o.Summary + (o.Warnings.Count > 0 ? nl + string.Join(nl, o.Warnings) : "")
+                   + nl + nl + "Open folder?";
+        if (Msg(text, "SF Vault Bridge", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        try
+        {
+            var args = o.DownloadsCopy is null ? $"\"{Downloads.Folder}\"" : $"/select,\"{o.DownloadsCopy}\"";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", args) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _log($"open folder failed: {ex}");
+            Msg("Could not open the folder.", "SF Vault Bridge");
+        }
     }
 
     private void BuildPackage(Inv.AssemblyDocument asm, PackageMode mode)
@@ -330,19 +374,7 @@ internal sealed class RibbonActions
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
     }
 
-    /// <summary>Copies the finished output to Downloads\SF Vault Bridge before the temp folder goes away; null if even that fails.</summary>
-    private string? KeepOutput(string tempOutput, string name)
-    {
-        try
-        {
-            var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "SF Vault Bridge");
-            System.IO.Directory.CreateDirectory(dir);
-            var target = System.IO.Path.Combine(dir, VaultPaths.UniqueName(name, n => System.IO.File.Exists(System.IO.Path.Combine(dir, n))));
-            System.IO.File.Copy(tempOutput, target, false);
-            return target;
-        }
-        catch (Exception ex) { _log($"could not keep a copy of {name}: {ex.Message}"); return null; }
-    }
+    private string? KeepOutput(string tempOutput, string name) => Downloads.Keep(tempOutput, name, _log);
 
     private void Publish(string tempOutput, string destLocal, string vaultFolder, string name, string comment, string summary)
     {
