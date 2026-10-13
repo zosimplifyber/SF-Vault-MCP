@@ -754,7 +754,7 @@ function Invoke-GetFolderByPath($mgr) {
 function Invoke-GenerateFileNumber($mgr) {
     $id = Get-Arg 'schemeId'
     if ($null -eq $id) { Die 'GenerateFileNumber requires schemeId' }
-    $n = $mgr.DocumentService.GenerateFileNumber([int64]$id, [string[]]@())
+    $n = $mgr.DocumentService.GenerateFileNumber([int64]$id, [string[]]@(""))
     return @{ number = [string]$n }
 }
 

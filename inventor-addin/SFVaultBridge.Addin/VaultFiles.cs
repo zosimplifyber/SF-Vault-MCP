@@ -365,7 +365,12 @@ internal static class VaultFiles
         var ws = Conn.WebServiceManager;
         var schemes = ws.NumberingService.GetNumberingSchemes("FILE", NumSchmType.Activated) ?? Array.Empty<NumSchm>();
         var scheme = schemes.FirstOrDefault(s => s.IsDflt) ?? throw new BridgeException("number", "Vault has no default file numbering scheme.");
-        var cd = ws.DocumentService.GenerateFileNumber(scheme.SchmID, Array.Empty<string>()) ?? "";
+        // An empty array reaches Vault as null (error 155, "Illegal null parameter"); Vault Data Standard passes one empty string per input field, at least one.
+        var inputs = Enumerable.Repeat("", Math.Max(1, scheme.FieldArray?.Count(f => f.FieldTyp is FieldType.FreeText or FieldType.PredefinedList) ?? 0)).ToArray();
+        string cd;
+        try { cd = ws.DocumentService.GenerateFileNumber(scheme.SchmID, inputs) ?? ""; }
+        catch (Exception ex) when (ex is not BridgeException)
+        { throw new BridgeException("number", $"Vault refused to generate a number from {scheme.Name} (Vault error {ex.Message}). Nothing was written."); }
         if (!System.Text.RegularExpressions.Regex.IsMatch(cd, @"^CD-\d{6}$"))
             throw new BridgeException("number", $"Vault generated '{cd}', which is not a CD-###### number.");
         var clash = FindByNameContaining(cd).Where(f => ImportRules.IsNumberClash(f.Name, cd)).Select(f => f.Name).ToList();
