@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Buttons
 
-The SF Vault Bridge tab has five panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review, Assembly Package) and Manufacturing (Partner Package, 3D Print Package). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge tab has six panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review, Assembly Package), Manufacturing (Partner Package, 3D Print Package) and Release (I Approve!). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 
@@ -108,6 +108,33 @@ The form has one row per part. Each field has a grey "now" column (read from Vau
 Only fields whose new value differs are sent; a row with nothing to change is greyed "no change". Tick **Revise and re-release Released parts** to include Released parts (off by default, never remembered); without it they show "Released: skipped".
 
 Preview runs the dry run with the edited values and gives each row would change, skipped (with the reason) or error. Apply is enabled only after a Preview with no edits since, asks "Check out, edit and check in N parts?" and then fixes the rows that would change, one at a time, so Inventor stays responsive. Each row ends as fixed (new version), skipped with the reason, or error with the step; revised rows also show the revision before and after and the state. If a Released part cannot be returned to Released, later Released rows are skipped. **Copy results** puts a tab-separated summary on the clipboard. After an Apply the form is read-only; close it and click the button again to continue.
+
+### I Approve! (sign off and release)
+
+On the Release panel. With an assembly open it previews, then signs off and releases the assembly's engineering files bottom up, then builds the Purchasing Sheet and Assembly Package and opens Partner Package. It needs a Vault sign-in and an Inventor user name (Tools, Application Options, General); the sign-off name is its "First L." form.
+
+Scope: the top assembly, every Make sub-assembly and every Make part in its BOM, and the drawing of each (the same drawing the packages pick). Purchased, Content Center (category or `Content Center Files` folder), Phantom, Reference and virtual rows are never touched, nor anything under a purchased or reference row. A Make part must have category `Part - Engineering`, an assembly `Assembly - Engineering`.
+
+The preview writes nothing. One row per file in release order (parts, their drawings, sub-assemblies, their drawings, the top assembly, its drawing) with State now, Revision now, Revision after (from the transition's revision bump; "Vault decides" when it cannot be read), Ready / Blocker and Notes. The header says whether Vault's child check is on. A row is:
+
+- **Ready**, or **already Released** (no action; counts as released for its parents).
+- **skipped** for a blocker: checked out (by anyone, named); open in Inventor with unsaved changes or at an older version; local edits without a checkout; no drawing; wrong category; Material blank or Generic on a part; Property Compliance not compliant; controlled by a change order; no transition from its state to `Released` or you may not use it; or a purchased or Content Center child that is not in a Released state while the child check is on ("<child> must be Released first").
+- **held back** when an engineering part or sub-assembly anywhere below it (or, for a drawing, its model) is not Released after the run. A parent is never released over an unreleased engineering child.
+
+Notes (not blockers): you are the file's Designer; Process blank; Designer blank; Property Compliance unreadable.
+
+**I Approve!** asks "Release N files as <First L.>? M will be skipped, K held back." It first gets the latest version of the whole tree (children included) without overwriting files that are open, checked out or edited locally, then for each file, bottom up: check out, set the custom iProperty `Engr Approved By` (added when missing), save, check in with "Approved by <name>", change the state to `Released` along the transition found by state name, and read the state and revision back. Assemblies and drawings are opened from the workspace with every reference found (otherwise that file fails before anything is saved) and only that file is saved. Your open documents are never closed or saved, except a file being signed that is open and clean, which is edited in place. A failure undoes the checkout, marks the row failed and holds back its parents; no file is left checked out. A file whose Vault version moved since the preview fails with "run Preview again". Stop finishes the current file and leaves the rest not attempted; losing the Vault sign-in stops the run. Results: released (revision before -> after), already Released, skipped, held back (which child), failed (step and message), not attempted; **Copy results** copies them.
+
+When the top assembly ends Released, closing the form builds the Purchasing Sheet and the Assembly Package (same messages as their buttons) and opens Partner Package for the whole assembly. Otherwise a message says why they were not built.
+
+#### Library lifecycle and Vault's child check
+
+If a lifecycle's transition to `Released` enforces child state ("children must be released"), Vault refuses to release an assembly whose purchased or Content Center parts are not in a released state, and the preview says so on that assembly. Either:
+
+1. Put library parts in a released state: in Vault Explorer, select the purchased and Content Center files, Change Lifecycle Definition to `Library` (its one state is flagged Released). The preview counts any state whose Released flag is set.
+2. Or, in Vault Settings, Behaviors, Lifecycles, edit the Engineering lifecycle's transition to `Released`, and clear the child state check on its Criteria/Actions.
+
+Run Preview again afterwards; the header line shows the check per lifecycle.
 
 ### Purchasing list sign-in
 
