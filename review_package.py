@@ -15,7 +15,7 @@ from xml.sax.saxutils import escape
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
@@ -117,20 +117,42 @@ def _purchased_title(p: dict[str, Any]) -> str:
 
 
 def bom_table_data(bom: str) -> tuple[list[list[str]], list[int]]:
-    """BOM table rows (header first) and the table row indices to paint yellow (unreleased)."""
+    """BOM table rows (header first) and the table row indices to paint yellow.
+
+    Yellow marks parts we make that are not released: BOM Structure Normal and State not
+    Released (blank included). Purchased, Phantom, Reference and Content Center rows are
+    never flagged (Zak, 2026-10-13).
+    """
     df = bp.read_bom_file(bom).fillna("")
     cols = [c for c in BOM_COLUMNS if c in df.columns]
     data = [cols] + [[str(row[c]) for c in cols] for _, row in df.iterrows()]
     yellow: list[int] = []
     if "State" in df.columns:
-        yellow = [i for i, (_, row) in enumerate(df.iterrows(), start=1) if not bp.is_released(row["State"])]
+        def normal(row) -> bool:
+            return "BOM Structure" not in df.columns or str(row["BOM Structure"]).strip().lower() == "normal"
+        yellow = [i for i, (_, row) in enumerate(df.iterrows(), start=1)
+                  if normal(row) and not bp.is_released(row["State"])]
     return data, yellow
+
+
+# Relative column weights; the table is scaled to the page's frame width (landscape letter, 0.5 in margins).
+_COL_WEIGHTS = {"Item": 4, "Part Number": 20, "Description": 30, "QTY": 5, "BOM Structure": 10,
+                "Material": 11, "REV": 5, "State": 11}
+_FRAME_WIDTH = landscape(letter)[0] - 72
 
 
 def _bom_table(bom: str) -> bytes:
     data, yellow = bom_table_data(bom)
-    table = Table(data, repeatRows=1)
+    cols = data[0]
+    total = sum(_COL_WEIGHTS.get(c, 10) for c in cols)
+    widths = [_FRAME_WIDTH * _COL_WEIGHTS.get(c, 10) / total for c in cols]
+    cell = ParagraphStyle("bomcell", fontName="Helvetica", fontSize=8, leading=9.5)
+    head = ParagraphStyle("bomhead", parent=cell, fontName="Helvetica-Bold", textColor=colors.white)
+    # Paragraph cells wrap long part numbers and descriptions inside their column.
+    rows = [[_para(v, head) for v in data[0]]] + [[_para(v, cell) for v in r] for r in data[1:]]
+    table = Table(rows, colWidths=widths, repeatRows=1)
     style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F3864")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTSIZE", (0, 0), (-1, -1), 8),

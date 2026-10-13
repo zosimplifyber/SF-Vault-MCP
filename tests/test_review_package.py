@@ -294,6 +294,32 @@ def test_bom_table_has_state_after_rev_and_yellow_unreleased_rows(tmp_path):
     assert yellow == [2, 3]
 
 
+def test_bom_yellow_only_for_normal_rows_not_released(tmp_path):
+    rows = [("1", "Normal", "Work in Progress"), ("2", "Purchased", "Work in Progress"),
+            ("3", "Normal", "Released"), ("4", "Normal", ""), ("5", "Phantom", ""), ("6", "Reference", "Work in Progress")]
+    lines = [STATE_HEADER] + [f"{i}\tCD-00002{i}\t{bs}\tEach\t1\tpart {i}\tA\t{st}\tSteel\t\tCD-00002{i}.ipt\t\t\r\n" for i, bs, st in rows]
+    p = tmp_path / "bom.txt"
+    p.write_text("".join(lines), encoding="utf-8")
+    _, yellow = rp.bom_table_data(str(p))
+    assert yellow == [1, 4]
+
+
+def test_bom_table_fits_the_page_width(tmp_path):
+    from io import BytesIO
+    from pypdf import PdfReader
+    long = "93501A035_Steel Heavy-Vibration-Resistant Spring Lock Washers For Socket Head Screws"
+    lines = [STATE_HEADER, f"1\t{long}\tPurchased\tEach\t12\t{long} {long}\tANY\tWork in Progress\tSteel\t\tx.ipt\t\t\r\n"]
+    p = tmp_path / "bom.txt"
+    p.write_text("".join(lines), encoding="utf-8")
+    pdf = rp._bom_table(str(p))
+    page = PdfReader(BytesIO(pdf)).pages[0]
+    xs = []
+    page.extract_text(visitor_text=lambda t, cm, tm, fd, fs: xs.append(cm[4] + tm[4]) if t.strip() else None)
+    width = float(page.mediabox.width)
+    assert xs and min(xs) >= 30 and max(xs) <= width - 30, (min(xs), max(xs), width)
+    assert "Work in Progress" in " ".join(page.extract_text().split())
+
+
 def test_bom_without_state_column_has_no_yellow_rows(tmp_path):
     data, yellow = rp.bom_table_data(str(_bom(tmp_path / "bom.txt", 3)))
     assert "State" not in data[0] and yellow == []
