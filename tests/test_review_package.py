@@ -343,3 +343,10 @@ def test_bom_orange_for_purchased_rows_without_vendor_drawing(tmp_path):
     assert yellow == []
     _, yellow, orange = rp.bom_table_data(str(p))
     assert orange == [] and yellow == [3]
+
+
+def test_bom_key_lists_the_colours_the_table_can_use():
+    cols = ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
+    assert [c for c, _ in rp.bom_key(cols, True)] == ["#FFF59D", "#FFCC80"]
+    assert [c for c, _ in rp.bom_key(cols, False)] == ["#FFF59D"]
+    assert rp.bom_key(["Item", "Description"], False) == []

@@ -168,7 +168,26 @@ def _bom_table(bom: str, no_vendor: set[str] | None = None) -> bytes:
     style += [("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFF59D")) for r in yellow]
     style += [("BACKGROUND", (0, r), (-1, r), colors.HexColor("#FFCC80")) for r in orange]
     table.setStyle(TableStyle(style))
-    return _doc([Paragraph("Bill of materials", getSampleStyleSheet()["Heading2"]), table])
+    story = [Paragraph("Bill of materials", getSampleStyleSheet()["Heading2"])]
+    key = bom_key(cols, no_vendor is not None)
+    if key:
+        swatches = Table([[ "", _para(text, cell)] for _, text in key], colWidths=[14, None], hAlign="LEFT")
+        swatches.setStyle(TableStyle(
+            [("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (1, 0), (1, -1), 6)]
+            + [("BACKGROUND", (0, i), (0, i), colors.HexColor(c)) for i, (c, _) in enumerate(key)]
+            + [("BOX", (0, i), (0, i), 0.25, colors.grey) for i in range(len(key))]))
+        story += [swatches, Spacer(1, 6)]
+    return _doc(story + [table])
+
+
+def bom_key(cols: list[str], review_mode: bool) -> list[tuple[str, str]]:
+    """Colour key shown above the BOM table: (fill, meaning) for each colour the table can use."""
+    key: list[tuple[str, str]] = []
+    if "State" in cols:
+        key.append(("#FFF59D", "Part we make (BOM Structure Normal) that is not Released"))
+    if review_mode and "Part Number" in cols:
+        key.append(("#FFCC80", "Purchased part with no vendor drawing in this package"))
+    return key
 
 
 def run_review(bom: str, manifest: str, out_pdf: str) -> dict[str, Any]:
