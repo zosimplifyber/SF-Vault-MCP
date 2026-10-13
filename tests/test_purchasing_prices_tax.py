@@ -210,3 +210,9 @@ def test_addin_style_bom_file_with_cost_and_hs_code_end_to_end(tmp_path, monkeyp
     assert r1["HS/HTS Code"].value == "7318.15"
     assert r2["Cost Per"].value == 9.0
     assert r2["Price source"].value != "File"
+
+
+def test_zero_list_price_shows_blank_source(tmp_path, monkeypatch):
+    ref = _ref(Number=["P1"], Vendor=["V"], **{"Cost Per": [0]})
+    r = _row(_sheet(tmp_path, [{"Number": "P1"}], monkeypatch, ref), 1)
+    assert r["Price source"].value is None

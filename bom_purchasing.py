@@ -1069,8 +1069,8 @@ def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> 
     """Set Cost Per and Price source on every row.
 
     ``file_cost`` is the BOM file's own ``Cost`` column (Inventor Estimated
-    Cost). A value > 0 wins and the row is marked ``File``; otherwise the
-    reference value (already in Cost Per) stands and is marked ``List``;
+    Cost). A value > 0 wins and the row is marked ``File``; otherwise a
+    reference value > 0 (already in Cost Per) stands and is marked ``List``;
     neither leaves both blank.
     """
     if "Cost Per" not in df.columns:
@@ -1078,7 +1078,7 @@ def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> 
     df["Cost Per"] = df["Cost Per"].astype(object)
     df["Price source"] = pd.Series([None] * len(df), index=df.index, dtype=object)
     listed = df["Cost Per"].map(parse_money)
-    df.loc[listed.notna(), "Price source"] = "List"
+    df.loc[listed.notna() & (listed > 0), "Price source"] = "List"
     if file_cost is not None:
         own = file_cost.map(parse_money)
         use = own.notna() & (own > 0)
