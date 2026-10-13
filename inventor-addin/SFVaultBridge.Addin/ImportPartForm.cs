@@ -130,14 +130,20 @@ internal sealed class ImportPartForm : Form
             c.Width = InputWidth;
             table.Controls.Add(c);
         }
-        var lineHeight = TextRenderer.MeasureText("Ag", Font).Height;
+        // Measured in device px, converted back to logical px: AutoScaleMode.Dpi then scales each control exactly once.
+        var toLogical = 96f / DeviceDpi;
+        var lineHeight = (int)Math.Ceiling(TextRenderer.MeasureText("Ag", Font).Height * toLogical);
+        var filesText = System.IO.Path.GetFileName(stepFile) + "\r\n" + System.IO.Path.GetFileName(pdfFile);
+        var wrapped = TextRenderer.MeasureText(filesText, Font, new Size(LogicalToDeviceUnits(InputWidth), 0),
+            TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.TextBoxControl);
         var files = new TextBox
         {
-            Text = System.IO.Path.GetFileName(stepFile) + "\r\n" + System.IO.Path.GetFileName(pdfFile),
-            Multiline = true, ReadOnly = true, WordWrap = false, BorderStyle = BorderStyle.None, TabStop = false,
+            Text = filesText,
+            Multiline = true, ReadOnly = true, WordWrap = true, BorderStyle = BorderStyle.None, TabStop = false,
             ScrollBars = ScrollBars.None, BackColor = SystemColors.Control, ForeColor = SystemColors.GrayText,
-            Height = lineHeight * 2 + 6,
+            Height = (int)Math.Ceiling(wrapped.Height * toLogical) + 6,
         };
+        new ToolTip().SetToolTip(files, stepFile + "\n" + pdfFile);
         Row("Files", files, 100);
         Row("Vendor", _vendor, 0);
         Row("Subfolder", _sub, 1);
@@ -149,8 +155,8 @@ internal sealed class ImportPartForm : Form
         Row("Engr Approved By", _approved, 7);
         _designer.TabStop = false; _approved.TabStop = false;
 
-        _will.MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0);
-        _error.MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0);
+        _will.MaximumSize = new Size(InputWidth, 0);
+        _error.MaximumSize = new Size(InputWidth, 0);
         _will.Margin = new Padding(0, 6, 0, 6);
         _error.Margin = new Padding(0, 3, 0, 3);
         _error.MinimumSize = new Size(0, lineHeight);
@@ -289,7 +295,7 @@ internal sealed class ImportPartForm : Form
             var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(80, 0) };
             var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(80, 0) };
             var table = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Padding = new Padding(12) };
-            table.Controls.Add(new Label { Text = prompt, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(InputWidth), 0), Margin = new Padding(0, 0, 0, 6) });
+            table.Controls.Add(new Label { Text = prompt, AutoSize = true, MaximumSize = new Size(InputWidth, 0), Margin = new Padding(0, 0, 0, 6) });
             _box.MinimumSize = new Size(InputWidth, 0); _box.Dock = DockStyle.Fill;
             table.Controls.Add(_box);
             var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Margin = new Padding(0, 8, 0, 0) };
