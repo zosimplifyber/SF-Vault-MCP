@@ -32,6 +32,15 @@ internal static class BomReader
         }
     }
 
+    /// <summary>The "Model state / Design view / BOM view" line for the purchasing sheet; "(none)" where Inventor has no such thing.</summary>
+    public static string SourceLine(Inv.AssemblyDocument asm)
+    {
+        string? modelState = null, designView = null;
+        try { modelState = asm.ComponentDefinition.ModelStates.ActiveModelState.Name; } catch { }
+        try { designView = asm.ComponentDefinition.RepresentationsManager.ActiveDesignViewRepresentation.Name; } catch { }
+        return BomSource.Describe(modelState, designView);
+    }
+
     private static IReadOnlyList<BomNode> Rows(Inv.BOMRowsEnumerator? rows)
     {
         var list = new List<BomNode>();

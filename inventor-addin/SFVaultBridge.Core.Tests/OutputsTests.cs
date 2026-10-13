@@ -215,7 +215,17 @@ public class OutputsTests
     {
         Assert.Equal(new[] { "purchasing", "--bom", "b", "--assembly", "A", "--out", "o", "--name", "n", "--result", "r" },
             ToolResults.PurchasingArgs("b", "A", "o", "n", "r"));
+        Assert.Equal(new[] { "purchasing", "--bom", "b", "--assembly", "A", "--out", "o", "--name", "n", "--result", "r", "--source", "S" },
+            ToolResults.PurchasingArgs("b", "A", "o", "n", "r", "S"));
         Assert.Equal(new[] { "review", "--bom", "b", "--manifest", "m", "--out", "p", "--result", "r" },
             ToolResults.ReviewArgs("b", "m", "p", "r"));
+    }
+
+    [Fact]
+    public void Bom_source_line()
+    {
+        Assert.Equal("Model state: Primary | Design view: Default | BOM view: Structured", BomSource.Describe("Primary", "Default"));
+        Assert.Equal("Model state: (none) | Design view: (none) | BOM view: Structured", BomSource.Describe(null, "  "));
+        Assert.Equal("Model state: [Primary] | Design view: (none) | BOM view: Structured", BomSource.Describe(" [Primary] ", ""));
     }
 }

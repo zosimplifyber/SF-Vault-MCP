@@ -167,8 +167,12 @@ public static class ToolResults
                               o["mode"] is JsonValue mv && mv.TryGetValue<string>(out var mode) ? mode : null);
     }
 
-    public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath) =>
-        new[] { "purchasing", "--bom", bom, "--assembly", assembly, "--out", outDir, "--name", name, "--result", resultPath };
+    public static IReadOnlyList<string> PurchasingArgs(string bom, string assembly, string outDir, string name, string resultPath, string? source = null)
+    {
+        var args = new List<string> { "purchasing", "--bom", bom, "--assembly", assembly, "--out", outDir, "--name", name, "--result", resultPath };
+        if (!string.IsNullOrWhiteSpace(source)) { args.Add("--source"); args.Add(source); }
+        return args;
+    }
 
     public static IReadOnlyList<string> ReviewArgs(string bom, string manifest, string outPdf, string resultPath) =>
         new[] { "review", "--bom", bom, "--manifest", manifest, "--out", outPdf, "--result", resultPath };

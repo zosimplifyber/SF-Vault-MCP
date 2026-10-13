@@ -58,3 +58,52 @@ def test_unexpected_exception_still_writes_result(tmp_path, monkeypatch):
                      "--name", "n.xlsx", "--result", str(result_path)])
     assert code == 1
     assert "boom" in json.loads(result_path.read_text(encoding="utf-8"))["error"]
+
+
+ADDIN_HEADERS = ("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\t"
+                 "Material\tFile Name\tVendor\tVendor Number")
+
+
+def _addin_bom(path):
+    path.write_text(ADDIN_HEADERS + "\r\n"
+                    "1\tCD-001882\tNormal\tEach\t1\tTop\tA\t\t\tCD-001882.iam\t\t\r\n"
+                    "2\tCD-000001\tPurchased\tEach\t4\tBolt\t\t\tSteel\tCD-000001.ipt\t\t\r\n",
+                    encoding="utf-8")
+
+
+def _purchasing_sheet(tmp_path, *extra):
+    import openpyxl
+    bom = tmp_path / "bom.txt"
+    _addin_bom(bom)
+    code = cli.main(["purchasing", "--bom", str(bom), "--assembly", "CD-001882", "--out", str(tmp_path),
+                     "--name", "P.xlsx", "--result", str(tmp_path / "r.json"), *extra])
+    assert code == 0, (tmp_path / "r.json").read_text(encoding="utf-8")
+    return openpyxl.load_workbook(tmp_path / "P.xlsx")["Purchasing"]
+
+
+def test_source_goes_on_the_generated_row(tmp_path):
+    src = "Model state: Primary | Design view: Default | BOM view: Structured"
+    ws = _purchasing_sheet(tmp_path, "--source", src)
+    assert ws["A2"].value.startswith("Generated: ")
+    assert ws["A2"].value.endswith(" | " + src)
+
+
+def test_generated_row_unchanged_without_source(tmp_path):
+    ws = _purchasing_sheet(tmp_path)
+    assert "|" not in ws["A2"].value and "Model state" not in ws["A2"].value
+
+
+def test_source_argument_parses():
+    args = cli._parser().parse_args(["purchasing", "--bom", "b", "--assembly", "A", "--out", "o",
+                                     "--name", "n", "--result", "r", "--source", "S"])
+    assert args.source == "S"
+    args = cli._parser().parse_args(["purchasing", "--bom", "b", "--assembly", "A", "--out", "o",
+                                     "--name", "n", "--result", "r"])
+    assert args.source is None
+
+
+def test_name_column_is_filled_from_an_addin_bom(tmp_path):
+    ws = _purchasing_sheet(tmp_path)
+    headers = [c.value for c in ws[3]]
+    col = headers.index("Name") + 1
+    assert [ws.cell(row=r, column=col).value for r in (4, 5)] == ["CD-001882", "CD-000001"]

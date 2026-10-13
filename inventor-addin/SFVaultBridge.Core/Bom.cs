@@ -33,6 +33,15 @@ public static class BomOrdering
     }
 }
 
+/// <summary>The line the purchasing sheet prints to say which model representation the BOM was read from.</summary>
+public static class BomSource
+{
+    public static string Describe(string? modelState, string? designView) =>
+        $"Model state: {Or(modelState)} | Design view: {Or(designView)} | BOM view: Structured";
+
+    private static string Or(string? v) => string.IsNullOrWhiteSpace(v) ? "(none)" : v.Trim();
+}
+
 /// <summary>Tab-delimited BOM in the layout bom_purchasing.read_bom_file reads.</summary>
 public static class BomFile
 {

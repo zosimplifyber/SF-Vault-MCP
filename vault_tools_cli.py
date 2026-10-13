@@ -34,8 +34,9 @@ def reference_note(source: str, signin_needed: bool) -> str:
     return "No purchasing list found; vendor and cost columns are blank."
 
 
-def run_purchasing(bom: str, assembly: str, out_dir: str, name: str) -> dict[str, Any]:
-    res = bp.generate_from_file(bom, assembly, out_dir)
+def run_purchasing(bom: str, assembly: str, out_dir: str, name: str,
+                   source: str | None = None) -> dict[str, Any]:
+    res = bp.generate_from_file(bom, assembly, out_dir, source=source)
     if res.get("error"):
         return {"ok": False, "error": str(res.get("message") or "The purchasing engine failed.")}
     src = Path(res["output_path"])
@@ -67,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
     pur.add_argument("--out", required=True)
     pur.add_argument("--name", required=True)
     pur.add_argument("--result", required=True)
+    pur.add_argument("--source", default=None)
     rev = sub.add_parser("review")
     rev.add_argument("--bom", required=True)
     rev.add_argument("--manifest", required=True)
@@ -79,7 +81,7 @@ def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "purchasing":
-            result = run_purchasing(args.bom, args.assembly, args.out, args.name)
+            result = run_purchasing(args.bom, args.assembly, args.out, args.name, args.source)
         else:
             import review_package
             result = review_package.run_review(args.bom, args.manifest, args.out)
