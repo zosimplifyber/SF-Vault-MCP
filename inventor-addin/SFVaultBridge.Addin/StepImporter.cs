@@ -18,7 +18,7 @@ internal sealed class StepImporter : IStepImporter
 
     /// <summary>As above; when material is non-empty it is looked up in the active material library and applied. A missing or unappliable material throws BridgeException("material") before the part is saved.</summary>
     public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom,
-                                   string? material, ICollection<string>? warnings)
+                                   string? material, ICollection<string>? warnings, string? comments = null)
     {
         if (!System.IO.File.Exists(stepPath)) throw new BridgeException("not_found", $"STEP file not found: {stepPath}");
         if (System.IO.File.Exists(outIpt)) throw new BridgeException("exists", $"Refusing to overwrite existing file {outIpt}");
@@ -37,6 +37,8 @@ internal sealed class StepImporter : IStepImporter
 
             var tracking = doc.PropertySets["Design Tracking Properties"];
             foreach (var (name, value) in design) tracking[name].Value = value;
+            if (!string.IsNullOrWhiteSpace(comments))
+                doc.PropertySets["Inventor Summary Information"]["Comments"].Value = comments;
             var user = doc.PropertySets["Inventor User Defined Properties"];
             foreach (var (name, value) in custom)
             {

@@ -26,6 +26,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
    - **Subfolder**: dropdown of the chosen vendor folder's subfolders (one level, plus nested ones as `screws/shoulder screws`), `(vendor folder itself)`, and New subfolder...
    - **Vendor Number**: from the file name (McMaster: the leading part number; other vendors: the text before the first `_`, else empty), editable, required.
    - **Description**: from the file name (McMaster: the text after the first `_`, extension removed), editable, required.
+   - **Comments**: optional multi-line text for extra description lines (McMaster's second line is on the web page, not in the PDF), written to the Comments iProperty.
    - **Material**: required pick-only dropdown of the active material library, preselected to Steel when present, else the first item. A material that cannot be applied at run time fails step part before anything is added for the part.
    - **Material Finish**: text, defaults to As Finished, editable; empty becomes As Finished.
    - **Designer**: Inventor's user name (General Options) in "First L." form ("Zak Olech" becomes "Zak O."), read-only.
@@ -55,6 +56,7 @@ An **Import New Part** button on the SF Vault Bridge panel. Pick a vendor STEP a
 | Source | custom "Source" | `Buy` |
 | Material | part material | form (required) |
 | Material Finish | custom "Material Finish" | form |
+| Comments | Summary "Comments" | form, optional multi-line (e.g. McMaster's second description line); lines trimmed, blanks dropped |
 | Designer | Design Tracking "Designer" | Inventor user name as "First L." (Zak, 2026-10-13) |
 | Engr Approved By | custom "Engr Approved By" | `NOT REVIEWED` |
 

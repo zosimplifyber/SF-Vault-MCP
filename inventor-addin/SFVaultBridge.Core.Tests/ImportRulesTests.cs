@@ -228,4 +228,17 @@ public class ImportRulesTests
     [InlineData(@"C:\W\screws\CD-001906.ipt", @"C:\W\screws\CD-001907.stp", false)]
     public void Vault_renumbered_save_is_a_cd_ipt_in_the_same_folder(string requested, string saved, bool expected) =>
         Assert.Equal(expected, ImportRules.IsVaultRenumberedSave(requested, saved));
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("   ", "")]
+    [InlineData("US Origin, 0-80 Thread Size, 3/16\" Long", "US Origin, 0-80 Thread Size, 3/16\" Long")]
+    [InlineData("  line one \r\n\r\n line two  ", "line one\r\nline two")]
+    [InlineData("a\nb", "a\r\nb")]
+    public void Comments_are_trimmed_per_line(string? input, string expected) =>
+        Assert.Equal(expected, ImportRules.CleanComments(input));
+
+    [Fact]
+    public void Plan_comments_default_to_empty() =>
+        Assert.Equal("", new ImportPlan("McMaster-Carr", "", "1A1", "d", "Steel", "As Finished", "Zak O.").Comments);
 }

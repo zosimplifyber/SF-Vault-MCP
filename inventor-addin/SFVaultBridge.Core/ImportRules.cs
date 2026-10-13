@@ -43,7 +43,7 @@ public static class SelectionCheck
     }
 }
 
-public sealed record ImportPlan(string Vendor, string Subfolder, string VendorNumber, string Description, string Material, string MaterialFinish, string Designer);
+public sealed record ImportPlan(string Vendor, string Subfolder, string VendorNumber, string Description, string Material, string MaterialFinish, string Designer, string Comments = "");
 
 public static class ImportRules
 {
@@ -107,6 +107,10 @@ public static class ImportRules
         var sameDir = string.Equals(System.IO.Path.GetDirectoryName(requested), System.IO.Path.GetDirectoryName(saved), StringComparison.OrdinalIgnoreCase);
         return sameDir && System.Text.RegularExpressions.Regex.IsMatch(System.IO.Path.GetFileName(saved), @"^CD-\d{6}\.ipt$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
+
+    /// <summary>Comments iProperty: each line trimmed, blank lines dropped, joined with CRLF.</summary>
+    public static string CleanComments(string? text) =>
+        string.Join("\r\n", (text ?? "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0));
 
     public static readonly string[] CardProperties = { "Source", "Vendor", "Vendor Number", "Material", "Material Finish" };
 

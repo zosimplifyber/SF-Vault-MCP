@@ -23,6 +23,7 @@ internal sealed class ImportPartForm : Form
     private readonly ComboBox _sub = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _number = new();
     private readonly TextBox _desc = new();
+    private readonly TextBox _comments = new() { Multiline = true, WordWrap = true, ScrollBars = ScrollBars.Vertical, AcceptsReturn = true };
     private readonly ComboBox _material = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _finish = new() { Text = ImportRules.DefaultFinish };
     private readonly TextBox _designer = new() { ReadOnly = true };
@@ -149,6 +150,9 @@ internal sealed class ImportPartForm : Form
         Row("Subfolder", _sub, 1);
         Row("Vendor Number", _number, 2);
         Row("Description", _desc, 3);
+        _comments.Height = lineHeight * 3 + 8;
+        Row("Comments", _comments, 3);
+        new ToolTip().SetToolTip(_comments, "Optional. Extra description lines, for example McMaster's second line. Goes to the Comments iProperty.");
         Row("Material", _material, 4);
         Row("Material Finish", _finish, 5);
         Row("Designer", _designer, 6);
@@ -259,7 +263,7 @@ internal sealed class ImportPartForm : Form
     }
 
     private ImportPlan CurrentPlan() =>
-        new(_vendorSel, _subSel, _number.Text, _desc.Text, (_material.SelectedItem as string ?? "").Trim(), ImportRules.NormalizeFinish(_finish.Text), _designer.Text);
+        new(_vendorSel, _subSel, _number.Text, _desc.Text, (_material.SelectedItem as string ?? "").Trim(), ImportRules.NormalizeFinish(_finish.Text), _designer.Text, ImportRules.CleanComments(_comments.Text));
 
     /// <summary>Shows CD-&lt;next&gt; literally: asking Vault for the real number would consume it.</summary>
     private void UpdateWill()
