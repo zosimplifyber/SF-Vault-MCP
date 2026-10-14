@@ -93,6 +93,28 @@ internal sealed class UpdateChecker
         }
     }
 
+    /// <summary>One check for the Settings window, run on a worker thread by the caller. Returns the sentence to show; never throws.
+    /// Shares the result with the ribbon (Available), so the status button offers the download too.</summary>
+    public string CheckNow()
+    {
+        if (!VaultSession.IsSignedIn) return "Sign in to Vault first (Vault tab, Log In), then check again.";
+        try
+        {
+            if (!SemVer.TryParse(AppVersion.Current, out var current)) return "This build has no version number to compare.";
+            var found = AppVersion.Newest(VaultFiles.FilesIn(AppVersion.ReleaseFolder).Select(f => f.Name), current);
+            lock (_gate) _available = found;
+            _lastCheckUtc = DateTime.UtcNow;
+            return found is { } a
+                ? $"Update available: {a.Version} (this is {AppVersion.Current}). Click the status button on the ribbon to download it."
+                : $"You are up to date ({AppVersion.Current}).";
+        }
+        catch (Exception ex)
+        {
+            _log("update check failed: " + ex.Message);
+            return "The update check failed: " + ex.Message;
+        }
+    }
+
     /// <summary>Downloads the release zip through the Vault session to Downloads\SF Vault Bridge and opens that folder. Returns the saved path.</summary>
     public string Download(string name)
     {

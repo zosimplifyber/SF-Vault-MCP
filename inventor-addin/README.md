@@ -26,7 +26,7 @@ Release: edit `inventor-addin/VERSION` (single source for assemblies, PackageCon
 
 ## Buttons
 
-The SF Vault Bridge tab has six panels: Status (the dot), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review), Manufacturing (Assembly Package for the in-house assemblers and maintenance, Partner Package, 3D Print Package) and Release (I Approve!). All but Import New Part and Fix Data Card need an open assembly. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
+The SF Vault Bridge tab has six panels: Status (the dot and Settings), Parts (Import New Part, Fix Data Card), Purchasing (Purchasing Sheet), Review (Design Review), Manufacturing (Assembly Package for the in-house assemblers and maintenance, Partner Package, 3D Print Package) and Release (I Approve!). Settings, Import New Part and Fix Data Card need no open assembly; the others do. They need a Vault sign-in and an assembly that is already in Vault. A run blocks Inventor until it finishes, and a large review can take minutes. Do not End Task if Windows shows Not Responding; wait for the dialog.
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 
@@ -184,7 +184,8 @@ Settings file: `%APPDATA%\Simplifyber\VaultBridge\settings.json`, created with d
 - `printMaterials`: material names that mean "print this part", each matched as a whole word, case-insensitive (default `PLA`, `PETG`, `ABS`, `ASA`, `PA11`, `PA12`, `Nylon`, `TPU`, `PC`, `Resin`, `CF`).
 - `recentPartners`: the Partner Package recent list (ten at most, newest first).
 - `dropboxAppKey`: the Dropbox app key (see Dropbox upload below; default blank).
-- `salesTaxRate`: sales tax rate for the Purchasing Sheet, a fraction from 0 up to but not including 1 (default 0.07).
+- `salesTaxRate`: sales tax rate for the Purchasing Sheet, a fraction from 0 to 1 (default 0.07).
+- `userOverrides`: team keys you changed in the Settings window; the team merge leaves them alone (see Settings).
 
 A missing key falls back to its default. A file that is not valid JSON, or not a JSON object, is logged to bridge.log and defaults are used for that run; the file is not overwritten.
 
@@ -196,6 +197,19 @@ Vault: the `Process` property already exists in Vault (Text, list values as abov
 4. OK. No re-index is needed for new check-ins.
 
 The Vault `Cost` property is mapped to Inventor's Estimated Cost.
+
+## Settings
+
+The gear button on the Status panel opens the Settings window (no open document needed). Save validates, then writes `%APPDATA%\Simplifyber\VaultBridge\settings.json`; Cancel changes nothing.
+
+- **General**: the installed version, Check for updates now (the same Vault release-folder check as the status button, so you must be signed in to Vault; the result shows in the window and the status button picks it up) and Open log folder.
+- **Dropbox**: the app key, Sign in and Sign out, and a signed in or not line. Sign in is enabled only when a key is set and opens your browser once. Changing the key signs the old account out when you save (a token belongs to one app key).
+- **Purchasing and packages**: sales tax as a percentage from 0 to 100 (stored as a fraction in `salesTaxRate`, so 8.25 is 0.0825), and the Process values, print materials and recent partners lists. Process values and print materials can be added to, removed from and moved up or down; each needs at least one value, entries are trimmed, and a duplicate in any letter case is refused or dropped. Recent partners has Remove selected and Clear all.
+- **Claude**: the MCP endpoint (`http://localhost:8790/mcp`), the path of the token file, Copy setup info (copies the endpoint and the token file path, never the token) and Open Claude extension (selects the `.mcpb` next to the installed add-in, else the newest one under `Downloads\SF Vault Bridge`, else opens that folder or says where to get it).
+
+Saved values apply to the next button click with no restart: every command reads `settings.json` when it starts, including the Dropbox app key.
+
+Team settings never overwrite your changes. Save adds each team key whose value you changed (`processValues`, `printMaterials`, `dropboxAppKey`, `salesTaxRate`) to `userOverrides` in `settings.json`. The installer's team merge (and `SettingsMerge`) skips every key listed there and still fills the others. Edit `userOverrides` by hand (or delete a name from it) to take team values again. Keys the window does not know about are kept as they are.
 
 ## Dropbox upload (Partner Packages)
 

@@ -15,13 +15,16 @@ internal sealed class RibbonActions
     private readonly List<(Inv.ButtonDefinition Def, Inv.ButtonDefinitionSink_OnExecuteEventHandler Handler)> _buttons = new();
     private bool _running;
 
-    public RibbonActions(Inv.Application app, Func<string, IReadOnlyList<Inv.RibbonPanel>> panels, Action<string> log)
+    private readonly Func<string>? _checkUpdates;
+
+    public RibbonActions(Inv.Application app, Func<string, IReadOnlyList<Inv.RibbonPanel>> panels, Action<string> log, Func<string>? checkUpdates = null)
     {
-        _app = app; _panels = panels; _log = log;
+        _app = app; _panels = panels; _log = log; _checkUpdates = checkUpdates;
     }
 
     public void Create()
     {
+        Add("Status", "Settings", "SFVaultBridge.Settings", "Open the SF Vault Bridge settings: version and updates, Dropbox, purchasing and package lists, Claude setup.", Icons.Gear, null, OpenSettings);
         Add("Purchasing", "Purchasing Sheet", "SFVaultBridge.Purchasing", "Build the purchasing sheet for this assembly and check it into Vault.", Icons.Spreadsheet, Purchasing);
         Add("Review", "Design Review", "SFVaultBridge.Review", "Build the DRAFT design review PDF for this assembly and check it into Vault.", Icons.DraftPage, a => BuildPackage(a, PackageMode.Review));
         Add("Manufacturing", "Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
@@ -170,6 +173,13 @@ internal sealed class RibbonActions
             try { _app.Documents.Open(result.LocalIpt, true); }
             catch (Exception ex) { _log($"open {result.LocalIpt} failed: {ex}"); Msg($"Could not open the part: {ex.Message}", title); }
         }
+    }
+
+    private void OpenSettings()
+    {
+        using var form = new SettingsForm(BridgeSettings.DefaultPath, AddInServer.Prefix + "mcp", _checkUpdates, _log);
+        var owner = OwnerWindow();
+        if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
     }
 
     private void FixDataCard()

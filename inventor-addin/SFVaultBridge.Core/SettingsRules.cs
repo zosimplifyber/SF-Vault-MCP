@@ -67,3 +67,40 @@ public static class SettingsRules
         return SettingsMerge.TeamKeys.Where(set.Contains).ToList();
     }
 }
+
+/// <summary>Where the Claude Desktop extension (.mcpb) can be found on this PC.</summary>
+public static class ClaudeExtension
+{
+    public const string FileFilter = "*.mcpb";
+
+    /// <summary>
+    /// The newest .mcpb in the install folders (top level of each, in order), else in downloadsDir or one folder below it.
+    /// Null when there is none. File is the .mcpb path; Folder is where it sits.
+    /// </summary>
+    public static (string Folder, string File)? Find(IEnumerable<string> installDirs, string downloadsDir)
+    {
+        foreach (var dir in installDirs)
+            if (Newest(dir, SearchOption.TopDirectoryOnly) is { } hit) return (Path.GetDirectoryName(hit)!, hit);
+        if (Newest(downloadsDir, SearchOption.AllDirectories, 1) is { } found) return (Path.GetDirectoryName(found)!, found);
+        return null;
+    }
+
+    private static string? Newest(string dir, SearchOption option, int depth = 0)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) return null;
+            var folders = new List<string> { dir };
+            if (option == SearchOption.AllDirectories && depth > 0) folders.AddRange(Directory.GetDirectories(dir));
+            return folders.SelectMany(f => Directory.GetFiles(f, FileFilter))
+                .OrderByDescending(f => File.GetLastWriteTimeUtc(f)).FirstOrDefault();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>The text "Copy setup info" puts on the clipboard. Names the token file; never contains the token.</summary>
+    public static string SetupInfo(string endpoint, string tokenFile) =>
+        "SF Vault Bridge MCP endpoint: " + endpoint + Environment.NewLine +
+        "Token file: " + tokenFile + Environment.NewLine +
+        "The Claude extension reads the token file itself. For another MCP client, send the token as X-Bridge-Token or Authorization: Bearer.";
+}

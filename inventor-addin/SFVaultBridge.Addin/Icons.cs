@@ -300,4 +300,35 @@ internal static class Icons
         }
         return bmp;
     }
+
+    /// <summary>Gear: eight-tooth cog with a round hole, slate body and ink outline so it reads on dark and light ribbons.</summary>
+    public static Bitmap Gear(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float c = size / 2f;
+            float outer = size * 0.46f, root = size * 0.33f, hole = size * 0.14f;
+            const int teeth = 8;
+            var pts = new List<PointF>();
+            for (var i = 0; i < teeth; i++)
+            {
+                double a0 = (i - 0.5) * 2 * Math.PI / teeth, step = 2 * Math.PI / teeth / 4;
+                // root, tooth up, tooth top, tooth down, back to root.
+                var seq = new (double A, float R)[]
+                {
+                    (a0 + step * 0.2, root), (a0 + step * 1.2, outer), (a0 + step * 2.4, outer), (a0 + step * 3.4, root),
+                };
+                foreach (var (a, r) in seq) pts.Add(new PointF(c + r * (float)Math.Cos(a), c + r * (float)Math.Sin(a)));
+            }
+            using var path = new GraphicsPath();
+            path.AddPolygon(pts.ToArray());
+            path.AddEllipse(c - hole, c - hole, hole * 2, hole * 2);
+            using (var b = new SolidBrush(Color.FromArgb(255, 120, 144, 156))) g.FillPath(b, path);
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            g.DrawPath(pen, path);
+        }
+        return bmp;
+    }
 }

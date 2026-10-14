@@ -38,6 +38,9 @@ internal sealed class RibbonStatus
 
     public IReadOnlyList<Inv.RibbonPanel> Panels => _panels;
 
+    /// <summary>Runs an update check now (call from a worker thread) and returns the sentence for the Settings window.</summary>
+    public string CheckUpdatesNow() => _updates.CheckNow();
+
     /// <summary>The panels (one per ribbon) for a button group; empty when the tab could not be made.</summary>
     public IReadOnlyList<Inv.RibbonPanel> PanelsFor(string group) =>
         _groups.TryGetValue(group, out var list) ? list : (IReadOnlyList<Inv.RibbonPanel>)Array.Empty<Inv.RibbonPanel>();

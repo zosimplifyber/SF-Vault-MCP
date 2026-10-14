@@ -221,3 +221,52 @@ public class SettingsMergeOverrideTests
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 }
+
+public class ClaudeExtensionTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "sfvb-ext-" + Guid.NewGuid().ToString("N"));
+    public ClaudeExtensionTests() => Directory.CreateDirectory(_root);
+    public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+
+    private string Touch(string rel, DateTime? when = null)
+    {
+        var p = Path.GetFullPath(Path.Combine(_root, rel));
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, "x");
+        if (when is { } w) File.SetLastWriteTimeUtc(p, w);
+        return p;
+    }
+
+    [Fact]
+    public void InstallFolderWinsOverDownloads()
+    {
+        var inst = Touch("install/SF Vault Bridge.mcpb");
+        Touch("dl/SF Vault Bridge.mcpb");
+        var hit = ClaudeExtension.Find(new[] { Path.Combine(_root, "install") }, Path.Combine(_root, "dl"));
+        Assert.Equal((Path.Combine(_root, "install"), inst), hit);
+    }
+
+    [Fact]
+    public void DownloadsOneLevelDeepNewestWins()
+    {
+        Touch("dl/old/a.mcpb", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var newer = Touch("dl/new/b.mcpb", new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+        Touch("dl/x/y/deep.mcpb", new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
+        var hit = ClaudeExtension.Find(Array.Empty<string>(), Path.Combine(_root, "dl"));
+        Assert.Equal(newer, hit!.Value.File);
+    }
+
+    [Fact]
+    public void NothingFoundIsNull()
+    {
+        Assert.Null(ClaudeExtension.Find(new[] { Path.Combine(_root, "none") }, Path.Combine(_root, "none2")));
+    }
+
+    [Fact]
+    public void SetupInfoNamesTheTokenFileButNotItsContents()
+    {
+        var text = ClaudeExtension.SetupInfo("http://localhost:8790/mcp", @"C:\Users\z\AppData\Roaming\Simplifyber\VaultBridge\token");
+        Assert.Contains("http://localhost:8790/mcp", text);
+        Assert.Contains(@"VaultBridge\token", text);
+    }
+}
