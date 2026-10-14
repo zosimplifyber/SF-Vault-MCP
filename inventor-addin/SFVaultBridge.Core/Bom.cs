@@ -7,7 +7,7 @@ public sealed record BomNode(string PartNumber, string Description, double Quant
                              string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children,
                              string Vendor = "", string VendorNumber = "", string State = "",
                              string Process = "", string MaterialFinish = "", bool IsSheetMetal = false,
-                             double? Cost = null, string HsCode = "");
+                             double? Cost = null, string HsCode = "", string Source = "");
 
 public sealed record BomLine(string Item, BomNode Node, int Depth);
 

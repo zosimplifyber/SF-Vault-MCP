@@ -56,6 +56,9 @@ public sealed class Router
         catch (Exception ex) { return Error(500, "internal", ex.GetType().Name + ": " + ex.Message); }
     }
 
+    /// <summary>True when the token is the bridge token (constant time).</summary>
+    public bool IsAuthorized(string? token) => TokenMatches(token);
+
     private bool TokenMatches(string? token) =>
         !string.IsNullOrEmpty(token) && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(token), _token);
 
