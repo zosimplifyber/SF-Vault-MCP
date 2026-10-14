@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 namespace SFVaultBridge.Core;
 
 /// <summary>The per-user settings file: Process values, print materials and recent partner names.</summary>
-public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "", double SalesTaxRate = BridgeSettings.DefaultSalesTaxRate)
+public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "", double SalesTaxRate = BridgeSettings.DefaultSalesTaxRate, IReadOnlyList<string>? UserOverrides = null)
 {
     public const double DefaultSalesTaxRate = 0.07;
     public const int MaxRecent = 10;
@@ -17,6 +17,59 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         Array.Empty<string>());
 
     public static BridgeSettings Defaults => DefaultsValue;
+
+    /// <summary>Team keys the user changed in the Settings window; team settings never overwrite these.</summary>
+    public IReadOnlyList<string> Overrides => UserOverrides ?? Array.Empty<string>();
+
+    /// <summary>The team keys whose value differs between the settings the form opened with and the edited ones.</summary>
+    public static IReadOnlyList<string> ChangedKeys(BridgeSettings original, BridgeSettings edited)
+    {
+        var changed = new List<string>();
+        if (!original.ProcessValues.SequenceEqual(edited.ProcessValues, StringComparer.Ordinal)) changed.Add("processValues");
+        if (!original.PrintMaterials.SequenceEqual(edited.PrintMaterials, StringComparer.Ordinal)) changed.Add("printMaterials");
+        if (!string.Equals(original.DropboxAppKey.Trim(), edited.DropboxAppKey.Trim(), StringComparison.Ordinal)) changed.Add("dropboxAppKey");
+        if (Math.Abs(original.SalesTaxRate - edited.SalesTaxRate) > 1e-9) changed.Add("salesTaxRate");
+        return changed;
+    }
+
+    /// <summary>
+    /// Writes the edited settings to path. Keys in the file that this type does not own stay as they are; userOverrides becomes the
+    /// file's list plus every key the user changed (edited compared with original). A malformed file is copied to
+    /// path.bad-yyyyMMdd-HHmmss first. Returns false (and logs) when the file cannot be read or written.
+    /// </summary>
+    public static bool Save(string path, BridgeSettings original, BridgeSettings edited, Action<string> log, DateTime? now = null)
+    {
+        var root = new JsonObject();
+        try
+        {
+            if (File.Exists(path))
+            {
+                var text = File.ReadAllText(path);
+                if (SettingsMerge.IsMalformed(text))
+                {
+                    File.Copy(path, $"{path}.bad-{(now ?? DateTime.Now):yyyyMMdd-HHmmss}", false);
+                    log("settings.json was not valid JSON; kept a .bad copy and wrote a fresh file.");
+                }
+                else if (!string.IsNullOrWhiteSpace(text)) root = JsonNode.Parse(text) as JsonObject ?? new JsonObject();
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"settings.json could not be read ({e.Message}).");
+            return false;
+        }
+        var fileOverrides = Strings(root, "userOverrides") ?? new List<string>();
+        var overrides = SettingsRules.CleanOverrides(fileOverrides.Concat(ChangedKeys(original, edited)));
+        root["processValues"] = StringArray(edited.ProcessValues);
+        root["printMaterials"] = StringArray(edited.PrintMaterials);
+        root["recentPartners"] = StringArray(edited.RecentPartners);
+        root["dropboxAppKey"] = edited.DropboxAppKey.Trim();
+        root["salesTaxRate"] = edited.SalesTaxRate;
+        root["userOverrides"] = StringArray(overrides);
+        return TryWrite(path, root.ToJsonString(Indented), log);
+    }
+
+    private static JsonArray StringArray(IEnumerable<string> items) => new(items.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
 
     public static string DefaultPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Simplifyber", "VaultBridge", "settings.json");
@@ -35,7 +88,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             Strings(root, "processValues") ?? DefaultsValue.ProcessValues,
             Strings(root, "printMaterials") ?? DefaultsValue.PrintMaterials,
             Normalize(Strings(root, "recentPartners") ?? DefaultsValue.RecentPartners),
-            AppKey(root), Rate(root));
+            AppKey(root), Rate(root), SettingsRules.CleanOverrides(Strings(root, "userOverrides")));
     }
 
     public static IReadOnlyList<string> WithRecent(IReadOnlyList<string> recent, string partner)
@@ -68,7 +121,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
 
     private static double Rate(JsonObject root)
     {
-        if (root["salesTaxRate"] is JsonValue v && v.TryGetValue<double>(out var r) && r >= 0 && r < 1 && double.IsFinite(r)) return r;
+        if (root["salesTaxRate"] is JsonValue v && v.TryGetValue<double>(out var r) && r >= 0 && r <= 1 && double.IsFinite(r)) return r;
         return DefaultSalesTaxRate;
     }
 

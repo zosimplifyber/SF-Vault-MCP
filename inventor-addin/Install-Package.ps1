@@ -26,7 +26,7 @@ function Test-Empty($v) {
 
 function Merge-TeamSettings([string]$teamFile, [string]$settingsFile) {
     # Same rules as SettingsMerge in SFVaultBridge.Core: team keys overwrite (unless empty over non-empty),
-    # every other key (recentPartners) stays, a malformed file is backed up and never discarded.
+    # a team key listed in the file userOverrides is skipped, every other key (recentPartners) stays, a malformed file is backed up and never discarded.
     $team = Get-Content -LiteralPath $teamFile -Raw | ConvertFrom-Json
     $merged = $null
     if (Test-Path -LiteralPath $settingsFile) {
@@ -42,7 +42,10 @@ function Merge-TeamSettings([string]$teamFile, [string]$settingsFile) {
         }
     }
     if (-not $merged) { $merged = [pscustomobject]@{} }
+    $overridden = @()
+    if ($merged.PSObject.Properties.Name -contains 'userOverrides' -and $merged.userOverrides -is [System.Collections.IEnumerable] -and $merged.userOverrides -isnot [string]) { $overridden = @($merged.userOverrides) }
     foreach ($key in $TeamKeys) {
+        if ($overridden -ccontains $key) { continue }  # the user changed it in the Settings window
         if ($team.PSObject.Properties.Name -notcontains $key) { continue }
         $value = $team.$key
         if ((Test-Empty $value) -and ($merged.PSObject.Properties.Name -contains $key) -and -not (Test-Empty $merged.$key)) { continue }

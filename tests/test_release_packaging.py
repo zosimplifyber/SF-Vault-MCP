@@ -166,3 +166,24 @@ def test_failed_install_leaves_existing_bundle(tmp_path):
     plugins = tmp_path / "plugins"
     assert (plugins / "SFVaultBridge.bundle" / "PackageContents.xml").exists()
     assert not (plugins / "SFVaultBridge.bundle.new").exists() and not (plugins / "SFVaultBridge.bundle.old").exists()
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell")
+def test_user_overrides_keep_user_values_and_other_keys_still_fill(tmp_path):
+    existing = json.dumps({"processValues": ["Mine"], "salesTaxRate": 0.0825, "dropboxAppKey": "",
+                           "userOverrides": ["processValues", "salesTaxRate"], "recentPartners": ["Acme"]})
+    team = {"processValues": ["CNC"], "printMaterials": ["PLA"], "dropboxAppKey": "teamkey", "salesTaxRate": 0.08,
+            "userOverrides": []}
+    data, _ = _run_install(tmp_path, team, existing)
+    s = json.loads((data / "settings.json").read_text(encoding="utf-8"))
+    assert s["processValues"] == ["Mine"] and s["salesTaxRate"] == 0.0825
+    assert s["dropboxAppKey"] == "teamkey" and s["printMaterials"] == ["PLA"]
+    assert s["userOverrides"] == ["processValues", "salesTaxRate"] and s["recentPartners"] == ["Acme"]
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell")
+def test_single_user_override_is_honoured(tmp_path):
+    existing = json.dumps({"salesTaxRate": 0.1, "userOverrides": ["salesTaxRate"]})
+    data, _ = _run_install(tmp_path, {"salesTaxRate": 0.08, "dropboxAppKey": "k"}, existing)
+    s = json.loads((data / "settings.json").read_text(encoding="utf-8"))
+    assert s["salesTaxRate"] == 0.1 and s["dropboxAppKey"] == "k" and s["userOverrides"] == ["salesTaxRate"]

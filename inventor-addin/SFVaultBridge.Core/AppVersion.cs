@@ -78,7 +78,7 @@ public static class AppVersion
 public static class SettingsMerge
 {
     public static readonly string[] TeamKeys = { "processValues", "printMaterials", "dropboxAppKey", "salesTaxRate" };
-    public static readonly string[] PersonalKeys = { "recentPartners" };
+    public static readonly string[] PersonalKeys = { "recentPartners", "userOverrides" };
 
     private static readonly System.Text.Json.JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
@@ -97,8 +97,12 @@ public static class SettingsMerge
         var root = string.IsNullOrWhiteSpace(existingJson) || IsMalformed(existingJson)
             ? new JsonObject()
             : (JsonNode.Parse(existingJson) as JsonObject ?? new JsonObject());
+        var overridden = SettingsRules.CleanOverrides(root["userOverrides"] is JsonArray ua
+            ? ua.Select(x => x is JsonValue v && v.TryGetValue<string>(out var s) ? s : "")
+            : null);
         foreach (var key in TeamKeys)
         {
+            if (overridden.Contains(key, StringComparer.Ordinal)) continue; // the user changed it in the Settings window
             if (team[key] is not { } value) continue;
             if (IsEmpty(value) && root[key] is { } current && !IsEmpty(current)) continue;
             root[key] = value.DeepClone();
