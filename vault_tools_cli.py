@@ -65,6 +65,7 @@ def run_purchasing(bom: str, assembly: str, out_dir: str, name: str,
         "matched": int(res.get("matched_parts") or 0),
         "total_purchased": int(res.get("total_purchased_parts") or 0),
         "unmatched": [str(u) for u in (res.get("unmatched_parts") or [])],
+        "mcmaster_priced": int(res.get("mcmaster_priced") or 0),
         "warnings": [str(w) for w in (res.get("warnings") or [])],
     }
 

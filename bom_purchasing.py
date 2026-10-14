@@ -10,6 +10,7 @@ emit a formatted purchasing sheet — no manual file export required.
 from __future__ import annotations
 
 import glob
+import math
 import os
 import sys
 from datetime import datetime
@@ -90,7 +91,7 @@ BOM_COLUMNS = [
 
 PURCHASE_COLUMNS = [
     "Material", "Vendor", "Vendor Number", "Cost Per", "Price source",
-    "HS/HTS Code", "Shipping", "Tax/Tariff", "Sub Total",
+    "Pack Size", "Packs to Buy", "HS/HTS Code", "Shipping", "Tax/Tariff", "Sub Total",
     "Lead Time (Business Days)",
 ]
 
@@ -106,6 +107,14 @@ ALL_COLUMNS = BOM_COLUMNS + PURCHASE_COLUMNS
 DEFAULT_SALES_TAX_RATE = 0.07
 TARIFF_FILL = "FFC000"  # orange: a tariffed part still needs its tax/tariff entered
 TARIFF_COMMENT = "Tariff part: enter tax/tariff"
+
+# Live McMaster-Carr prices the add-in writes into the BOM file. The pack price
+# is what McMaster charges for one purchasing unit (a pack of Pack Size pieces,
+# or one piece when McMaster sells by the each).
+MCMASTER_PACK_PRICE = "McMaster Pack Price"
+MCMASTER_PACK_SIZE = "Pack Size"
+MCMASTER_PRICE_DATE = "McMaster Price Date"
+PRICE_SOURCE_MCMASTER = "McMaster"
 
 # Columns the DataFrame carries but the Purchasing tab does not show. "Number"
 # is still the key everything matches on — the reference lookup, the Vault state
@@ -129,7 +138,7 @@ COLUMN_WIDTHS = {
     "State": 16, "Description (Item,CO)": 44,
     "Source": 10, "Material": 22,
     "Vendor": 18, "Vendor Number": 18,
-    "Cost Per": 12, "Price source": 12, "HS/HTS Code": 14, "Shipping": 12, "Tax/Tariff": 12,
+    "Cost Per": 12, "Price source": 12, "Pack Size": 10, "Packs to Buy": 10, "HS/HTS Code": 14, "Shipping": 12, "Tax/Tariff": 12,
     "Sub Total": 14, "Lead Time (Business Days)": 24,
 }
 
@@ -563,6 +572,8 @@ def build_purchasing_sheet(
 
     qty_col = get_column_letter(SHEET_COLUMNS.index("Item Qty") + 1)
     cost_col = get_column_letter(SHEET_COLUMNS.index("Cost Per") + 1)
+    pack_col = get_column_letter(SHEET_COLUMNS.index("Pack Size") + 1)
+    packs_col = get_column_letter(SHEET_COLUMNS.index("Packs to Buy") + 1)
     ship_col = get_column_letter(SHEET_COLUMNS.index("Shipping") + 1)
     tax_col = get_column_letter(SHEET_COLUMNS.index("Tax/Tariff") + 1)
     sub_col = get_column_letter(SHEET_COLUMNS.index("Sub Total") + 1)
@@ -597,6 +608,14 @@ def build_purchasing_sheet(
             and str(row.get("Source", "")).strip() in {"Buy", "Other"}
             and vendor_blank
         )
+        # A live McMaster price is bought by the pack: what is paid is
+        # Packs to Buy x pack price, and the pack price is Cost Per x Pack Size.
+        is_pack = (not is_assembly
+                   and str(row.get("Price source", "")).strip() == PRICE_SOURCE_MCMASTER
+                   and pd.notna(row.get("Pack Size"))
+                   and pd.notna(row.get("Packs to Buy")))
+        paid = (f"{packs_col}{ri}*{cost_col}{ri}*{pack_col}{ri}" if is_pack
+                else f"{cost_col}{ri}*{qty_col}{ri}")
         if is_unmatched:
             fill = PatternFill("solid", fgColor=UNMATCHED_FILL)
             num_val = row.get("Number")
@@ -617,14 +636,17 @@ def build_purchasing_sheet(
                 c.value = (None if is_assembly or pd.isna(val)
                            or str(val).strip() == "" else val)
 
+            elif col_name in ("Pack Size", "Packs to Buy"):
+                val = row.get(col_name)
+                c.value = None if is_assembly or not is_pack or pd.isna(val) else int(val)
+
             elif col_name == "Shipping" and not is_assembly:
                 c.value = 0  # shipping is included in the price
 
             elif col_name == "Tax/Tariff" and not is_assembly:
                 hs = row.get("HS/HTS Code")
                 if pd.isna(hs) or str(hs).strip() == "":
-                    c.value = (f"={cost_col}{ri}*{qty_col}{ri}"
-                               f"*{float(sales_tax_rate)!r}")
+                    c.value = f"={paid}*{float(sales_tax_rate)!r}"
                 else:
                     entered = parse_money(row.get("Tax/Tariff"))
                     if pd.notna(entered):
@@ -645,10 +667,7 @@ def build_purchasing_sheet(
 
             elif col_name == "Sub Total":
                 if not is_assembly:
-                    c.value = (
-                        f"=({cost_col}{ri}*{qty_col}{ri})"
-                        f"+{ship_col}{ri}+{tax_col}{ri}"
-                    )
+                    c.value = f"=({paid})+{ship_col}{ri}+{tax_col}{ri}"
                 elif child_indices:
                     # Root assembly Qty often = "-"; ISNUMBER guard treats it as 1
                     c.value = (
@@ -1091,6 +1110,52 @@ def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> 
     return df
 
 
+def pack_size_of(value: Any) -> int:
+    """Pieces per McMaster pack from a BOM cell; blank, zero or junk is 1."""
+    n = parse_money(value)
+    if pd.isna(n) or n < 1:
+        return 1
+    return int(n)
+
+
+def packs_to_buy(qty: Any, pack_size: int) -> Optional[int]:
+    """ceil(Qty / Pack Size); None when the quantity is not a number."""
+    q = parse_money(qty)
+    if pd.isna(q):
+        return None
+    if q <= 0:
+        return 0
+    return int(math.ceil(float(q) / max(1, int(pack_size)) - 1e-9))
+
+
+def apply_mcmaster_price(df: pd.DataFrame, pack_price: pd.Series | None,
+                         pack_size: pd.Series | None) -> int:
+    """Live McMaster prices win over File and List.
+
+    Where the BOM file's ``McMaster Pack Price`` is > 0: Cost Per = pack price /
+    pack size (pack size defaults to 1), Price source ``McMaster``, and the
+    ``Pack Size`` and ``Packs to Buy`` columns are filled. Every other row gets
+    blank Pack Size / Packs to Buy and keeps its price. Returns the number of
+    rows priced from McMaster.
+    """
+    df["Pack Size"] = pd.Series([None] * len(df), index=df.index, dtype=object)
+    df["Packs to Buy"] = pd.Series([None] * len(df), index=df.index, dtype=object)
+    if pack_price is None:
+        return 0
+    prices = pack_price.map(parse_money)
+    live = prices.notna() & (prices > 0)
+    count = 0
+    for idx in df.index[live]:
+        size = pack_size_of(pack_size.get(idx) if pack_size is not None else None)
+        price = float(prices[idx])
+        df.at[idx, "Cost Per"] = price / size
+        df.at[idx, "Price source"] = PRICE_SOURCE_MCMASTER
+        df.at[idx, "Pack Size"] = size
+        df.at[idx, "Packs to Buy"] = packs_to_buy(df.at[idx, "Item Qty"], size)
+        count += 1
+    return count
+
+
 # ---------------------------------------------------------------------------
 # High-level orchestrators used by the MCP tools
 # ---------------------------------------------------------------------------
@@ -1437,6 +1502,8 @@ def price_bom_dataframe(
     export_vendor = {c: df[c].copy()
                      for c in ("Vendor", "Vendor Number", "HS/HTS Code") if c in df.columns}
     file_cost = df["Cost"].copy() if "Cost" in df.columns else None
+    mc_price = df[MCMASTER_PACK_PRICE].copy() if MCMASTER_PACK_PRICE in df.columns else None
+    mc_size = df[MCMASTER_PACK_SIZE].copy() if MCMASTER_PACK_SIZE in df.columns else None
     ref_info: dict[str, Any] = {}
     df, matched, total, unmatched, warnings = _enrich_with_reference(
         df, reference_path=reference_path, info=ref_info)
@@ -1453,7 +1520,9 @@ def price_bom_dataframe(
     if fill_state:
         warnings.extend(_fill_state_from_vault(df))
     apply_price_source(df, file_cost)
+    mcmaster = apply_mcmaster_price(df, mc_price, mc_size)
     info = {
+        "mcmaster_priced": mcmaster,
         "matched_parts": matched,
         "total_purchased_parts": total,
         "unmatched_parts": unmatched,
@@ -1506,6 +1575,7 @@ def generate_from_dataframe(
         "warnings": info["warnings"],
         "reference_source": info["reference_source"],
         "reference_signin_needed": info["reference_signin_needed"],
+        "mcmaster_priced": info.get("mcmaster_priced", 0),
     }
 
 
