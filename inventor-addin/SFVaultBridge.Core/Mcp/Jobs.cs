@@ -200,7 +200,7 @@ public sealed class JobManager
 public static class JobTools
 {
     public static McpTool Build(JobManager jobs) => new("job_status", "Job status",
-        "Check a write that was still running when the tool returned {status:\"running\", job_id}: fix_data_card_apply or mcmaster_intake_commit. " +
+        "Check a write that was still running when the tool returned {status:\"running\", job_id}: fix_data_card_apply, mcmaster_intake_commit or vault_submit_pdf_job_apply. " +
         "Returns running (call again), done with the final result, failed with the error, or cancelled. Waits up to 20 seconds for a running job. " +
         "Never start the write again while its job is running or after it is done; read the result here. Jobs are kept for 1 hour. " +
         "Set cancel true to cancel a job that has not started yet (rarely needed).",

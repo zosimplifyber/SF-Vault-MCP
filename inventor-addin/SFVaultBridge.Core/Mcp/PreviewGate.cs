@@ -98,6 +98,16 @@ public sealed class PreviewStore<T> where T : class
         }
     }
 
+    /// <summary>Stores the payload under a caller-chosen key (for example a hash of what was previewed).</summary>
+    public void PutAs(string key, T payload)
+    {
+        lock (_gate)
+        {
+            Purge();
+            _items[key] = (_clock(), payload);
+        }
+    }
+
     public T? Take(string? token)
     {
         lock (_gate)

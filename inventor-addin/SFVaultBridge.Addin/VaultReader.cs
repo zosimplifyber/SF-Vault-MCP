@@ -16,13 +16,13 @@ internal sealed class VaultReader : IVaultReader
 
     // ---- summaries ----
 
-    private sealed class Lookups
+    internal sealed class Lookups
     {
         public readonly Dictionary<long, string> Folders = new();
         public readonly Dictionary<long, string> Users = new();
     }
 
-    private static string FolderOf(Lookups l, long folderId)
+    internal static string FolderOf(Lookups l, long folderId)
     {
         if (l.Folders.TryGetValue(folderId, out var p)) return p;
         try { p = Ds.GetFolderById(folderId)?.FullName ?? ""; } catch (Exception) { p = ""; }
@@ -40,13 +40,13 @@ internal sealed class VaultReader : IVaultReader
         return l.Users[userId] = n;
     }
 
-    private static VaultFileSummary Summarize(Lookups l, WsFile f) =>
+    internal static VaultFileSummary Summarize(Lookups l, WsFile f) =>
         new(f.Id, f.MasterId, f.Name, FolderOf(l, f.FolderId), VaultFiles.StateOf(f), VaultFiles.RevisionOf(f), VaultFiles.CategoryName(f) ?? "",
             f.VerNum, f.MaxCkInVerNum, f.CheckedOut, f.CheckedOut ? UserOf(l, f.CkOutUserId) : "");
 
     // ---- resolving ----
 
-    private static WsFile Resolve(Lookups l, VaultFileRef r)
+    internal static WsFile Resolve(Lookups l, VaultFileRef r)
     {
         if (r.FileId is { } id)
         {
