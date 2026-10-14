@@ -25,7 +25,8 @@
     { "name": "fix_data_card_preview", "description": "Preview a data card fix (no changes)." },
     { "name": "fix_data_card_apply", "description": "Apply a previewed data card fix; needs confirm." },
     { "name": "mcmaster_intake_preview", "description": "Preview a McMaster part intake (no changes)." },
-    { "name": "mcmaster_intake_commit", "description": "Commit a previewed McMaster intake; needs confirm." }
+    { "name": "mcmaster_intake_commit", "description": "Commit a previewed McMaster intake; needs confirm." },
+    { "name": "job_status", "description": "Status or result of a long write started by an apply or commit tool." }
   ],
   "tools_generated": true,
   "keywords": ["vault", "inventor", "simplifyber"],

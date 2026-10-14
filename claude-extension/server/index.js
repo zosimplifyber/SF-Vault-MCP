@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 
+const REQUEST_TIMEOUT_MS = 120000;
+const SLOW_MESSAGE = 'SF Vault Bridge is still busy in Inventor (a dialog may be open there). If this was a write, call job_status before retrying.';
 const DOWN_MESSAGE = 'Start Inventor and sign in to Vault; the SF Vault Bridge add-in serves these tools.';
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -40,7 +42,8 @@ function createRelay(opts = {}) {
     };
     if (token) headers['X-Bridge-Token'] = token;
     if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-    return fetch(url, { method: 'POST', headers, body });
+    // The add-in answers reads within 90 s and parks long writes as jobs after 45 s, so 120 s is never cut short by design.
+    return fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   }
 
   async function parseResponse(res) {
@@ -105,8 +108,13 @@ function createRelay(opts = {}) {
         res = await post(body);
       }
     } catch (e) {
-      log(`bridge request failed: ${(e.cause && e.cause.code) || e.message}`);
-      if (!isNotification) write(localAnswer(msg));
+      log(`bridge request failed: ${(e.cause && e.cause.code) || e.name || e.message}`);
+      if (isNotification) return;
+      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+        write({ jsonrpc: '2.0', id: msg.id, error: { code: -32002, message: SLOW_MESSAGE } });
+        return;
+      }
+      write(localAnswer(msg));
       return;
     }
     const sid = res.headers.get('mcp-session-id');
