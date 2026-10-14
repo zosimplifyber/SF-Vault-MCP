@@ -185,7 +185,10 @@ public static class ExtraTools
         };
         if (spec.FolderPath is not null) o["folder"] = spec.FolderPath;
         if (r.Truncated || r.Files.Count > spec.Limit) o["truncated"] = true;
-        if (files.Count == 0) o["hint"] = "No file matches. Check the property names with vault_property_definitions, or loosen a condition.";
+        if (r.Partial) o["partial"] = true;
+        if (r.RawCapHit) o["raw_count"] = r.RawCount;
+        if (!string.IsNullOrEmpty(r.Warning)) o["warning"] = r.Warning;
+        if (files.Count == 0 && !r.Partial && !r.Truncated) o["hint"] = "No file matches. Check the property names with vault_property_definitions, or loosen a condition.";
         return o;
     }
 
@@ -299,19 +302,21 @@ public static class ExtraTools
 
     internal static JsonNode Categories(IVaultExtras v)
     {
-        var rows = v.Categories().OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Select(c =>
+        var src = v.Categories().OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var rows = src.Take(ExtraRules.ListCap).Select(c =>
         {
             var o = new JsonObject { ["name"] = c.Name };
             Put(o, "description", c.Description);
             o["applies_to"] = new JsonArray(c.EntityClasses.Select(e => (JsonNode?)JsonValue.Create(e)).ToArray());
             return o;
         }).ToList();
-        return new JsonObject { ["count"] = rows.Count, ["categories"] = Arr(rows) };
+        return Capped(new JsonObject { ["count"] = rows.Count, ["categories"] = Arr(rows) }, src.Count, rows.Count);
     }
 
     internal static JsonNode Lifecycles(IVaultExtras v)
     {
-        var rows = v.Lifecycles().Select(d =>
+        var src = v.Lifecycles();
+        var rows = src.Take(ExtraRules.ListCap).Select(d =>
         {
             var names = d.States.ToDictionary(s => s.Id, s => s.Name);
             var o = new JsonObject { ["name"] = d.Name };
@@ -327,12 +332,13 @@ public static class ExtraTools
                 .Select(t => new JsonObject { ["from"] = names[t.FromId], ["to"] = names[t.ToId] }));
             return o;
         }).ToList();
-        return new JsonObject { ["count"] = rows.Count, ["lifecycles"] = Arr(rows) };
+        return Capped(new JsonObject { ["count"] = rows.Count, ["lifecycles"] = Arr(rows) }, src.Count, rows.Count);
     }
 
     internal static JsonNode RevisionSchemes(IVaultExtras v)
     {
-        var rows = v.RevisionSchemes().Select(s =>
+        var src = v.RevisionSchemes();
+        var rows = src.Take(ExtraRules.ListCap).Select(s =>
         {
             var o = new JsonObject { ["name"] = s.Name };
             Put(o, "description", s.Description); Put(o, "delimiter", s.Delimiter);
@@ -344,25 +350,27 @@ public static class ExtraTools
             }));
             return o;
         }).ToList();
-        return new JsonObject { ["count"] = rows.Count, ["revision_schemes"] = Arr(rows) };
+        return Capped(new JsonObject { ["count"] = rows.Count, ["revision_schemes"] = Arr(rows) }, src.Count, rows.Count);
     }
 
     internal static JsonNode Users(IVaultExtras v, JsonObject a)
     {
         var activeOnly = Args.Bool(a, "active_only", true);
-        var rows = v.Users().Where(u => !activeOnly || u.Active).OrderBy(u => u.Name, StringComparer.OrdinalIgnoreCase).Select(u =>
+        var src = v.Users().Where(u => !activeOnly || u.Active).OrderBy(u => u.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var rows = src.Take(ExtraRules.ListCap).Select(u =>
         {
             var o = new JsonObject { ["name"] = u.Name };
             Put(o, "email", u.Email); Put(o, "sign_in", u.Auth);
             o["active"] = u.Active;
             return o;
         }).ToList();
-        return new JsonObject { ["count"] = rows.Count, ["users"] = Arr(rows) };
+        return Capped(new JsonObject { ["count"] = rows.Count, ["users"] = Arr(rows) }, src.Count, rows.Count);
     }
 
     internal static JsonNode Groups(IVaultExtras v)
     {
-        var rows = v.Groups().OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase).Select(g =>
+        var src = v.Groups().OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var rows = src.Take(ExtraRules.ListCap).Select(g =>
         {
             var o = new JsonObject { ["name"] = g.Name };
             Put(o, "email", g.Email);
@@ -373,10 +381,16 @@ public static class ExtraTools
             if (g.ChildGroups.Count > 0) o["groups"] = new JsonArray(g.ChildGroups.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).Select(n => (JsonNode?)JsonValue.Create(n)).ToArray());
             return o;
         }).ToList();
-        return new JsonObject { ["count"] = rows.Count, ["groups"] = Arr(rows) };
+        return Capped(new JsonObject { ["count"] = rows.Count, ["groups"] = Arr(rows) }, src.Count, rows.Count);
     }
 
     // ---- helpers ----
+
+    private static JsonObject Capped(JsonObject o, int total, int shown)
+    {
+        if (total > shown) { o["truncated"] = true; o["total"] = total; }
+        return o;
+    }
 
     private static void Put(JsonObject o, string key, string? value)
     {

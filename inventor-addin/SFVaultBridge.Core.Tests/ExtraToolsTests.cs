@@ -25,6 +25,8 @@ public class ExtraToolsTests
         public int Submits; public string? SubmittedType; public IReadOnlyDictionary<string, string>? SubmittedParams; public string? SubmittedDesc; public int SubmittedPriority;
         public VaultFileRef? LastTargetRef;
         public int FilesInFolder = 2;
+        public AdvancedSearchResult? SearchOut;
+        public int ManyUsers;
 
         public VaultFolderInfo FindFolder(string path) =>
             path == "$/Nope" ? throw new BridgeException("not_found", "No Vault folder at $/Nope.") : new VaultFolderInfo(7, path.Split('/').Last(), path, 3);
@@ -35,10 +37,10 @@ public class ExtraToolsTests
             return new FolderListing(new VaultFolderInfo(7, "X", "$/X", 3), new[] { new VaultFolderInfo(8, "sub", "$/X/sub", 0) }, files, false, false);
         }
         public IReadOnlyList<PropDefLite> FileSearchProperties() => Defs;
-        public VaultSearchResult Search(MappedSearch search)
+        public AdvancedSearchResult Search(MappedSearch search)
         {
             LastSearch = search;
-            return new VaultSearchResult(new[] { new VaultFileSummary(1, 101, "CD-1.ipt", "$/X", "Released", "A", "Part", 1, 1) }, false);
+            return SearchOut ?? new AdvancedSearchResult(new[] { new VaultFileSummary(1, 101, "CD-1.ipt", "$/X", "Released", "A", "Part", 1, 1) }, false);
         }
         public bool JobQueueEnabled() => QueueEnabled;
         public IReadOnlyList<VaultJobInfo> RecentJobs(int max) => Jobs;
@@ -63,7 +65,7 @@ public class ExtraToolsTests
         {
             new RevisionSchemeInfo("Letters", "", ".", new[] { new RevisionSequenceInfo("primary", "A-Z", Enumerable.Range(0, 26).Select(i => ((char)('A' + i)).ToString()).ToList()) }),
         };
-        public IReadOnlyList<VaultUserInfo> Users() => new[]
+        public IReadOnlyList<VaultUserInfo> Users() => ManyUsers > 0 ? Enumerable.Range(0, ManyUsers).Select(i => new VaultUserInfo(i, "U" + i, "", true, "Vault")).ToList() : new[]
         {
             new VaultUserInfo(1, "Zed", "z@x.com", true, "Windows"), new VaultUserInfo(2, "Amy", "", true, "Vault"), new VaultUserInfo(3, "Old", "", false, "Vault"),
         };
@@ -220,9 +222,9 @@ public class ExtraToolsTests
         var m = r.V.LastSearch!;
         Assert.False(m.Any); Assert.True(m.Recurse); Assert.True(m.LatestOnly); Assert.Equal(50, m.Limit); Assert.Null(m.FolderPath);
         Assert.Equal(2, m.Conditions[0].PropDefId);
-        Assert.Equal(ExtraRules.OpEquals, m.Conditions[0].OperatorCode);
+        Assert.Equal(ExtraRules.Code(SearchOp.Equals), m.Conditions[0].OperatorCode);
         Assert.Equal(3, m.Conditions[1].PropDefId);
-        Assert.Equal(ExtraRules.OpContains, m.Conditions[1].OperatorCode);
+        Assert.Equal(ExtraRules.Code(SearchOp.Contains), m.Conditions[1].OperatorCode);
         Assert.Equal("all", o["match"]!.GetValue<string>());
         Assert.Equal(1, o["count"]!.GetValue<int>());
     }
@@ -253,12 +255,12 @@ public class ExtraToolsTests
         Assert.Equal("unknown_property", new Rig().Fails("vault_advanced_search", Search(Cond("Old Thing", "equals", "x"))).Code);
 
     [Theory]
-    [InlineData("contains", ExtraRules.OpContains, false)]
-    [InlineData("starts_with", ExtraRules.OpContains, true)]
-    [InlineData("equals", ExtraRules.OpEquals, false)]
-    [InlineData("not_equals", ExtraRules.OpNotEquals, false)]
-    [InlineData("Is-Empty", ExtraRules.OpIsEmpty, false)]
-    [InlineData("is not empty", ExtraRules.OpIsNotEmpty, false)]
+    [InlineData("contains", 1, false)]
+    [InlineData("starts_with", 1, true)]
+    [InlineData("equals", 3, false)]
+    [InlineData("not_equals", 4, false)]
+    [InlineData("Is-Empty", 9, false)]
+    [InlineData("is not empty", 10, false)]
     public void Operators_map_to_vault_codes(string op, int code, bool startsWith)
     {
         var r = new Rig();
@@ -273,9 +275,9 @@ public class ExtraToolsTests
     {
         var r = new Rig();
         r.Call("vault_advanced_search", Search(Cond("Cost", "greater_than", 2.5), Cond("Cost", "less_than", "10")));
-        Assert.Equal(ExtraRules.OpGreater, r.V.LastSearch!.Conditions[0].OperatorCode);
+        Assert.Equal(ExtraRules.Code(SearchOp.GreaterThan), r.V.LastSearch!.Conditions[0].OperatorCode);
         Assert.Equal("2.5", r.V.LastSearch.Conditions[0].Text);
-        Assert.Equal(ExtraRules.OpLess, r.V.LastSearch.Conditions[1].OperatorCode);
+        Assert.Equal(ExtraRules.Code(SearchOp.LessThan), r.V.LastSearch.Conditions[1].OperatorCode);
         Assert.Equal("bad_request", r.Fails("vault_advanced_search", Search(Cond("Cost", "equals", "cheap"))).Code);
         Assert.Equal("bad_request", r.Fails("vault_advanced_search", Search(Cond("Cost", "contains", "1"))).Code);
         Assert.Equal("bad_request", r.Fails("vault_advanced_search", Search(Cond("State", "greater_than", "A"))).Code);
@@ -582,5 +584,37 @@ public class ExtraToolsTests
         Assert.Equal(2, g["member_count"]!.GetValue<int>());
         Assert.Equal("Amy", g["users"]![0]!.GetValue<string>());
         Assert.Equal("Interns", g["groups"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Operator_codes_live_in_one_table_covering_every_operator()
+    {
+        foreach (var op in Enum.GetValues<SearchOp>()) Assert.True(ExtraRules.OperatorCodes.ContainsKey(op), op.ToString());
+        Assert.Equal(ExtraRules.OperatorCodes[SearchOp.Contains], ExtraRules.OperatorCodes[SearchOp.StartsWith]);
+    }
+
+    [Fact]
+    public void Search_output_carries_partial_raw_count_and_warning()
+    {
+        var r = new Rig();
+        r.V.SearchOut = new AdvancedSearchResult(Array.Empty<VaultFileSummary>(), true, Partial: true, RawCapHit: true, RawCount: 1000, Warning: "w");
+        var o = r.Call("vault_advanced_search", Search(Cond("State", "starts_with", "Rel")));
+        Assert.True(o["truncated"]!.GetValue<bool>());
+        Assert.True(o["partial"]!.GetValue<bool>());
+        Assert.Equal(1000, o["raw_count"]!.GetValue<int>());
+        Assert.Equal("w", o["warning"]!.GetValue<string>());
+        Assert.Null(o["hint"]);
+    }
+
+    [Fact]
+    public void Lists_are_capped_at_500_with_truncated_flag()
+    {
+        var r = new Rig();
+        r.V.ManyUsers = 600;
+        var o = r.Call("vault_users");
+        Assert.Equal(500, o["count"]!.GetValue<int>());
+        Assert.True(o["truncated"]!.GetValue<bool>());
+        Assert.Equal(600, o["total"]!.GetValue<int>());
+        Assert.Null(new Rig().Call("vault_users")["truncated"]);
     }
 }

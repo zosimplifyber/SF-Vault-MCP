@@ -13,8 +13,7 @@ internal sealed class VaultExtrasReader : IVaultExtras
     private static VDF.Vault.Currency.Connections.Connection Conn => VaultSession.Connection;
     private static DocumentService Ds => Conn.WebServiceManager.DocumentService;
 
-    private const int RawSearchCap = 1000;
-    private static readonly string[] CategoryClasses = { "FILE", "FLDR", "ITEM", "CO" };
+        private static readonly string[] CategoryClasses = { "FILE", "FLDR", "ITEM", "CO" };
 
     // ---- folders ----
 
@@ -63,70 +62,54 @@ internal sealed class VaultExtrasReader : IVaultExtras
     public IReadOnlyList<PropDefLite> PropertyDefinitions(string entityClass) =>
         (Conn.WebServiceManager.PropertyService.GetPropertyDefinitionsByEntityClassId(entityClass) ?? Array.Empty<PropDef>()).Select(Lite).ToList();
 
-    public VaultSearchResult Search(MappedSearch search)
+    public AdvancedSearchResult Search(MappedSearch search)
     {
         var l = new VaultReader.Lookups();
-        var conds = search.Conditions.Select(c => new SrchCond
-        {
-            PropDefId = c.PropDefId, PropTyp = PropertySearchType.SingleProperty, SrchOper = c.OperatorCode, SrchTxt = c.Text,
-            SrchRule = search.Any ? SearchRuleType.May : SearchRuleType.Must,
-        }).ToArray();
         long folderId = search.FolderPath is { } p ? ResolveFolder(new FolderRef(p, null)).Id : Ds.GetFolderRoot().Id;
-        var postFilter = search.Conditions.Where(c => c.StartsWith).ToList();
-        var want = postFilter.Count > 0 ? RawSearchCap : search.Limit + 1;
 
-        var raw = new List<WsFile>();
-        var seen = new HashSet<long>();
-        var bookmark = string.Empty;
-        var fetched = 0L;
-        var more = false;
-        while (raw.Count < want)
+        RawFetch<WsFile> Fetch(IReadOnlyList<MappedCondition> cs, bool any, int cap)
         {
-            var page = Ds.FindFilesBySearchConditions(conds, null, new[] { folderId }, search.Recurse, search.LatestOnly, ref bookmark, out var status);
-            if (page is null || page.Length == 0) break;
-            fetched += page.Length;
-            foreach (var f in page) if (seen.Add(f.Id)) raw.Add(f);
-            if (status is null || fetched >= status.TotalHits) break;
-            more = true;
+            var conds = cs.Select(c => new SrchCond
+            {
+                PropDefId = c.PropDefId, PropTyp = PropertySearchType.SingleProperty, SrchOper = c.OperatorCode, SrchTxt = c.Text,
+                SrchRule = any ? SearchRuleType.May : SearchRuleType.Must,
+            }).ToArray();
+            var items = new List<WsFile>();
+            var seen = new HashSet<long>();
+            var bookmark = string.Empty;
+            var fetched = 0L;
+            var more = false;
+            while (items.Count < cap)
+            {
+                var page = Ds.FindFilesBySearchConditions(conds, null, new[] { folderId }, search.Recurse, search.LatestOnly, ref bookmark, out var status);
+                if (page is null || page.Length == 0) break;
+                fetched += page.Length;
+                foreach (var f in page) if (seen.Add(f.Id)) items.Add(f);
+                if (status is null || fetched >= status.TotalHits) break;
+                more = true;
+            }
+            return new RawFetch<WsFile>(items, more && items.Count >= cap);
         }
-        var truncated = raw.Count > search.Limit && postFilter.Count == 0;
-        if (postFilter.Count > 0)
-        {
-            raw = FilterStartsWith(raw, postFilter, search.Any, search.Conditions.Count);
-            truncated = raw.Count > search.Limit;
-        }
-        else if (raw.Count >= want && more) truncated = true;
-        var files = raw.Take(search.Limit).Select(f => VaultReader.Summarize(l, f)).ToList();
-        return new VaultSearchResult(files, truncated);
+
+        var run = SearchRunner.Run(search, Fetch, f => f.Id, ids => PropertyValues(ids));
+        var files = run.Items.Select(f => VaultReader.Summarize(l, f)).ToList();
+        return new AdvancedSearchResult(files, run.Truncated, run.Partial, run.RawCapHit, run.RawCount, run.Warning);
     }
 
-    // starts_with is searched as contains, then checked here against the files' own values (fetched 100 files at a time).
-    private static List<WsFile> FilterStartsWith(List<WsFile> files, List<MappedCondition> starts, bool any, int totalConditions)
+    // File property values per file id; null when the read failed (the runner reports the files as unchecked, never as non-matching).
+    private static IReadOnlyDictionary<long, IReadOnlyDictionary<long, string>>? PropertyValues(IReadOnlyList<long> ids)
     {
-        // With OR across other conditions a file that matched only those cannot be judged here, so everything stays.
-        if (any && totalConditions > starts.Count) return files;
-        var kept = new List<WsFile>();
-        for (var i = 0; i < files.Count; i += 100)
+        try
         {
-            var batch = files.Skip(i).Take(100).ToList();
             var values = new Dictionary<long, Dictionary<long, string>>();
-            try
+            foreach (var p in Conn.WebServiceManager.PropertyService.GetPropertiesByEntityIds("FILE", ids.ToArray()) ?? Array.Empty<PropInst>())
             {
-                foreach (var p in Conn.WebServiceManager.PropertyService.GetPropertiesByEntityIds("FILE", batch.Select(f => f.Id).ToArray()) ?? Array.Empty<PropInst>())
-                {
-                    if (!values.TryGetValue(p.EntityId, out var m)) values[p.EntityId] = m = new Dictionary<long, string>();
-                    m[p.PropDefId] = p.Val is DateTime dt ? dt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : p.Val?.ToString() ?? "";
-                }
+                if (!values.TryGetValue(p.EntityId, out var m)) values[p.EntityId] = m = new Dictionary<long, string>();
+                m[p.PropDefId] = p.Val is DateTime dt ? dt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : p.Val?.ToString() ?? "";
             }
-            catch (Exception) { continue; /* unreadable: these files fail the check */ }
-            foreach (var f in batch)
-            {
-                values.TryGetValue(f.Id, out var m);
-                var ok = starts.Select(c => m is not null && m.TryGetValue(c.PropDefId, out var v) && v.StartsWith(c.Text, StringComparison.OrdinalIgnoreCase)).ToList();
-                if (any ? ok.Any(x => x) : ok.All(x => x)) kept.Add(f);
-            }
+            return values.ToDictionary(k => k.Key, k => (IReadOnlyDictionary<long, string>)k.Value);
         }
-        return kept;
+        catch (Exception) { return null; }
     }
 
     // ---- job queue ----

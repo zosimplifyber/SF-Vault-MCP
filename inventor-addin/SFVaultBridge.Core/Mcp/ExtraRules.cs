@@ -12,8 +12,22 @@ public static class ExtraRules
     public const int JobsDefault = 25, JobsMax = 200;
     public const int MemberListMax = 200;
 
-    // Vault SrchCond.SrchOper codes (Vault SDK: 1 contains, 2 does not contain, 3 is exactly, 4 is not, 5 >, 6 >=, 7 <, 8 <=, 9 is empty, 10 is not empty).
-    public const int OpContains = 1, OpEquals = 3, OpNotEquals = 4, OpGreater = 5, OpLess = 7, OpIsEmpty = 9, OpIsNotEmpty = 10;
+    /// <summary>THE table of Vault SrchCond.SrchOper codes, one place to change after live verification. Taken from SDK memory, NOT yet verified against a live Vault:
+    /// 1 contains, 2 does not contain, 3 is exactly, 4 is not, 5 greater than, 6 greater or equal, 7 less than, 8 less or equal, 9 is empty, 10 is not empty.
+    /// starts_with has no Vault operator: it is sent as contains and checked client-side (see SearchRunner).</summary>
+    public static readonly IReadOnlyDictionary<SearchOp, int> OperatorCodes = new Dictionary<SearchOp, int>
+    {
+        [SearchOp.Contains] = 1,
+        [SearchOp.StartsWith] = 1,
+        [SearchOp.Equals] = 3,
+        [SearchOp.NotEquals] = 4,
+        [SearchOp.GreaterThan] = 5,
+        [SearchOp.LessThan] = 7,
+        [SearchOp.IsEmpty] = 9,
+        [SearchOp.IsNotEmpty] = 10,
+    };
+
+    public const int ListCap = 500;
 
     public static readonly string[] OperatorNames = { "contains", "equals", "not_equals", "starts_with", "greater_than", "less_than", "is_empty", "is_not_empty" };
 
@@ -161,16 +175,7 @@ public static class ExtraRules
         return text;
     }
 
-    public static int Code(SearchOp op) => op switch
-    {
-        SearchOp.Contains or SearchOp.StartsWith => OpContains,
-        SearchOp.Equals => OpEquals,
-        SearchOp.NotEquals => OpNotEquals,
-        SearchOp.GreaterThan => OpGreater,
-        SearchOp.LessThan => OpLess,
-        SearchOp.IsEmpty => OpIsEmpty,
-        _ => OpIsNotEmpty,
-    };
+    public static int Code(SearchOp op) => OperatorCodes[op];
 
     // ---- jobs ----
 

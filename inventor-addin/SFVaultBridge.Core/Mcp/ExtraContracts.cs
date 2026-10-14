@@ -23,6 +23,10 @@ public sealed record MappedCondition(long PropDefId, string PropName, int Operat
 
 public sealed record MappedSearch(IReadOnlyList<MappedCondition> Conditions, bool Any, string? FolderPath, bool Recurse, bool LatestOnly, int Limit);
 
+/// <summary>Advanced search outcome. Truncated: more matched than returned (or the raw fetch cap was hit, see RawCapHit with RawCount).
+/// Partial: some files could not be checked client-side and were left out; Warning says so.</summary>
+public sealed record AdvancedSearchResult(IReadOnlyList<VaultFileSummary> Files, bool Truncated, bool Partial = false, bool RawCapHit = false, int RawCount = 0, string? Warning = null);
+
 public sealed record VaultJobInfo(long Id, string Type, string Status, string Message, string Submitter, string Created, string Description,
                                   string FileName, long FileVersionId, int Priority);
 
@@ -52,7 +56,7 @@ public interface IVaultExtras
     IReadOnlyList<PropDefLite> FileSearchProperties();
 
     /// <summary>Runs the mapped conditions (ANDed, or ORed when Any) and returns at most Limit files; sets Truncated when more matched.</summary>
-    VaultSearchResult Search(MappedSearch search);
+    AdvancedSearchResult Search(MappedSearch search);
 
     bool JobQueueEnabled();
 
