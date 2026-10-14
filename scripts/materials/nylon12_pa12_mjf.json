@@ -1,0 +1,13 @@
+{
+  "name": "Nylon 12 (PA12, MJF)",
+  "description": "HP MJF PA12, printed by ABC Corp",
+  "material_class": "Plastic",
+  "density": { "value": 1.01, "unit": "g/cm3" },
+  "youngs_modulus": { "value": 1800, "unit": "MPa" },
+  "poissons_ratio": { "value": 0.40, "unit": "" },
+  "yield_strength": { "value": 48, "unit": "MPa" },
+  "tensile_strength": { "value": 48, "unit": "MPa" },
+  "elongation": { "value": 20, "unit": "%" },
+  "thermal_expansion": { "value": 1.0e-4, "unit": "1/C" },
+  "thermal_conductivity": { "value": 0.2, "unit": "W/(m K)" }
+}

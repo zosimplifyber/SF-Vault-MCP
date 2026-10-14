@@ -11,7 +11,8 @@ public static class BridgeOps
     public static void RegisterAll(Router router, IVaultSession vault, IStepImporter inventor, PathGuard guard,
                                    string bridgeVersion, Func<Func<JsonNode?>, JsonNode?> onUi,
                                    IDataCardHost? dataCard = null, Action<string>? log = null,
-                                   IAttachPdfHost? attachPdf = null, IVendorPdfFetcher? pdfFetcher = null)
+                                   IAttachPdfHost? attachPdf = null, IVendorPdfFetcher? pdfFetcher = null,
+                                   IMaterialLibraryHost? materials = null)
     {
         void Reg(string name, Func<JsonObject, JsonNode?> op) => router.Register(name, body => onUi(() => op(body)));
 
@@ -81,6 +82,12 @@ public static class BridgeOps
             var req = AttachVendorPdf.ParseRequest(b, guard);
             if (attachPdf is null) throw new BridgeException("unavailable", "attach_vendor_pdf is not available in this build.");
             return AttachVendorPdf.Run(req, attachPdf, pdfFetcher, log);
+        });
+        Reg("add_library_material", b =>
+        {
+            var req = AddLibraryMaterial.ParseRequest(b);
+            if (materials is null) throw new BridgeException("unavailable", "add_library_material is not available in this build.");
+            return AddLibraryMaterial.Run(req, materials, log);
         });
     }
 

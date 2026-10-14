@@ -11,7 +11,7 @@ namespace SFVaultBridge.Addin;
 /// Fixes iProperties of existing Vault .ipt parts: check out through the signed-in VDF connection, edit in Inventor, check in a new version.
 /// Runs on Inventor's UI thread. Never connects on its own; uses the Vault add-in's session.
 /// </summary>
-internal sealed class DataCardHost : IAttachPdfHost
+internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHost
 {
     private const string LocalDiffers = "local copy differs from Vault; check in or discard local changes first";
 

@@ -177,6 +177,41 @@ def attach_vendor_pdf(files: Iterable[str], source: str = "mcmaster", dry_run: b
     return _call("attach_vendor_pdf", body, timeout=900)
 
 
+def add_library_material(library: str, values: dict[str, Any], name: str | None = None, dry_run: bool = True,
+                         revise_released: bool = False, comment: str | None = None) -> dict[str, Any]:
+    """Add a material to the team's shared Inventor material library stored in Vault. Dry run by default.
+
+    library is the Vault path of the .adsklib ($/VAULT STANDARDS/DESIGN DATA/Materials/SF Materials.adsklib).
+    values has name, description, material_class and one {"value": n, "unit": "..."} per property (density,
+    youngs_modulus, poissons_ratio, yield_strength, tensile_strength, thermal_expansion, thermal_conductivity,
+    specific_heat); see scripts/materials/nylon12_pa12_mjf.json. The preview writes nothing. The apply backs up the
+    local library file to %APPDATA%/Simplifyber/VaultBridge/backups, checks the library out, adds the material,
+    checks it in with the comment "Add material <name>" and verifies it; on any failure it undoes the checkout."""
+    if not library or not library.strip():
+        raise ValueError("library must not be empty")
+    if not isinstance(values, dict) or not values:
+        raise ValueError("values must be a non-empty object")
+    body: dict[str, Any] = {"library": library.strip(), "values": values, "dryRun": bool(dry_run)}
+    if name:
+        body["name"] = name
+    if revise_released:
+        body["reviseReleased"] = True
+    if comment:
+        body["comment"] = comment
+    return _call("add_library_material", body, timeout=900)
+
+
+def list_material_properties(material: str, library: str | None = None) -> dict[str, Any]:
+    """Read-only: every asset value (name, type, unit, value) of a material loaded in Inventor. Run it on an
+    existing material to confirm the structural_* value names add_library_material writes."""
+    if not material or not material.strip():
+        raise ValueError("material must not be empty")
+    body: dict[str, Any] = {"material": material.strip()}
+    if library:
+        body["library"] = library
+    return _call("list_material_properties", body)
+
+
 def staging_dir() -> Path:
     """Inside Downloads, the one place besides the workspace the add-in may read from."""
     return Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads" / "SF Vault Bridge" / "publish"
@@ -239,6 +274,16 @@ def build_parser():
     att.add_argument("--revise-released", action="store_true",
                      help="also handle released parts: Library -> Library Edit -> check in -> Library (never Content Center)")
     att.add_argument("--comment", default=None, help="check-in comment")
+    mat = sub.add_parser("add-material", help="Add a material to the shared Inventor material library in Vault (dry run unless --apply)")
+    mat.add_argument("--library", required=True, help='Vault path of the library, e.g. "$/VAULT STANDARDS/DESIGN DATA/Materials/SF Materials.adsklib"')
+    mat.add_argument("--name", default=None, help="display name of the new material (default: name in the JSON file)")
+    mat.add_argument("--json", required=True, dest="values_json", help="JSON file with the material values (see scripts/materials/nylon12_pa12_mjf.json)")
+    mat.add_argument("--apply", action="store_true", help="back up, check out, add, check in and verify (default is a preview)")
+    mat.add_argument("--revise-released", action="store_true", help="also handle a library in a released state (through its edit state and back)")
+    mat.add_argument("--comment", default=None, help='check-in comment (default: "Add material <name>")')
+    lmp = sub.add_parser("list-material-properties", help="Dump the asset values of a material loaded in Inventor (read only)")
+    lmp.add_argument("material", help="display name of the material")
+    lmp.add_argument("--library", default=None, help="loaded library file name or path, to narrow the search")
     pub = sub.add_parser("publish-release", help="Check a release zip into Vault at $/Tools/SF Vault Bridge/")
     pub.add_argument("zip", help="release/SF Vault Bridge <version>.zip from build-release.ps1")
     pub.add_argument("--version", default=None, help="x.y.z (default: from the zip name)")
@@ -261,6 +306,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         counts = result.get("counts", {})
         return 1 if counts.get("error") else 0
+    if args.command == "add-material":
+        values = json.loads(Path(args.values_json).read_text(encoding="utf-8-sig"))
+        result = add_library_material(args.library, values, name=args.name, dry_run=not args.apply,
+                                      revise_released=args.revise_released, comment=args.comment)
+        print(json.dumps(result, indent=2))
+        counts = result.get("counts", {})
+        return 1 if counts.get("error") else 0
+    if args.command == "list-material-properties":
+        print(json.dumps(list_material_properties(args.material, args.library), indent=2))
+        return 0
     if args.command == "publish-release":
         print(json.dumps(publish_release(args.zip, args.version), indent=2))
         return 0

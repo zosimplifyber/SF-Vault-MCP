@@ -226,6 +226,42 @@ The PDF is added beside the part in its Vault folder with category Documents. If
 
 In the Fix Data Card form, tick the **Attach McMaster PDF** box on the rows you want and press the **Attach McMaster PDF** button. It checks those parts (reading Vault only), lists what will be downloaded and added, and asks before writing. Tick **Revise and re-release Released parts** first for released parts. The same operation is the MCP pair `attach_vendor_pdf_preview` (arguments `file`, `source`, `revise_released`, returns a `preview_hash`) and `attach_vendor_pdf_apply` (needs the `preview_hash` and `confirm: true` within 10 minutes).
 
+### Add a material to the shared library
+
+Adds a material to the team's Inventor material library, `SF Materials.adsklib` in Vault (`$/VAULT STANDARDS/DESIGN DATA/Materials`), which Inventor's active project loads. It needs Inventor open and a Vault sign-in. The checked-in library is read-only on disk, so this does the checkout, edit and check-in in one step.
+
+First run, once: confirm the value names against a material that already exists. Nothing is written.
+
+```
+py -3.14 scripts/vault_bridge.py list-material-properties "Nylon 12" --library "SF Materials"
+```
+
+It dumps every asset value of that material (name, type, unit, value), following the physical and appearance assets it references. The names `add-material` writes are `structural_Density` (kg/m3), `structural_Young_modulus` (kPa), `structural_Poisson_ratio`, `structural_Minimum_yield_stress` (kPa), `structural_Minimum_tensile_strength` (kPa), `structural_Thermal_expansion_coefficient` (um/m/C), `structural_Thermal_conductivity` (W/(m K)) and `structural_Specific_heat` (J/(g C)), read from the schemas inside the library file. If the dump shows different names or units, stop and fix `MaterialRules.Properties` before an apply.
+
+Then preview, and apply:
+
+```
+py -3.14 scripts/vault_bridge.py add-material --library "$/VAULT STANDARDS/DESIGN DATA/Materials/SF Materials.adsklib" --name "Nylon 12 (PA12, MJF)" --json scripts/materials/nylon12_pa12_mjf.json
+py -3.14 scripts/vault_bridge.py add-material --library "$/VAULT STANDARDS/DESIGN DATA/Materials/SF Materials.adsklib" --name "Nylon 12 (PA12, MJF)" --json scripts/materials/nylon12_pa12_mjf.json --apply
+```
+
+The JSON has `name`, `description`, `material_class` (Plastic, Metal, ...) and one `{"value": 1.01, "unit": "g/cm3"}` per property: `density`, `youngs_modulus` and `poissons_ratio` are required; `yield_strength`, `tensile_strength`, `thermal_expansion`, `thermal_conductivity` and `specific_heat` are optional. Units are always explicit and converted to what Inventor stores (for example 1800 MPa becomes 1,800,000 kPa, 1.0e-4 1/C becomes 100 um/m/C); a unit that does not fit the property, or a value outside Inventor's allowed range, is refused with the field name. `elongation` is accepted but Inventor has no value for it, so the preview lists it as not stored.
+
+The preview writes nothing. It finds the library in Vault, checks the local copy is byte-identical to Vault's latest version (otherwise it stops: check in or discard local changes first), checks whether the material already exists in the copy Inventor has loaded (it never opens or changes a library in a preview; if Inventor does not have it loaded the apply checks again), and shows each value as it will be written. A library checked out by someone else, or in a released state without `--revise-released`, is skipped with the reason.
+
+The apply, on Inventor's UI thread:
+
+1. Copies the local library file to `%APPDATA%\Simplifyber\VaultBridge\backups\<name>-<timestamp>.adsklib`.
+2. Builds the material in a temporary hidden part document (`Document.Assets.Add(kAssetTypeMaterial, "Generic", ...)`), sets the description, class and values, and tries to add a matte plastic appearance from the active appearance library. A name or value Inventor refuses stops here, before Vault is touched.
+3. Closes the library in Inventor (`AssetLibrary.Remove`, which only unloads it), checks it out of Vault with the Vault API, opens it again with `AssetLibraries.Open` and checks `AssetLibrary.IsReadOnly` is false.
+4. `Asset.CopyTo(library)`, reads every value back, closes the library (the Inventor asset API has no Save; the file is written as the asset is copied in), checks it in with the comment `Add material <name>` (category and lifecycle are not changed), reopens it from the checked-in file and confirms the material is there. The temporary document is closed without saving, and Inventor's library list and active library are put back.
+
+Any failure after the checkout undoes the checkout, puts the backup back if the local file changed, reloads the library in Inventor and names the failed step (`backup`, `build`, `checkout`, `open`, `copy`, `verify`, `checkin`). The library is never left checked out. A failure after the check-in succeeds is a warning, not an undo. Run `add-material` again after a failure; a material that is already there is reported as no change.
+
+MCP: `list_material_properties` (read), `add_library_material_preview` (arguments `library`, `name`, `values`, `revise_released`, `comment`; returns a `preview_hash`) and `add_library_material_apply` (needs the `preview_hash` and `confirm: true` within 10 minutes).
+
+Status: built and unit tested, never run against Inventor or Vault. The Inventor asset API calls compile against Inventor 2026, but the first live run must start with `list-material-properties`, then a preview, then the apply, with the backups folder in mind.
+
 ### Process property
 
 Inventor custom property `Process` says how a Make part is made. Values: `CNC`, `3D Print`, `Sheet Metal`, `Weldment`, `In-house`, `Other`. Matching is case-insensitive and trimmed. It drives part selection in the Partner and 3D Print Packages.
@@ -308,6 +344,9 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `fix_data_card_apply` | write | Applies it; needs `confirm: true` and a matching preview in the last 10 minutes |
 | `attach_vendor_pdf_preview` | preview | Plans attaching the McMaster drawing PDF to an existing part (writes and downloads nothing), returns `preview_hash` |
 | `attach_vendor_pdf_apply` | write | Downloads, adds and attaches it; needs `preview_hash` and `confirm: true` within 10 minutes |
+| `list_material_properties` | read | Asset values (name, type, unit, value) of a material loaded in Inventor |
+| `add_library_material_preview` | preview | Plans adding a material to the shared Inventor material library (writes nothing), returns `preview_hash` |
+| `add_library_material_apply` | write | Backs up, checks the library out, adds the material, checks it in and verifies; needs `preview_hash` and `confirm: true` within 10 minutes |
 | `mcmaster_intake_preview` | preview | Plans a vendor part import from Downloads (STEP + PDF), returns a token |
 | `mcmaster_intake_commit` | write | Imports it via Import New Part; needs the token and `confirm: true` |
 | `vault_list_folder` | read | List a folder's subfolders and files (state, revision, category) |

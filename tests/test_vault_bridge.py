@@ -278,3 +278,69 @@ def test_attach_vendor_pdf_cli(server, capsys):
 def test_attach_vendor_pdf_cli_exit_code_follows_errors(server):
     server.replies["attach_vendor_pdf"] = (200, {"results": [], "counts": {"preview": 0, "fixed": 0, "no_change": 0, "skipped": 0, "error": 1}})
     assert vb.main(["attach-vendor-pdf", "a.ipt", "--apply"]) == 1
+
+
+NYLON_JSON = Path(__file__).resolve().parents[1] / "scripts" / "materials" / "nylon12_pa12_mjf.json"
+SF_LIBRARY = "$/VAULT STANDARDS/DESIGN DATA/Materials/SF Materials.adsklib"
+_MAT_REPLY = {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}}
+
+
+def test_sample_material_json_has_the_nylon_values():
+    values = json.loads(NYLON_JSON.read_text(encoding="utf-8"))
+    assert values["name"] == "Nylon 12 (PA12, MJF)"
+    assert values["description"] == "HP MJF PA12, printed by ABC Corp"
+    assert values["density"] == {"value": 1.01, "unit": "g/cm3"}
+    assert values["youngs_modulus"] == {"value": 1800, "unit": "MPa"}
+    assert values["poissons_ratio"]["value"] == 0.40
+    assert values["yield_strength"] == values["tensile_strength"] == {"value": 48, "unit": "MPa"}
+    assert values["elongation"] == {"value": 20, "unit": "%"}
+    assert values["thermal_expansion"] == {"value": 1.0e-4, "unit": "1/C"}
+    assert values["thermal_conductivity"] == {"value": 0.2, "unit": "W/(m K)"}
+    assert values["material_class"] == "Plastic"
+
+
+def test_add_library_material_request_body(server):
+    server.replies["add_library_material"] = (200, _MAT_REPLY)
+    values = {"name": "N", "density": {"value": 1, "unit": "g/cm3"}}
+    vb.add_library_material(SF_LIBRARY, values)
+    vb.add_library_material(SF_LIBRARY, values, name="Other", dry_run=False, revise_released=True, comment="c")
+    assert server.seen[0][0] == "add_library_material"
+    assert server.seen[0][1] == {"library": SF_LIBRARY, "values": values, "dryRun": True}
+    assert server.seen[1][1] == {"library": SF_LIBRARY, "values": values, "dryRun": False, "name": "Other", "reviseReleased": True, "comment": "c"}
+
+
+def test_add_library_material_rejects_empty_input(server):
+    with pytest.raises(ValueError):
+        vb.add_library_material("", {"name": "x"})
+    with pytest.raises(ValueError):
+        vb.add_library_material(SF_LIBRARY, {})
+
+
+def test_add_material_cli_previews_then_applies(server, capsys):
+    server.replies["add_library_material"] = (200, _MAT_REPLY)
+    assert vb.main(["add-material", "--library", SF_LIBRARY, "--name", "Nylon 12 (PA12, MJF)", "--json", str(NYLON_JSON)]) == 0
+    assert vb.main(["add-material", "--library", SF_LIBRARY, "--json", str(NYLON_JSON), "--apply", "--comment", "Add PA12"]) == 0
+    assert server.seen[0][1]["dryRun"] is True
+    assert server.seen[0][1]["name"] == "Nylon 12 (PA12, MJF)"
+    assert server.seen[0][1]["values"]["density"] == {"value": 1.01, "unit": "g/cm3"}
+    assert server.seen[1][1]["dryRun"] is False
+    assert server.seen[1][1]["comment"] == "Add PA12"
+    assert "name" not in server.seen[1][1]
+    assert '"counts"' in capsys.readouterr().out
+
+
+def test_add_material_cli_exit_code_follows_errors(server):
+    server.replies["add_library_material"] = (200, {"results": [], "counts": {"preview": 0, "fixed": 0, "no_change": 0, "skipped": 0, "error": 1}})
+    assert vb.main(["add-material", "--library", SF_LIBRARY, "--json", str(NYLON_JSON), "--apply"]) == 1
+
+
+def test_list_material_properties_cli(server, capsys):
+    server.replies["list_material_properties"] = (200, {"material": "Nylon 12", "count": 0, "rows": []})
+    assert vb.main(["list-material-properties", "Nylon 12", "--library", "SF Materials"]) == 0
+    vb.list_material_properties("ABS")
+    assert server.seen[0][0] == "list_material_properties"
+    assert server.seen[0][1] == {"material": "Nylon 12", "library": "SF Materials"}
+    assert server.seen[1][1] == {"material": "ABS"}
+    with pytest.raises(ValueError):
+        vb.list_material_properties(" ")
+    assert '"rows"' in capsys.readouterr().out
