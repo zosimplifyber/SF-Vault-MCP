@@ -14,7 +14,7 @@ param(
     [switch]$SkipInventorCheck
 )
 $ErrorActionPreference = 'Stop'
-$TeamKeys = 'processValues', 'printMaterials', 'dropboxAppKey', 'salesTaxRate'
+$TeamKeys = 'processValues', 'printMaterials', 'dropboxAppKey', 'salesTaxRate', 'mcmasterServerUrl'
 
 function Test-Empty($v) {
     # Empty team value: null, blank text or an empty list. Never replaces a non-empty user value.

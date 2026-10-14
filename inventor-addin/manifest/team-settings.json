@@ -2,5 +2,6 @@
   "processValues": ["CNC", "3D Print", "Sheet Metal", "Weldment", "In-house", "Other"],
   "printMaterials": ["PLA", "PETG", "ABS", "ASA", "PA11", "PA12", "Nylon", "TPU", "PC", "Resin", "CF"],
   "dropboxAppKey": "",
-  "salesTaxRate": 0.07
+  "salesTaxRate": 0.07,
+  "mcmasterServerUrl": "https://mcmaster.simplifyber-app.com/mcp"
 }

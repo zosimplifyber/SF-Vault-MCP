@@ -77,7 +77,7 @@ public static class AppVersion
 /// (null, blank text, empty list) never replaces a non-empty user value.</summary>
 public static class SettingsMerge
 {
-    public static readonly string[] TeamKeys = { "processValues", "printMaterials", "dropboxAppKey", "salesTaxRate" };
+    public static readonly string[] TeamKeys = { "processValues", "printMaterials", "dropboxAppKey", "salesTaxRate", "mcmasterServerUrl" };
     public static readonly string[] PersonalKeys = { "recentPartners", "userOverrides" };
 
     private static readonly System.Text.Json.JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };

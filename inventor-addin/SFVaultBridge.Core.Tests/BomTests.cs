@@ -43,8 +43,8 @@ public class BomTests : IDisposable
         var node = new BomNode("CD-1", "1/2\" bolt\twith tab", 2.5, "Each", "Purchased", "", "Steel", "CD-1.ipt", @"C:\x\CD-1.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
         var text = File.ReadAllText(path);
-        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\tCost\tHS/HTS Code\r\n", text);
-        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\t\tCD-1.ipt\t\t\t\t\r\n", text);
+        Assert.StartsWith("Item\tPart Number\tBOM Structure\tUnit QTY\tQTY\tDescription\tREV\tState\tMaterial\tProcess\tFile Name\tVendor\tVendor Number\tCost\tHS/HTS Code\tMcMaster Pack Price\tPack Size\tMcMaster Price Date\r\n", text);
+        Assert.Contains("1\tCD-1\tPurchased\tEach\t2.5\t\"1/2\"\" bolt with tab\"\t\t\tSteel\t\tCD-1.ipt\t\t\t\t\t\t\t\r\n", text);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class BomTests : IDisposable
         var path = Path.Combine(_dir, "bom-vendor.txt");
         var node = new BomNode("CD-2", "nut", 1, "Each", "Purchased", "", "", "CD-2.ipt", @"C:\x\CD-2.ipt", Array.Empty<BomNode>(), "Acme", "A-9");
         BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
-        Assert.Contains("CD-2.ipt\tAcme\tA-9\t\t\r\n", File.ReadAllText(path));
+        Assert.Contains("CD-2.ipt\tAcme\tA-9\t\t\t\t\t\r\n", File.ReadAllText(path));
     }
 
     [Fact]
@@ -64,8 +64,8 @@ public class BomTests : IDisposable
         var noCost = new BomNode("CD-6", "nut", 1, "Each", "Purchased", "", "", "CD-6.ipt", @"C:\x\CD-6.ipt", Array.Empty<BomNode>());
         BomFile.Write(path, BomOrdering.Flatten(new[] { withCost, noCost }));
         var text = File.ReadAllText(path);
-        Assert.Contains("CD-5.ipt\tAcme\tA-9\t4.5\t7318.15\r\n", text);
-        Assert.Contains("CD-6.ipt\t\t\t\t\r\n", text);
+        Assert.Contains("CD-5.ipt\tAcme\tA-9\t4.5\t7318.15\t\t\t\r\n", text);
+        Assert.Contains("CD-6.ipt\t\t\t\t\t\t\t\r\n", text);
     }
 
     [Fact]

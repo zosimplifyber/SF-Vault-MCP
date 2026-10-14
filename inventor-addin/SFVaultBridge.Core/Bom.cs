@@ -7,7 +7,8 @@ public sealed record BomNode(string PartNumber, string Description, double Quant
                              string Revision, string Material, string FileName, string FullPath, IReadOnlyList<BomNode> Children,
                              string Vendor = "", string VendorNumber = "", string State = "",
                              string Process = "", string MaterialFinish = "", bool IsSheetMetal = false,
-                             double? Cost = null, string HsCode = "", string Source = "");
+                             double? Cost = null, string HsCode = "", string Source = "",
+                             int? PackSize = null, double? McMasterPackPrice = null, string McMasterPriceDate = "");
 
 public sealed record BomLine(string Item, BomNode Node, int Depth);
 
@@ -47,7 +48,8 @@ public static class BomSource
 /// <summary>Tab-delimited BOM in the layout bom_purchasing.read_bom_file reads.</summary>
 public static class BomFile
 {
-    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "State", "Material", "Process", "File Name", "Vendor", "Vendor Number", "Cost", "HS/HTS Code" };
+    public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "State", "Material", "Process", "File Name", "Vendor", "Vendor Number", "Cost", "HS/HTS Code",
+                                               "McMaster Pack Price", "Pack Size", "McMaster Price Date" };
 
     public static void Write(string path, IReadOnlyList<BomLine> lines)
     {
@@ -62,6 +64,10 @@ public static class BomFile
                 Field(n.Quantity.ToString("G", CultureInfo.InvariantCulture)), Field(n.Description),
                 Field(n.Revision), Field(n.State), Field(n.Material), Field(n.Process), Field(n.FileName), Field(n.Vendor), Field(n.VendorNumber),
                 n.Cost is { } c ? c.ToString("G", CultureInfo.InvariantCulture) : "", Field(n.HsCode),
+                // Live McMaster price columns: filled only when this run fetched a live price for the row.
+                n.McMasterPackPrice is { } mp ? mp.ToString("G", CultureInfo.InvariantCulture) : "",
+                n.McMasterPackPrice is not null && n.PackSize is { } ps ? ps.ToString(CultureInfo.InvariantCulture) : "",
+                n.McMasterPackPrice is not null ? Field(n.McMasterPriceDate) : "",
             })).Append("\r\n");
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);

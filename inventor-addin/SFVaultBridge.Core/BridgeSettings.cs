@@ -6,9 +6,11 @@ using System.Text.Json.Nodes;
 namespace SFVaultBridge.Core;
 
 /// <summary>The per-user settings file: Process values, print materials and recent partner names.</summary>
-public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "", double SalesTaxRate = BridgeSettings.DefaultSalesTaxRate, IReadOnlyList<string>? UserOverrides = null)
+public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOnlyList<string> PrintMaterials, IReadOnlyList<string> RecentPartners, string DropboxAppKey = "", double SalesTaxRate = BridgeSettings.DefaultSalesTaxRate, IReadOnlyList<string>? UserOverrides = null,
+                                    string McMasterServerUrl = BridgeSettings.DefaultMcMasterServerUrl)
 {
     public const double DefaultSalesTaxRate = 0.07;
+    public const string DefaultMcMasterServerUrl = "https://mcmaster.simplifyber-app.com/mcp";
     public const int MaxRecent = 10;
 
     private static readonly BridgeSettings DefaultsValue = new(
@@ -29,6 +31,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         if (!original.PrintMaterials.SequenceEqual(edited.PrintMaterials, StringComparer.Ordinal)) changed.Add("printMaterials");
         if (!string.Equals(original.DropboxAppKey.Trim(), edited.DropboxAppKey.Trim(), StringComparison.Ordinal)) changed.Add("dropboxAppKey");
         if (Math.Abs(original.SalesTaxRate - edited.SalesTaxRate) > 1e-9) changed.Add("salesTaxRate");
+        if (!string.Equals(original.McMasterServerUrl.Trim(), edited.McMasterServerUrl.Trim(), StringComparison.Ordinal)) changed.Add("mcmasterServerUrl");
         return changed;
     }
 
@@ -65,6 +68,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         root["recentPartners"] = StringArray(edited.RecentPartners);
         root["dropboxAppKey"] = edited.DropboxAppKey.Trim();
         root["salesTaxRate"] = edited.SalesTaxRate;
+        root["mcmasterServerUrl"] = edited.McMasterServerUrl.Trim();
         root["userOverrides"] = StringArray(overrides);
         return TryWrite(path, root.ToJsonString(Indented), log);
     }
@@ -88,7 +92,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             Strings(root, "processValues") ?? DefaultsValue.ProcessValues,
             Strings(root, "printMaterials") ?? DefaultsValue.PrintMaterials,
             Normalize(Strings(root, "recentPartners") ?? DefaultsValue.RecentPartners),
-            AppKey(root), Rate(root), SettingsRules.CleanOverrides(Strings(root, "userOverrides")));
+            AppKey(root), Rate(root), SettingsRules.CleanOverrides(Strings(root, "userOverrides")), McMasterUrl(root));
     }
 
     public static IReadOnlyList<string> WithRecent(IReadOnlyList<string> recent, string partner)
@@ -119,6 +123,11 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
     private static string AppKey(JsonObject root) =>
         root["dropboxAppKey"] is JsonValue v && v.TryGetValue<string>(out var k) ? k.Trim() : "";
 
+    /// <summary>A valid stored mcmasterServerUrl, else the default (blank or junk never turns McMaster off by accident).</summary>
+    private static string McMasterUrl(JsonObject root) =>
+        root["mcmasterServerUrl"] is JsonValue v && v.TryGetValue<string>(out var u) && SettingsRules.TryParseServerUrl(u, out var clean, out _)
+            ? clean : DefaultMcMasterServerUrl;
+
     private static double Rate(JsonObject root)
     {
         if (root["salesTaxRate"] is JsonValue v && v.TryGetValue<double>(out var r) && r >= 0 && r <= 1 && double.IsFinite(r)) return r;
@@ -142,6 +151,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
             ["recentPartners"] = new JsonArray(recent.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
             ["dropboxAppKey"] = s.DropboxAppKey,
             ["salesTaxRate"] = s.SalesTaxRate,
+            ["mcmasterServerUrl"] = s.McMasterServerUrl,
         }.ToJsonString(Indented);
 
     private static bool TryRead(string path, Action<string> log, out JsonObject? root)

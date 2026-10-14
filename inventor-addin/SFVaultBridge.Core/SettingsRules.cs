@@ -19,6 +19,18 @@ public static class SettingsRules
         return true;
     }
 
+    /// <summary>The McMaster MCP server URL: an absolute https URL (http only to this PC), trimmed, no query or fragment.</summary>
+    public static bool TryParseServerUrl(string? text, out string url, out string error)
+    {
+        url = ""; error = "";
+        var t = (text ?? "").Trim();
+        if (t.Length == 0) { error = "Enter the McMaster server URL, for example " + BridgeSettings.DefaultMcMasterServerUrl + "."; return false; }
+        if (!Uri.TryCreate(t, UriKind.Absolute, out var u) || !McMaster.McMasterOAuth.IsAllowedUrl(t) || u.Query.Length > 0 || u.Fragment.Length > 0 || u.UserInfo.Length > 0)
+        { error = "The McMaster server URL must be a plain https address, for example " + BridgeSettings.DefaultMcMasterServerUrl + "."; return false; }
+        url = t;
+        return true;
+    }
+
     /// <summary>The stored fraction as text for the box (0.0825 gives "8.25").</summary>
     public static string PercentText(double fraction) =>
         Math.Round(fraction * 100.0, 6).ToString("0.######", CultureInfo.CurrentCulture);
