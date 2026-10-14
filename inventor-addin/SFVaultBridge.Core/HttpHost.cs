@@ -20,6 +20,9 @@ public sealed class HttpHost : IDisposable
 
     public DateTime? LastRequestUtc { get; private set; }
 
+    /// <summary>When set, POST /mcp is served by this MCP endpoint (same token, localhost only).</summary>
+    public McpServer? Mcp { get; set; }
+
     public HttpHost(string prefix, Router router, Action<string> log)
     {
         _listener.Prefixes.Add(prefix);
@@ -80,6 +83,21 @@ public sealed class HttpHost : IDisposable
                     string body;
                     using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8)) body = reader.ReadToEnd();
                     var path = ctx.Request.Url?.AbsolutePath ?? "/";
+                    if (Mcp is { } mcp && (path == "/mcp" || path == "/mcp/"))
+                    {
+                        var h = ctx.Request.Headers;
+                        var mr = mcp.Handle(new McpHttpRequest(ctx.Request.HttpMethod, h[TokenHeader], h["Authorization"], h["Origin"], h[McpServer.SessionHeader], body));
+                        var mbytes = mr.Body is null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(mr.Body);
+                        ctx.Response.StatusCode = mr.Status;
+                        if (mr.SessionId is not null) ctx.Response.Headers[McpServer.SessionHeader] = mr.SessionId;
+                        if (mr.Allow is not null) ctx.Response.Headers["Allow"] = mr.Allow;
+                        if (mbytes.Length > 0) ctx.Response.ContentType = "application/json";
+                        ctx.Response.ContentLength64 = mbytes.Length;
+                        if (mbytes.Length > 0) ctx.Response.OutputStream.Write(mbytes);
+                        ctx.Response.Close();
+                        if (mr.Status >= 400) SafeLog($"{path} -> {mr.Status} {mr.Body}");
+                        continue;
+                    }
                     var (status, json) = _router.Handle(ctx.Request.HttpMethod, path, ctx.Request.Headers[TokenHeader], body);
                     var bytes = Encoding.UTF8.GetBytes(json);
                     ctx.Response.StatusCode = status;
