@@ -30,7 +30,7 @@ The SF Vault Bridge tab has six panels: Status (the dot and Settings), Parts (Im
 
 Every BOM the add-in produces (Purchasing tab, Design Review and Assembly Package BOM pages, Partner `BOM.xlsx`, `Print List.xlsx`) has a State column, and rows whose Vault state is not Released are light yellow. In the Design Review BOM, yellow means Normal and not Released, and orange means a purchased part without a vendor drawing.
 
-- **Purchasing Sheet**: reads the assembly's BOM and builds the purchasing workbook and checks it into the assembly's Vault folder in the Documents category. The file is also saved next to the assembly. Running it again adds a new version of the same file. The Price source column says where each price came from (File = the BOM's own Cost, otherwise the purchasing list). Shipping is 0. Sales tax is 7% (setting `salesTaxRate`) unless the part has an HS/HTS Code, which makes it a tariff row left for you to fill in. The add-in reads Estimated Cost and the custom property `HS/HTS Code` from each component and writes them to the BOM file as `Cost` and `HS/HTS Code`. If anyone (including you) has the file checked out, nothing is written and you are told who has it.
+- **Purchasing Sheet**: reads the assembly's BOM and builds the purchasing workbook and checks it into the assembly's Vault folder in the Documents category. The file is also saved next to the assembly. Running it again adds a new version of the same file. The Price source column says where each price came from (McMaster = a live McMaster-Carr price, File = the BOM's own Cost, otherwise the purchasing list; see McMaster live prices below). Shipping is 0. Sales tax is 7% (setting `salesTaxRate`) unless the part has an HS/HTS Code, which makes it a tariff row left for you to fill in. The add-in reads Estimated Cost and the custom property `HS/HTS Code` from each component and writes them to the BOM file as `Cost` and `HS/HTS Code`. If anyone (including you) has the file checked out, nothing is written and you are told who has it.
 - **Design Review**: builds a PDF watermarked DRAFT with a cover that lists the assembly, the missing drawings and any drawings that failed to export. It then adds the latest Vault drawing of the assembly and of each component (purchased and standard parts are skipped). The PDF is built in a temp folder, then saved next to the assembly and checked into the same Vault folder (same checkout rule as above). Drawings are downloaded without their references, so Get Latest on the assembly first: a drawing whose models are not in the workspace yet exports with missing views and lands under "Could not export" or shows blanks. Phantom and reference rows are skipped. A drawing that fails is listed on the cover and never stops the package.
 
 ### Assembly Package
@@ -90,11 +90,27 @@ McMaster-Carr's API terms (version 2026-09-17, Use of CAD Models) allow its CAD 
 
 The sixth action button files a vendor STEP and its PDF into Vault as a numbered Part - Purchased. Unlike the others it works with or without a document open; it still needs a Vault sign-in, and a run blocks Inventor until it finishes.
 
-1. Click it and pick the STEP and the PDF in the file dialog (opens in Downloads). Select exactly one of each, or a message says what is missing and the dialog reopens.
+1. Click it. The form opens straight away. Get the files one of two ways:
+   - **McMaster number**: type a McMaster-Carr part number (for example `91251A054`) at the top and press Fetch (or Enter). See "Import from a McMaster number" below.
+   - **Choose files...**: pick the STEP and the PDF in the file dialog (opens in Downloads). Select exactly one of each, or a message says what is missing and the dialog reopens. Blank Vendor Number, Description and Vendor are prefilled from the file names.
 2. Fill the form. Vendor lists the folders under `$/DESIGNS/Simplifyber Library` (or New vendor...). Subfolder is optional (New subfolder... accepts `a/b` for nesting). Vendor Number and Description are prefilled from the file names and both are required. Material (from Inventor's active material library) and Material Finish may stay empty. Designer is your Inventor user name; Engr Approved By is always `NOT REVIEWED`. The "Will create" line shows `CD-<next>`; the real number is taken only when you press Import.
 3. Import saves `CD-xxxxxx.ipt` and `CD-xxxxxx <Vendor> <Vendor Number>.pdf` in the chosen Vault folder, fills the data card (Part Number, Description, Vendor, Vendor Number, WEB Link, Source = Buy, Material, Material Finish, Designer, Engr Approved By), attaches the PDF to the part and moves your two downloads to `Downloads\Imported\`. McMaster-Carr is written on the data card as `McMASTER-CARR`.
 4. A file in Vault with the same Vendor and Vendor Number (ignoring case and spaces) stops the import before anything is written; the message names the existing CD number and folder.
 5. If a step fails, the message names the step and lists anything that already reached Vault. Nothing is undone automatically and your downloads stay where they were. Remove or reuse the listed leftovers in Vault, fix the cause, and run it again.
+
+#### Import from a McMaster number
+
+Fetch uses the McMaster MCP server (Settings, McMaster). If you are not signed in, it opens the browser sign-in first. It then:
+
+1. reads the product (`get_product`) and its price (`get_price`, one unit);
+2. downloads the `3-D STEP` and the `2-D PDF` (`get_cad`; the closest STEP or 2-D PDF format when those exact names are missing) to `Downloads\SF Vault Bridge\McMaster\<PN>\<PN>_<family>.step` and `.pdf`;
+3. fills the form: Vendor `McMaster-Carr`, Vendor Number, Description = the McMaster family, Comments = the McMaster description, Material and Material Finish (below), and shows the family, description and price line under the box.
+
+Material: finish words in McMaster's Material (Black-Oxide, Zinc-Plated, Passivated, 18-8, Anodized and similar) go to Material Finish; with none it is `As Finished`. What is left is matched to Inventor's active material library: Alloy Steel or Steel gives `Steel`; stainless gives a library entry with the same grade (316), else `Stainless Steel`, else the first stainless entry; an aluminum grade gives `Aluminum 6061` when the library has that exact grade, else the first Aluminum entry; anything else gives the first library name containing the material word. With no match Material is left empty with a hint, and Import asks for it.
+
+Cost: when McMaster sells by the pack, Estimated Cost is the pack price divided by Quantity per Package (for 91251A054, $4.68 / 50 = $0.0936); otherwise it is the unit price. The custom iProperty `Pack Size` (a whole number) is set at import: the pieces per pack, or 1. With no price, or a pack with no Quantity per Package, Estimated Cost is left blank and the form says so. Both go to the part only while Vendor Number still names the fetched part.
+
+McMaster's terms allow its CAD in our own Vault for deciding to buy and buying. The package guard above still keeps it out of everything sent to suppliers. After the import the two downloads move to `Downloads\Imported\` like any other import.
 
 ### Fix Data Card
 
@@ -158,6 +174,14 @@ The Purchasing Sheet prices parts from the purchasing Microsoft List, which need
 
 Vendor and Vendor Number from the part's iProperties fill any cell the list leaves blank. "Not matched" lists purchased parts that are not on the purchasing list, even when their iProperties supplied a vendor.
 
+### McMaster live prices
+
+For McMaster rows (Vendor spelled any McMaster way, or a part under `$/DESIGNS/Simplifyber Library/McMaster-Carr/`) the Purchasing Sheet gets today's price from the McMaster MCP server before it builds the sheet. If you are not signed in, a small window starts the browser sign-in; Cancel there builds the sheet with the list and file prices.
+
+- One `enrich_bom` call prices every unique McMaster part number (the Vendor Number). If the server refuses it (for example the daily subscription budget is used up), each part is priced on its own with `get_price`, so parts the server already holds still price. A part sold by the pack needs its pack size: the part's `Pack Size` iProperty, else `get_product`'s Quantity per Package.
+- Each live price goes to the BOM file as `McMaster Pack Price`, `Pack Size` and `McMaster Price Date`. On the sheet the row's Price source is `McMaster`, Cost Per is the pack price / Pack Size, Packs to Buy is Qty / Pack Size rounded up, and Sub Total is Packs to Buy x pack price + shipping + tax (sales tax unless the part has an HS/HTS Code). McMaster wins over File and the list.
+- A part that fails (not signed in, cancelled, budget, not found, no pack size, server down) keeps its File or list price. Row 2 of the sheet and the result message say how many McMaster prices were live and how many fell back, for example `McMaster: 4 live prices (2026-10-14), 1 fell back to list or file price`. Details are in `bridge.log`.
+
 ### Fix data card
 
 Repairs iProperties of parts already in Vault (for example a Part Number that holds the STEP name instead of the CD number) by checking out, editing in Inventor and checking in a new version. Inventor must be open and signed in to Vault. It is a preview unless you pass `--apply`:
@@ -208,12 +232,13 @@ The gear button on the Status panel opens the Settings window (no open document 
 
 - **General**: the installed version, Check for updates now (the same Vault release-folder check as the status button, so you must be signed in to Vault; the result shows in the window and the status button picks it up) and Open log folder.
 - **Dropbox**: the app key, Sign in and Sign out, and a signed in or not line. Sign in is enabled only when a key is set and opens your browser once. Changing the key signs the old account out when you save (a token belongs to one app key).
+- **McMaster**: the McMaster MCP server URL (`mcmasterServerUrl`, default `https://mcmaster.simplifyber-app.com/mcp`; a team key, so team settings set it), Sign in, Sign out and a signed in or not line. See McMaster sign-in below.
 - **Purchasing and packages**: sales tax as a percentage from 0 to 100 (stored as a fraction in `salesTaxRate`, so 8.25 is 0.0825), and the Process values, print materials and recent partners lists. Process values and print materials can be added to, removed from and moved up or down; each needs at least one value, entries are trimmed, and a duplicate in any letter case is refused or dropped. Recent partners has Remove selected and Clear all.
 - **Claude**: the MCP endpoint (`http://localhost:8790/mcp`), the path of the token file, Copy setup info (copies the endpoint and the token file path, never the token) and Open Claude extension (selects the `.mcpb` next to the installed add-in, else the newest one under `Downloads\SF Vault Bridge`, else opens that folder or says where to get it).
 
 Saved values apply to the next button click with no restart: every command reads `settings.json` when it starts, including the Dropbox app key.
 
-Team settings never overwrite your changes. Save adds each team key whose value you changed (`processValues`, `printMaterials`, `dropboxAppKey`, `salesTaxRate`) to `userOverrides` in `settings.json`. The installer's team merge (and `SettingsMerge`) skips every key listed there and still fills the others. Edit `userOverrides` by hand (or delete a name from it) to take team values again. Keys the window does not know about are kept as they are.
+Team settings never overwrite your changes. Save adds each team key whose value you changed (`processValues`, `printMaterials`, `dropboxAppKey`, `salesTaxRate`, `mcmasterServerUrl`) to `userOverrides` in `settings.json`. The installer's team merge (and `SettingsMerge`) skips every key listed there and still fills the others. Edit `userOverrides` by hand (or delete a name from it) to take team values again. Keys the window does not know about are kept as they are.
 
 ## Dropbox upload (Partner Packages)
 
@@ -231,6 +256,16 @@ Each engineer signs in once: the first upload opens the browser, they approve, a
 Sign out of Dropbox with the form's Sign out button, which asks Dropbox to revoke the token (best effort) and then deletes `dropbox.token`; deleting the file by hand also works. The next upload asks for sign-in again.
 
 A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. The sign-in listener on `localhost:53682` filters by host name, not network interface; a request still needs the one-time `state` value, so this is low risk. Sign-out also asks Dropbox to revoke the token (best effort). Upload or link failures are warnings; the zip stays in Downloads and Vault.
+
+## McMaster sign-in
+
+The McMaster MCP server sits behind Cloudflare Access, so each engineer signs in once with their own Simplifyber account. The add-in is an OAuth 2.1 public client of Access's managed OAuth:
+
+1. It finds the sign-in server from the McMaster server itself: the 401 answer's `WWW-Authenticate` names the protected resource metadata (falling back to `/.well-known/oauth-protected-resource`), which names the authorization server, whose `/.well-known/oauth-authorization-server` metadata gives the endpoints. The metadata must belong to the same host as the server URL and must offer PKCE S256.
+2. It registers itself (dynamic client registration) with a loopback redirect `http://127.0.0.1:<random free port>/callback`, opens the system browser with PKCE S256 and a random `state`, and waits 3 minutes for the redirect.
+3. It keeps the refresh token (and the registered client id) encrypted with Windows DPAPI for the current user in `%APPDATA%\Simplifyber\VaultBridge\mcmaster.token`. Access tokens stay in memory and are refreshed on their own; no token, code or verifier is ever logged.
+
+Sign out in Settings asks Access to revoke the refresh token (best effort) and deletes the file; deleting the file by hand also works. A sign-in belongs to one server URL: changing the URL in Settings needs a new sign-in. If the refresh token expires, the next Fetch or Purchasing Sheet asks for the sign-in again.
 
 ## MCP endpoint
 
