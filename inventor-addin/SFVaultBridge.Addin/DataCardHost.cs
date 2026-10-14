@@ -211,10 +211,14 @@ internal sealed class DataCardHost : IDataCardHost
 
     // ---- Revise: lifecycle ----
 
-    private static string StateName(LfCycDef def, long id) => def.StateArray?.FirstOrDefault(s => s.Id == id)?.Name ?? "";
+    // States created in Vault Settings get a GUID system Name; people (and FileLfCyc.LfCycStateName) use the display name.
+    private static string Shown(LfCycState s) => string.IsNullOrWhiteSpace(s.DispName) ? s.Name : s.DispName;
+
+    private static string StateName(LfCycDef def, long id) => def.StateArray?.FirstOrDefault(s => s.Id == id) is { } st ? Shown(st) : "";
 
     private static LfCycState? StateNamed(LfCycDef def, string name) =>
-        def.StateArray?.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        def.StateArray?.FirstOrDefault(s => string.Equals(Shown(s), name, StringComparison.OrdinalIgnoreCase))
+        ?? def.StateArray?.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private static LfCycDef Definition(WsFile f)
     {
@@ -262,7 +266,7 @@ internal sealed class DataCardHost : IDataCardHost
             var latest = Latest(file);
             var def = Definition(latest);
             var states = (def.StateArray ?? Array.Empty<LfCycState>())
-                .Select(x => new LifecycleState(x.Id, x.Name, x.ReleasedState, x.ObsoleteState, x.DispOrder)).ToList();
+                .Select(x => new LifecycleState(x.Id, Shown(x), x.ReleasedState, x.ObsoleteState, x.DispOrder)).ToList();
             var trans = (def.TransArray ?? Array.Empty<LfCycTrans>()).Select(t => new LifecycleTransition(t.Id, t.FromId, t.ToId)).ToList();
             var allowed = Conn.WebServiceManager.DocumentServiceExtensions.GetAllowedFileLifeCycleStateTransitionIds();
             // The edit state is chosen by flags in the file's own lifecycle, and the way back is checked now, before anything is changed.
@@ -285,7 +289,8 @@ internal sealed class DataCardHost : IDataCardHost
         catch (Exception ex) { throw new DataCardStepException("revise", $"Vault refused the change to {toStateName}: {ex.Message}"); }
         var now = Conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(latest.MasterId);
         var state = now?.FileLfCyc?.LfCycStateName ?? "";
-        if (!string.Equals(state, toStateName, StringComparison.OrdinalIgnoreCase))
+        // Compare by state id: the name Vault reports is the display name, which can differ from the definition's system name.
+        if (now?.FileLfCyc is null || now.FileLfCyc.LfCycStateId != toId.Value)
             throw new DataCardStepException("revise", $"Vault reports the state as '{state}' after the change to {toStateName}.");
         return new DataCardStateChange(state, VaultFiles.RevisionOf(now));
     }
