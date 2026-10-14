@@ -60,5 +60,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Building the install guide failed.' }
 
 Write-Host '== Zip'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($out, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+# Explicit forward-slash entry names: Windows PowerShell 5.1's CreateFromDirectory writes backslashes.
+$archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+try {
+    $base = (Get-Item -LiteralPath $out).Parent.FullName.TrimEnd([char]92) + [char]92
+    Get-ChildItem -LiteralPath $out -Recurse -File | ForEach-Object {
+        $entry = $_.FullName.Substring($base.Length).Replace([string][char]92, '/')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+    }
+} finally { $archive.Dispose() }
 Write-Host "Built $zip"

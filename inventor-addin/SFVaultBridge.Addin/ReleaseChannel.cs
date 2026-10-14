@@ -55,19 +55,35 @@ internal sealed class UpdateChecker
 
     public UpdateChecker(Action<string> log) => _log = log;
 
-    public (SemVer Version, string Name)? Available { get; private set; }
+    private readonly object _gate = new();
+    private (SemVer Version, string Name)? _available;
+    private int _running;
+
+    public (SemVer Version, string Name)? Available { get { lock (_gate) return _available; } }
 
     public bool Due(DateTime nowUtc) => nowUtc - _lastCheckUtc >= Interval;
 
-    /// <summary>Call only when signed in to Vault. Runs on the UI thread (a Vault round trip).</summary>
-    public void Check(DateTime nowUtc)
+    /// <summary>Starts a check on a background thread (Vault web service reads only; no Inventor or UI objects).
+    /// Never overlaps a running check. The UI thread only reads Available afterwards.</summary>
+    public void StartCheck(DateTime nowUtc)
     {
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return;
         _lastCheckUtc = nowUtc;
+        Task.Run(() =>
+        {
+            try { Check(); }
+            finally { Interlocked.Exchange(ref _running, 0); }
+        });
+    }
+
+    private void Check()
+    {
         try
         {
             if (!SemVer.TryParse(AppVersion.Current, out var current)) return;
-            Available = AppVersion.Newest(VaultFiles.FilesIn(AppVersion.ReleaseFolder).Select(f => f.Name), current);
-            if (Available is { } a) _log($"update available: {a.Version}");
+            var found = AppVersion.Newest(VaultFiles.FilesIn(AppVersion.ReleaseFolder).Select(f => f.Name), current);
+            lock (_gate) _available = found;
+            if (found is { } a) _log($"update available: {a.Version}");
             _failureLogged = false;
         }
         catch (Exception ex)

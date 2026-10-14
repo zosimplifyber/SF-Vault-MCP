@@ -122,7 +122,7 @@ internal sealed class RibbonStatus
         StatusInfo? status = null;
         try { status = _vaultStatus(); } catch (Exception) { }
         var host = _host();
-        if (status?.SignedIn == true && _updates.Due(DateTime.UtcNow)) _updates.Check(DateTime.UtcNow);
+        if (status?.SignedIn == true && _updates.Due(DateTime.UtcNow)) _updates.StartCheck(DateTime.UtcNow);
         return StatusModel.Evaluate(host?.IsListening ?? false, status, host?.LastRequestUtc, _prefix,
             AppVersion.Current, _updates.Available?.Version.ToString());
     }

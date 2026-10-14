@@ -110,6 +110,40 @@ public class SettingsMergeTests
     }
 
     [Fact]
+    public void EmptyTeamValuesNeverBlankUserValues()
+    {
+        var team = "{\"processValues\":[],\"printMaterials\":[\"PLA\"],\"dropboxAppKey\":\"\",\"salesTaxRate\":0.08}";
+        var existing = "{\"processValues\":[\"Mine\"],\"dropboxAppKey\":\"abc\",\"salesTaxRate\":0.05}";
+        var merged = JsonNode.Parse(SettingsMerge.Merge(existing, team))!.AsObject();
+        Assert.Equal("abc", (string)merged["dropboxAppKey"]!);
+        Assert.Equal(new[] { "Mine" }, merged["processValues"]!.AsArray().Select(x => (string)x!).ToArray());
+        Assert.Equal(0.08, (double)merged["salesTaxRate"]!);
+        Assert.Equal(new[] { "PLA" }, merged["printMaterials"]!.AsArray().Select(x => (string)x!).ToArray());
+        var fresh = JsonNode.Parse(SettingsMerge.Merge("{}", team))!.AsObject();
+        Assert.Equal("", (string)fresh["dropboxAppKey"]!);
+    }
+
+    [Fact]
+    public void MalformedFileIsBackedUpNeverWiped()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sfvb-bad-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(dir, "settings.json");
+        Directory.CreateDirectory(dir);
+        var bad = "{ \"recentPartners\": [\"Acme\"], bad json";
+        try
+        {
+            File.WriteAllText(path, bad);
+            var backup = SettingsMerge.MergeFile(path, Team, new DateTime(2026, 10, 14, 9, 8, 7));
+            Assert.Equal(path + ".bad-20261014-090807", backup);
+            Assert.Equal(bad, File.ReadAllText(backup!));
+            Assert.Equal("key", (string)JsonNode.Parse(File.ReadAllText(path))!["dropboxAppKey"]!);
+            Assert.Null(SettingsMerge.MergeFile(path, Team, DateTime.Now));
+            Assert.Single(Directory.GetFiles(dir, "settings.json.bad-*"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void MergedFileLoadsThroughBridgeSettings()
     {
         var dir = Path.Combine(Path.GetTempPath(), "sfvb-merge-" + Guid.NewGuid().ToString("N"));
@@ -137,12 +171,18 @@ public class ReleaseChannelOpsTests
         public string Publish(string localZip, string fileName, string comment) { Published.Add((localZip, fileName, comment)); return "$/Tools/SF Vault Bridge/" + fileName; }
     }
 
-    private static (string Dir, string Zip) Zip(string name)
+    private static (string Dir, string Zip) Zip(string name, string? contentVersion = null, string? entryName = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "sfvb-rel-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var zip = Path.Combine(dir, name);
-        File.WriteAllText(zip, "x");
+        var v = contentVersion ?? (AppVersion.TryParseFileName(name, out var fromName) ? fromName.ToString() : "1.2.3");
+        using (var z = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            var e = z.CreateEntry(entryName ?? $"SF Vault Bridge {v}/SFVaultBridge.bundle/PackageContents.xml");
+            using var w = new StreamWriter(e.Open());
+            w.Write($"<ApplicationPackage AppVersion=\"{v}\" />");
+        }
         return (dir, zip);
     }
 
@@ -169,6 +209,39 @@ public class ReleaseChannelOpsTests
         {
             var r = ReleaseChannelOps.Publish(new JsonObject { ["zipPath"] = zip }, new FakeChannel(), new PathGuard(new[] { dir }));
             Assert.Equal("2.0.1", (string)r["version"]!);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void RefusesZipWithoutExpectedLayoutOrMismatchedVersion()
+    {
+        var (d1, wrongLayout) = Zip("a.zip", entryName: "PackageContents.xml");
+        var (d2, wrongVersion) = Zip("b.zip", contentVersion: "9.9.9");
+        var (d3, notZip) = Zip("c.zip");
+        File.WriteAllText(notZip, "plain text");
+        try
+        {
+            foreach (var z in new[] { wrongLayout, wrongVersion, notZip })
+            {
+                var ch = new FakeChannel();
+                var guard = new PathGuard(new[] { Path.GetDirectoryName(z)! });
+                var ex = Assert.Throws<BridgeException>(() => ReleaseChannelOps.Publish(new JsonObject { ["zipPath"] = z, ["version"] = "1.2.3" }, ch, guard));
+                Assert.Equal("bad_package", ex.Code);
+                Assert.Empty(ch.Published);
+            }
+        }
+        finally { foreach (var d in new[] { d1, d2, d3 }) Directory.Delete(d, true); }
+    }
+
+    [Fact]
+    public void AcceptsBackslashEntryNamesFromOlderBuilds()
+    {
+        var (dir, zip) = Zip("SF Vault Bridge 1.2.3.zip", entryName: "SF Vault Bridge 1.2.3\\SFVaultBridge.bundle\\PackageContents.xml");
+        try
+        {
+            var r = ReleaseChannelOps.Publish(new JsonObject { ["zipPath"] = zip }, new FakeChannel(), new PathGuard(new[] { dir }));
+            Assert.Equal("1.2.3", (string)r["version"]!);
         }
         finally { Directory.Delete(dir, true); }
     }

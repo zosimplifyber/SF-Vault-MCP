@@ -117,3 +117,52 @@ def test_install_package_keeps_foreign_old_folder(tmp_path):
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (target / "SFVaultBridge" / "mine.txt").exists()
+
+
+def _run_install(tmp_path, team, existing_text):
+    pkg = tmp_path / "pkg"
+    bundle = pkg / "SFVaultBridge.bundle"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / "PackageContents.xml").write_text('<ApplicationPackage AppVersion="1.0.0"/>', encoding="utf-8")
+    (bundle / "Contents" / "SFVaultBridge.addin").write_text("{{ASSEMBLY}}", encoding="utf-8")
+    (pkg / "team-settings.json").write_text(json.dumps(team), encoding="utf-8")
+    data = tmp_path / "data"
+    data.mkdir()
+    if existing_text is not None:
+        (data / "settings.json").write_text(existing_text, encoding="utf-8")
+    script = ROOT / "inventor-addin" / "Install-Package.ps1"
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                        "-PackageDir", str(pkg), "-Target", str(tmp_path / "plugins"), "-DataDir", str(data),
+                        "-OldAddinsDir", str(tmp_path / "a"), "-SkipInventorCheck"],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return data, r.stdout
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell")
+def test_malformed_settings_are_backed_up_not_wiped(tmp_path):
+    bad = '{ "recentPartners": ["Acme"], bad json'
+    data, out = _run_install(tmp_path, {"processValues": ["CNC"], "dropboxAppKey": "k"}, bad)
+    backups = list(data.glob("settings.json.bad-*"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == bad
+    assert json.loads((data / "settings.json").read_text(encoding="utf-8"))["dropboxAppKey"] == "k"
+    assert "WARNING" in out and backups[0].name in out
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell")
+def test_empty_team_values_do_not_blank_user_values(tmp_path):
+    existing = json.dumps({"dropboxAppKey": "abc", "processValues": ["Mine"], "recentPartners": ["Acme"]})
+    team = {"processValues": [], "printMaterials": ["PLA"], "dropboxAppKey": "", "salesTaxRate": 0.08}
+    data, _ = _run_install(tmp_path, team, existing)
+    s = json.loads((data / "settings.json").read_text(encoding="utf-8"))
+    assert s["dropboxAppKey"] == "abc" and s["processValues"] == ["Mine"]
+    assert s["printMaterials"] == ["PLA"] and s["salesTaxRate"] == 0.08 and s["recentPartners"] == ["Acme"]
+    assert not list(data.glob("settings.json.bad-*"))
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="needs Windows PowerShell")
+def test_failed_install_leaves_existing_bundle(tmp_path):
+    data, _ = _run_install(tmp_path, {"dropboxAppKey": "k"}, None)
+    plugins = tmp_path / "plugins"
+    assert (plugins / "SFVaultBridge.bundle" / "PackageContents.xml").exists()
+    assert not (plugins / "SFVaultBridge.bundle.new").exists() and not (plugins / "SFVaultBridge.bundle.old").exists()

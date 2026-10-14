@@ -72,21 +72,60 @@ public static class AppVersion
 }
 
 /// <summary>Team settings merge used by the installer: team keys overwrite, personal keys stay.
-/// Install-Package.ps1 applies the same rules in PowerShell (the engineer's PC has no .NET SDK).</summary>
+/// Install-Package.ps1 applies the same rules in PowerShell (the engineer's PC has no .NET SDK).
+/// Rules: a malformed existing file is never discarded (MergeFile backs it up first); an empty team value
+/// (null, blank text, empty list) never replaces a non-empty user value.</summary>
 public static class SettingsMerge
 {
     public static readonly string[] TeamKeys = { "processValues", "printMaterials", "dropboxAppKey", "salesTaxRate" };
     public static readonly string[] PersonalKeys = { "recentPartners" };
 
-    /// <summary>Returns the merged JSON. existing may be null or invalid (then only the team keys are written). Other keys in existing are kept.</summary>
+    private static readonly System.Text.Json.JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    /// <summary>True when the text has content that is not a JSON object. Empty or missing text is not malformed.</summary>
+    public static bool IsMalformed(string? existingJson)
+    {
+        if (string.IsNullOrWhiteSpace(existingJson)) return false;
+        try { return JsonNode.Parse(existingJson) is not JsonObject; }
+        catch (System.Text.Json.JsonException) { return true; }
+    }
+
+    /// <summary>Returns the merged JSON. A malformed existing text yields team keys only; callers that own a file use MergeFile so the old text is kept.</summary>
     public static string Merge(string? existingJson, string teamJson)
     {
         var team = JsonNode.Parse(teamJson) as JsonObject ?? throw new ArgumentException("team settings must be a JSON object");
-        JsonObject root;
-        try { root = (string.IsNullOrWhiteSpace(existingJson) ? null : JsonNode.Parse(existingJson) as JsonObject) ?? new JsonObject(); }
-        catch (System.Text.Json.JsonException) { root = new JsonObject(); }
+        var root = string.IsNullOrWhiteSpace(existingJson) || IsMalformed(existingJson)
+            ? new JsonObject()
+            : (JsonNode.Parse(existingJson) as JsonObject ?? new JsonObject());
         foreach (var key in TeamKeys)
-            if (team[key] is { } value) root[key] = value.DeepClone();
-        return root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        {
+            if (team[key] is not { } value) continue;
+            if (IsEmpty(value) && root[key] is { } current && !IsEmpty(current)) continue;
+            root[key] = value.DeepClone();
+        }
+        return root.ToJsonString(Indented);
     }
+
+    /// <summary>Merges into the file at path. A malformed file is copied to path.bad-yyyyMMdd-HHmmss first; returns that backup path or null.</summary>
+    public static string? MergeFile(string path, string teamJson, DateTime now)
+    {
+        string? existing = File.Exists(path) ? File.ReadAllText(path) : null;
+        string? backup = null;
+        if (IsMalformed(existing))
+        {
+            backup = $"{path}.bad-{now:yyyyMMdd-HHmmss}";
+            File.Copy(path, backup, false);
+        }
+        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllText(path, Merge(existing, teamJson), new System.Text.UTF8Encoding(false));
+        return backup;
+    }
+
+    private static bool IsEmpty(JsonNode node) => node switch
+    {
+        JsonArray a => a.Count == 0,
+        JsonValue v when v.TryGetValue<string>(out var s) => string.IsNullOrWhiteSpace(s),
+        _ => false,
+    };
 }
