@@ -202,7 +202,7 @@ public static class ReleasePlan
             if (material.Length == 0) b.Add("Material is blank");
             else if (Is(material, "Generic")) b.Add("Material is Generic");
         }
-        if (IsCompliant(f.Compliance) == false) b.Add($"Property Compliance is {f.Compliance!.Trim()}");
+        if (IsCompliant(f.Compliance) == false) b.Add($"Property Compliance is {ComplianceText(f.Compliance)}");
         if (f.TransitionProblem is not null) b.Add(f.TransitionProblem);
         var kids = f.OtherChildren ?? Array.Empty<ReleaseChild>();
         // Engineering files the row depends on but that are not rows (skeletons, derived bases, BOM-excluded components): never release over them.
@@ -245,7 +245,16 @@ public static class ReleasePlan
     {
         var v = (value ?? "").Trim();
         if (v.Length == 0) return null;
+        // Vault's system property "Compliance" is numeric: 0 is compliant, anything else is not (2 is Non-Compliant).
+        if (int.TryParse(v, out var code)) return code == 0;
         return v.StartsWith("Compliant", StringComparison.OrdinalIgnoreCase) || Is(v, "Not Applicable") || Is(v, "N/A");
+    }
+
+    /// <summary>Vault's compliance value in words for a blocker line.</summary>
+    public static string ComplianceText(string? value)
+    {
+        var v = (value ?? "").Trim();
+        return int.TryParse(v, out var code) ? code switch { 0 => "Compliant", 2 => "Non-Compliant", _ => $"not compliant (code {code})" } : v;
     }
 
     /// <summary>The approver's "First L." name from Inventor's user name (ImportRules.DesignerName).</summary>

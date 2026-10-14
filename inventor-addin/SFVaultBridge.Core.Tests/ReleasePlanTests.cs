@@ -219,7 +219,17 @@ public class ReleasePlanTests
     [InlineData("Pending", false)]
     [InlineData("", null)]
     [InlineData(null, null)]
+    [InlineData("0", true)]
+    [InlineData("2", false)]
+    [InlineData("1", false)]
     public void Compliance_reading(string? value, bool? expected) => Assert.Equal(expected, ReleasePlan.IsCompliant(value));
+
+    [Theory]
+    [InlineData("0", "Compliant")]
+    [InlineData("2", "Non-Compliant")]
+    [InlineData("3", "not compliant (code 3)")]
+    [InlineData(" Pending ", "Pending")]
+    public void Compliance_text(string value, string expected) => Assert.Equal(expected, ReleasePlan.ComplianceText(value));
 
     [Fact]
     public void Unreadable_compliance_is_a_warning_not_a_blocker()
