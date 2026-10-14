@@ -96,6 +96,13 @@ def test_mcmaster_price_per_piece_and_source(tmp_path, monkeypatch):
     assert r["Packs to Buy"].value == 1
 
 
+def test_mcmaster_piece_price_shows_four_decimals(tmp_path, monkeypatch):
+    ws = _sheet(tmp_path, [_mc(), {"Number": "P2", "Cost": 4.5}], monkeypatch)
+    rows = {r["Price source"].value: r for r in (_row(ws, 1), _row(ws, 2))}
+    assert rows["McMaster"]["Cost Per"].number_format == '"$"#,##0.00##'
+    assert rows["File"]["Cost Per"].number_format == '"$"#,##0.00'
+
+
 def test_mcmaster_wins_over_file_and_list(tmp_path, monkeypatch):
     ref = pd.DataFrame({"Number": ["P1"], "Vendor": ["V"], "Cost Per": [9.0]})
     r = _row(_sheet(tmp_path, [_mc(price=10.0, size=4, Cost=3.0)], monkeypatch, ref), 1)

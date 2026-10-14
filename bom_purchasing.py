@@ -581,6 +581,7 @@ def build_purchasing_sheet(
     children_map = build_children_map(df)
     FIRST_DATA_ROW = HDR_ROW + 1
     DOLLAR_FMT = '"$"#,##0.00'
+    PIECE_FMT = '"$"#,##0.00##'
     DOLLAR_COLS = {"Cost Per", "Shipping", "Tax/Tariff", "Sub Total"}
     unmatched_nums: list[str] = []
     tariff_pending: list[Any] = []
@@ -676,7 +677,8 @@ def build_purchasing_sheet(
                     )
 
             if col_name in DOLLAR_COLS:
-                c.number_format = DOLLAR_FMT
+                # A McMaster piece price is often under a cent ($4.68 / 50); show up to 4 decimals.
+                c.number_format = PIECE_FMT if is_pack and col_name == "Cost Per" else DOLLAR_FMT
 
             c.font = body_font
             c.fill = fill
