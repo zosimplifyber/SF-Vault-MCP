@@ -83,7 +83,8 @@ internal static class BomReader
             Array.Empty<BomNode>(), Prop("Design Tracking Properties", "Vendor"),
             SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number")),
             Process: Prop("Inventor User Defined Properties", "Process"), MaterialFinish: Prop("Inventor User Defined Properties", "Material Finish"),
-            IsSheetMetal: isSheetMetal, Cost: cost, HsCode: Prop("Inventor User Defined Properties", "HS/HTS Code").Trim());
+            IsSheetMetal: isSheetMetal, Cost: cost, HsCode: Prop("Inventor User Defined Properties", "HS/HTS Code").Trim(),
+            Source: Prop("Inventor User Defined Properties", "Source").Trim());
     }
 
     private static IReadOnlyList<BomNode> Rows(Inv.BOMRowsEnumerator? rows)
@@ -99,7 +100,7 @@ internal static class BomReader
         string process = "", finish = "";
         var isSheetMetal = false;
         double? cost = null;
-        string hsCode = "";
+        string hsCode = "", source = "";
         string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "", vendor = "", vendorNumber = "";
         double qty;
         try { qty = Convert.ToDouble(row.ItemQuantity, System.Globalization.CultureInfo.InvariantCulture); } catch { qty = 0; }
@@ -134,6 +135,7 @@ internal static class BomReader
             process = Prop("Inventor User Defined Properties", "Process");
             finish = Prop("Inventor User Defined Properties", "Material Finish");
             hsCode = Prop("Inventor User Defined Properties", "HS/HTS Code").Trim();
+            source = Prop("Inventor User Defined Properties", "Source").Trim();
             try { cost = ParseCost(sets?["Design Tracking Properties"]["Cost"].Value); } catch { cost = null; }
             vendorNumber = SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number"));
         }
@@ -146,7 +148,7 @@ internal static class BomReader
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
         try { children = Rows(row.ChildRows); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
-        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal, Cost: cost, HsCode: hsCode);
+        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal, Cost: cost, HsCode: hsCode, Source: source);
     }
 
     /// <summary>Estimated Cost from COM (double, decimal or string); 0, negative, blank or unparseable is no cost.</summary>

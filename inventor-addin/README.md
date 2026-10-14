@@ -208,6 +208,26 @@ Sign out of Dropbox with the form's Sign out button, which asks Dropbox to revok
 
 A rerun overwrites the file, so an existing shared link keeps working. If team policy forbids public links the link is team-only, and the result says so. The sign-in listener on `localhost:53682` filters by host name, not network interface; a request still needs the one-time `state` value, so this is low risk. Sign-out also asks Dropbox to revoke the token (best effort). Upload or link failures are warnings; the zip stays in Downloads and Vault.
 
+## MCP endpoint
+
+While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses) at `POST http://localhost:8790/mcp`. Auth is the bridge token (`X-Bridge-Token` or `Authorization: Bearer <token>`); only localhost origins are accepted. `Mcp-Session-Id` is issued on initialize and accepted afterwards (no per-session state). Tool calls run on Inventor's UI thread with a timeout (90 s for reads, 10 min for writes).
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `bridge_status` | read | Vault sign-in, Inventor and add-in versions, active document |
+| `vault_search_files` | read | Search latest files by name, Description, Title, Part Number, Vendor Number |
+| `vault_get_file` | read | One file: category, state, revision, data card, compliance |
+| `vault_where_used` | read | Parents of a file, 1 to 5 levels |
+| `vault_uses` | read | Children with referenced versions, 1 to 5 levels |
+| `vault_file_versions` | read | Version history, newest first |
+| `inventor_open_bom` | read | Structured BOM of the active assembly with Vault facts |
+| `fix_data_card_preview` | preview | Dry run of Fix Data Card (writes nothing) |
+| `fix_data_card_apply` | write | Applies it; needs `confirm: true` and a matching preview in the last 10 minutes |
+| `mcmaster_intake_preview` | preview | Plans a vendor part import from Downloads (STEP + PDF), returns a token |
+| `mcmaster_intake_commit` | write | Imports it via Import New Part; needs the token and `confirm: true` |
+
+The read tools are also bridge ops (`POST /op/<name>`, same arguments). Planned (phase 2, needs non-UI variants): Purchasing Sheet, Design Review, packages and I Approve! preview as MCP tools.
+
 ## Uninstall
 
 Close Inventor, then delete `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge` (DLLs and manifest) and

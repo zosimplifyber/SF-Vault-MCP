@@ -63,9 +63,14 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             var router = new Router(token);
             var roots = AllowedRoots(_app).ToList();
             _vault = NewVaultSession();
-            BridgeOps.RegisterAll(router, _vault, new StepImporter(_app), new PathGuard(roots), Version, RunOnUi,
-                new DataCardHost(_app), _log.Write);
-            _host = new HttpHost(Prefix, router, _log.Write);
+            var importer = new StepImporter(_app);
+            var dataCard = new DataCardHost(_app);
+            BridgeOps.RegisterAll(router, _vault, importer, new PathGuard(roots), Version, RunOnUi, dataCard, _log.Write);
+            var downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            var tools = McpCatalog.Build(new VaultReader(), new InventorReader(_app, _log.Write), _vault, importer, Version, dataCard,
+                new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, _log.Write);
+            McpCatalog.RegisterReadOps(router, tools, RunOnUi);
+            _host = new HttpHost(Prefix, router, _log.Write) { Mcp = new McpServer(token, Version, tools, RunOnUi, log: _log.Write) };
             _host.Start();
             _log.Write($"started {Version} on {Prefix}; vault assembly: {DescribeVaultAssembly()}; roots: {string.Join(" | ", roots)}");
         }
