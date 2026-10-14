@@ -1,0 +1,11 @@
+<Project>
+  <!-- One version for every assembly: inventor-addin/VERSION. build-release.ps1 reads the same file. -->
+  <PropertyGroup>
+    <SfVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</SfVersion>
+    <Version>$(SfVersion)</Version>
+    <AssemblyVersion>$(SfVersion).0</AssemblyVersion>
+    <FileVersion>$(SfVersion).0</FileVersion>
+    <InformationalVersion>$(SfVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

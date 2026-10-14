@@ -410,6 +410,53 @@ def update_file_properties(
     })
 
 
+def get_file_categories() -> dict[str, Any]:
+    """All FILE categories: {"categories": [{"id", "name"}]}."""
+    return _call_ps("GetFileCategories")
+
+
+def get_numbering_schemes() -> dict[str, Any]:
+    """Activated FILE numbering schemes: {"schemes": [{"id", "name", "isDefault"}]}."""
+    return _call_ps("GetNumberingSchemes")
+
+
+def get_folder_by_path(path: str) -> dict[str, Any]:
+    """{"found": False} when the folder does not exist, else id/fullName/isLibrary."""
+    return _call_ps("GetFolderByPath", {"path": path})
+
+
+def generate_file_number(scheme_id: int | str) -> dict[str, Any]:
+    """Consume the next number from a FILE numbering scheme: {"number": str}."""
+    return _call_ps("GenerateFileNumber", {"schemeId": int(scheme_id)})
+
+
+def add_folder(parent_path: str, name: str) -> dict[str, Any]:
+    """Create a sub-folder; it inherits the parent's library flag."""
+    return _call_ps("AddFolder", {"parentPath": parent_path, "name": name})
+
+
+def add_file(folder_path: str, local_path: str, file_name: str, *,
+             attachment_file_ids: Iterable[int | str] = (), comment: str = "") -> dict[str, Any]:
+    """Add a new file to Vault (checked in), optionally attaching existing
+    files by file-version id. Returns the new file's id/masterId/name."""
+    if not Path(local_path).is_file():
+        raise FileNotFoundError(local_path)
+    return _call_ps("AddFile", {
+        "folderPath": folder_path, "localPath": str(local_path), "fileName": file_name,
+        "attachmentFileIds": [int(i) for i in attachment_file_ids], "comment": comment,
+    }, timeout=300)
+
+
+def update_file_categories(master_ids: Iterable[int | str], category_id: int | str, *,
+                           comment: str = "") -> dict[str, Any]:
+    """Set the category on the latest version of each file (by master id)."""
+    ids = [int(i) for i in master_ids]
+    if not ids:
+        raise ValueError("master_ids must not be empty")
+    return _call_ps("UpdateFileCategories",
+                    {"masterIds": ids, "categoryId": int(category_id), "comment": comment})
+
+
 __all__ = [
     "VaultSDKError",
     "get_lifecycle_states",
@@ -428,4 +475,11 @@ __all__ = [
     "checkout_file",
     "undo_checkout_file",
     "update_file_properties",
+    "get_file_categories",
+    "get_numbering_schemes",
+    "get_folder_by_path",
+    "generate_file_number",
+    "add_folder",
+    "add_file",
+    "update_file_categories",
 ]

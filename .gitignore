@@ -58,3 +58,13 @@ build_purchasing_log.txt
 # OS junk
 .DS_Store
 Thumbs.db
+inventor-addin/**/bin/
+inventor-addin/**/obj/
+inventor-addin/tools/
+build/sfvaulttools/
+release/
+
+claude-extension/relay/bin/
+claude-extension/relay/obj/
+claude-extension/relay.Tests/bin/
+claude-extension/relay.Tests/obj/

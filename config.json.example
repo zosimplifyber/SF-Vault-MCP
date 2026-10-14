@@ -17,6 +17,11 @@
     "handoff": {
         "workspace_root": "C:\\Vault Workspace"
     },
+    "intake": {
+        "downloads_dir": "",
+        "workspace_root": "C:\\Vault Workspace",
+        "numbering_scheme": "<scheme name printed by the probe>"
+    },
     "server": {
         "host": "0.0.0.0",
         "port": 8765

@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
+from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -38,6 +39,18 @@ DARK_GRAY = "888888"
 WHITE = "FFFFFF"
 OLIVE_GREEN = "D8E4BC"
 UNMATCHED_FILL = "FCE4D6"  # light orange — a Buy part with no price found
+UNRELEASED_FILL = "FFF59D"  # light yellow — a row whose Vault state is not Released
+
+
+RELEASED_STATE_NAMES = {"released", "library"}
+
+
+def is_released(value: Any) -> bool:
+    """True when the state is a released state: "Released", or "Library" (the released state of the
+    Library lifecycle for purchased and Content Center parts). None, NaN, blanks and non-strings are not."""
+    if value is None or not isinstance(value, str):
+        return False
+    return value.strip().lower() in RELEASED_STATE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +89,7 @@ BOM_COLUMNS = [
 ]
 
 PURCHASE_COLUMNS = [
-    "Material", "Vendor", "Vendor Number", "Cost Per",
+    "Material", "Vendor", "Vendor Number", "Cost Per", "Price source",
     "HS/HTS Code", "Shipping", "Tax/Tariff", "Sub Total",
     "Lead Time (Business Days)",
 ]
@@ -87,6 +100,12 @@ LOOKUP_COLUMNS = [
 ]
 
 ALL_COLUMNS = BOM_COLUMNS + PURCHASE_COLUMNS
+
+# Sales tax applied to every part that has no HS/HTS code (tariffed parts are
+# entered by hand). Callers pass the bridge's salesTaxRate setting.
+DEFAULT_SALES_TAX_RATE = 0.07
+TARIFF_FILL = "FFC000"  # orange: a tariffed part still needs its tax/tariff entered
+TARIFF_COMMENT = "Tariff part: enter tax/tariff"
 
 # Columns the DataFrame carries but the Purchasing tab does not show. "Number"
 # is still the key everything matches on — the reference lookup, the Vault state
@@ -110,7 +129,7 @@ COLUMN_WIDTHS = {
     "State": 16, "Description (Item,CO)": 44,
     "Source": 10, "Material": 22,
     "Vendor": 18, "Vendor Number": 18,
-    "Cost Per": 12, "HS/HTS Code": 14, "Shipping": 12, "Tax/Tariff": 12,
+    "Cost Per": 12, "Price source": 12, "HS/HTS Code": 14, "Shipping": 12, "Tax/Tariff": 12,
     "Sub Total": 14, "Lead Time (Business Days)": 24,
 }
 
@@ -490,7 +509,9 @@ def _add_logo(ws, logo_filename: str = "Simplifyber_Logo_White.png") -> None:
 
 
 def build_purchasing_sheet(
-    df: pd.DataFrame, output_path: str, assembly_number: str
+    df: pd.DataFrame, output_path: str, assembly_number: str,
+    source: str | None = None,
+    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
 ) -> str:
     """Write the formatted purchasing workbook (Purchasing + By Vendor tabs)."""
     df = df.reset_index(drop=True)
@@ -513,6 +534,8 @@ def build_purchasing_sheet(
     ws.merge_cells(f"A2:{get_column_letter(n_cols)}2")
     c = ws["A2"]
     c.value = f"Generated: {datetime.now().strftime('%B %d, %Y')}"
+    if source and str(source).strip():
+        c.value += f" | {str(source).strip()}"
     c.font = Font(name="Arial", size=9, color=DARK_GRAY, italic=True)
     c.fill = PatternFill("solid", fgColor=LIGHT_GRAY)
     c.alignment = Alignment(horizontal="right", vertical="center")
@@ -549,6 +572,9 @@ def build_purchasing_sheet(
     DOLLAR_FMT = '"$"#,##0.00'
     DOLLAR_COLS = {"Cost Per", "Shipping", "Tax/Tariff", "Sub Total"}
     unmatched_nums: list[str] = []
+    tariff_pending: list[Any] = []
+    has_state = "State" in df.columns
+    unreleased_fill = PatternFill("solid", fgColor=UNRELEASED_FILL)
 
     for ri, (df_idx, row) in enumerate(df.iterrows(), start=FIRST_DATA_ROW):
         category = str(row.get("Category Name", "")).strip().lower()
@@ -561,6 +587,8 @@ def build_purchasing_sheet(
             fill = olive_fill
         else:
             fill = alt_fill if (ri - HDR_ROW) % 2 == 0 else white_fill
+        if has_state and not is_released(row.get("State")):
+            fill = unreleased_fill
 
         vendor = row.get("Vendor")
         vendor_blank = pd.isna(vendor) or str(vendor).strip() == ""
@@ -583,6 +611,27 @@ def build_purchasing_sheet(
             if col_name in BOM_COLUMNS:
                 val = row.get(col_name)
                 c.value = None if pd.isna(val) else val
+
+            elif col_name == "Price source":
+                val = row.get(col_name)
+                c.value = (None if is_assembly or pd.isna(val)
+                           or str(val).strip() == "" else val)
+
+            elif col_name == "Shipping" and not is_assembly:
+                c.value = 0  # shipping is included in the price
+
+            elif col_name == "Tax/Tariff" and not is_assembly:
+                hs = row.get("HS/HTS Code")
+                if pd.isna(hs) or str(hs).strip() == "":
+                    c.value = (f"={cost_col}{ri}*{qty_col}{ri}"
+                               f"*{float(sales_tax_rate)!r}")
+                else:
+                    entered = parse_money(row.get("Tax/Tariff"))
+                    if pd.notna(entered):
+                        c.value = float(entered)
+                    else:
+                        c.value = None
+                        tariff_pending.append(c)
 
             elif col_name in LOOKUP_COLUMNS:
                 val = row.get(col_name)
@@ -614,6 +663,10 @@ def build_purchasing_sheet(
             c.fill = fill
             c.border = bdr
             c.alignment = body_align
+
+    for c in tariff_pending:
+        c.fill = PatternFill("solid", fgColor=TARIFF_FILL)
+        c.comment = Comment(TARIFF_COMMENT, "SF Vault Bridge")
 
     # Unmatched note — list Buy parts with no reference match so a $0 line is
     # clearly "no price found", not "free".
@@ -1009,15 +1062,55 @@ def _build_assembly_costs_tab(
     ws.freeze_panes = "A3"
 
 
+def parse_money(value: Any) -> float:
+    """A number from a cell, tolerating "$4.50" and "1,234"; NaN when not a number."""
+    if isinstance(value, str):
+        value = value.strip().replace("$", "").replace(",", "")
+    return pd.to_numeric(value, errors="coerce")
+
+
+def apply_price_source(df: pd.DataFrame, file_cost: pd.Series | None = None) -> pd.DataFrame:
+    """Set Cost Per and Price source on every row.
+
+    ``file_cost`` is the BOM file's own ``Cost`` column (Inventor Estimated
+    Cost). A value > 0 wins and the row is marked ``File``; otherwise a
+    reference value > 0 (already in Cost Per) stands and is marked ``List``;
+    neither leaves both blank.
+    """
+    if "Cost Per" not in df.columns:
+        df["Cost Per"] = None
+    df["Cost Per"] = df["Cost Per"].astype(object)
+    df["Price source"] = pd.Series([None] * len(df), index=df.index, dtype=object)
+    listed = df["Cost Per"].map(parse_money)
+    df.loc[listed.notna() & (listed > 0), "Price source"] = "List"
+    if file_cost is not None:
+        own = file_cost.map(parse_money)
+        use = own.notna() & (own > 0)
+        df.loc[use, "Cost Per"] = own[use]
+        df.loc[use, "Price source"] = "File"
+    return df
+
+
 # ---------------------------------------------------------------------------
 # High-level orchestrators used by the MCP tools
 # ---------------------------------------------------------------------------
 
-def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[pd.DataFrame, int, int, list[str], list[str]]:
+def _enrich_with_reference(
+    df: pd.DataFrame,
+    reference_path: str = "",
+    info: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, int, int, list[str], list[str]]:
     """Try to fill purchasing columns from the reference file.
 
-    Returns (df, matched, total, unmatched_part_numbers, warnings).
+    Returns (df, matched, total, unmatched_part_numbers, warnings). When ``info``
+    is given it is filled with what was actually used: ``source`` ("mslist",
+    "excel" or "none") and ``signin_needed`` (True when the Microsoft List is
+    configured, could not be used, and no sign-in has ever been completed).
     """
+    if info is None:
+        info = {}
+    info["source"] = "none"
+    info["signin_needed"] = False
     warnings: list[str] = []
     matched = total = 0
     unmatched: list[str] = []
@@ -1028,6 +1121,8 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
         ref_df = load_reference_file(reference_path)
         if ref_df is None:
             warnings.append(f"Found reference file at {reference_path} but could not read it.")
+        else:
+            info["source"] = "excel"
     else:
         # Wrapped so reference resolution can NEVER break sheet generation — any
         # failure just leaves the purchasing columns blank with a warning.
@@ -1038,9 +1133,11 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
                 try:
                     ref_df = purchasing_reference.load_mslist_dataframe(
                         cfg["mslist"], cfg.get("column_map"))
+                    info["source"] = "mslist"
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(f"Microsoft List reference unavailable ({exc}).")
                     ref_df = None
+                    info["signin_needed"] = not purchasing_reference.has_cached_login()
             # 3) Excel auto-discovery (unless the source is pinned to 'mslist').
             if ref_df is None and cfg.get("source") != "mslist":
                 path = find_purchased_items_file()
@@ -1048,11 +1145,15 @@ def _enrich_with_reference(df: pd.DataFrame, reference_path: str = "") -> tuple[
                     ref_df = load_reference_file(path)
                     if ref_df is None:
                         warnings.append(f"Found reference file at {path} but could not read it.")
+                    else:
+                        info["source"] = "excel"
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not resolve a purchasing reference ({exc}); columns left blank.")
             ref_df = None
+            info["source"] = "none"
 
     if ref_df is None:
+        info["source"] = "none"
         warnings.append(
             "No purchasing reference available — sign in to the Microsoft List "
             "(the Sign in button, or `python -m purchasing_reference --login`); "
@@ -1127,6 +1228,7 @@ def generate_from_vault_bom(
     vault_bom_response: Any,
     assembly_number: str,
     output_dir: str = "",
+    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
 ) -> dict[str, Any]:
     """Build a purchasing sheet from a vault_get_bom_by_part_number response."""
     bom_list = extract_bom_list(vault_bom_response)
@@ -1157,20 +1259,24 @@ def generate_from_vault_bom(
     df, matched, total, unmatched, ref_warnings = _enrich_with_reference(df)
     warnings.extend(ref_warnings)
     warnings.extend(_fill_state_from_vault(df))
+    apply_price_source(df)
 
     if not output_dir:
         output_dir = default_output_dir()
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, f"{assembly_number}-PurchasingExport.xlsx")
 
-    build_purchasing_sheet(df, out_file, assembly_number)
+    build_purchasing_sheet(df, out_file, assembly_number,
+                           sales_tax_rate=sales_tax_rate)
 
     return {
         "output_path": out_file,
-        "matched_parts": matched,
-        "total_purchased_parts": total,
-        "unmatched_parts": unmatched,
-        "warnings": warnings,
+        "matched_parts": info["matched_parts"],
+        "total_purchased_parts": info["total_purchased_parts"],
+        "unmatched_parts": info["unmatched_parts"],
+        "warnings": info["warnings"],
+        "reference_source": info["reference_source"],
+        "reference_signin_needed": info["reference_signin_needed"],
     }
 
 
@@ -1259,7 +1365,8 @@ def read_bom_file(bom_file_path: str) -> pd.DataFrame:
     an unsupported extension.
     """
     str_cols = {c: str for c in
-                ("Item", "Row Order", "Part Number", "Number")}
+                ("Item", "Row Order", "Part Number", "Number",
+                 "Vendor", "Vendor Number", "HS/HTS Code")}
     ext = os.path.splitext(bom_file_path)[1].lower()
     if ext == ".csv":
         return pd.read_csv(bom_file_path, dtype=str_cols)
@@ -1275,6 +1382,8 @@ def generate_from_file(
     assembly_number: str,
     output_dir: str = "",
     reference_path: str = "",
+    source: str | None = None,
+    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
 ) -> dict[str, Any]:
     """Build a purchasing sheet from an exported BOM file.
 
@@ -1296,7 +1405,63 @@ def generate_from_file(
         assembly_number=assembly_number,
         output_dir=output_dir or os.path.dirname(bom_file_path),
         reference_path=reference_path,
+        source=source,
+        sales_tax_rate=sales_tax_rate,
     )
+
+
+def price_bom_dataframe(
+    raw: pd.DataFrame,
+    reference_path: str = "",
+    fill_state: bool = True,
+) -> tuple[pd.DataFrame | None, str | None, dict[str, Any]]:
+    """Normalise a raw BOM and apply the purchasing rules to every row.
+
+    The shared front half of the Purchasing Sheet: reference lookup, file
+    Vendor / HS code fill, file Cost wins over the list Cost Per, Price source.
+    Returns (df, error, info); ``df`` is None when ``error`` is set. ``info``
+    carries matched_parts, total_purchased_parts, unmatched_parts, warnings,
+    reference_source and reference_signin_needed. ``fill_state=False`` skips the
+    Vault lifecycle-state lookup (the Design Review budget never needs it).
+    """
+    df, err = coerce_bom_dataframe(raw)
+    if err:
+        return None, err, {}
+
+    # Material precedence: the export's Material wins where non-blank; the
+    # reference file only fills blanks.
+    export_material = df["Material"].copy()
+    # Vendor / Vendor Number the BOM file itself carries (the ribbon export reads
+    # them from the part iProperties). They only fill what the purchasing
+    # reference leaves blank; the reference always wins where it has a value.
+    export_vendor = {c: df[c].copy()
+                     for c in ("Vendor", "Vendor Number", "HS/HTS Code") if c in df.columns}
+    file_cost = df["Cost"].copy() if "Cost" in df.columns else None
+    ref_info: dict[str, Any] = {}
+    df, matched, total, unmatched, warnings = _enrich_with_reference(
+        df, reference_path=reference_path, info=ref_info)
+    keep = export_material.notna() & (export_material.astype(str).str.strip() != "")
+    df.loc[keep, "Material"] = export_material[keep]
+    for col, own in export_vendor.items():
+        if col not in df.columns:
+            df[col] = None
+        have = own.notna() & (own.astype(str).str.strip() != "")
+        blank = df[col].isna() | (df[col].astype(str).str.strip() == "")
+        fill = have & blank
+        df[col] = df[col].astype(object)
+        df.loc[fill, col] = own[fill]
+    if fill_state:
+        warnings.extend(_fill_state_from_vault(df))
+    apply_price_source(df, file_cost)
+    info = {
+        "matched_parts": matched,
+        "total_purchased_parts": total,
+        "unmatched_parts": unmatched,
+        "warnings": warnings,
+        "reference_source": ref_info.get("source", "none"),
+        "reference_signin_needed": bool(ref_info.get("signin_needed")),
+    }
+    return df, None, info
 
 
 def generate_from_dataframe(
@@ -1304,37 +1469,43 @@ def generate_from_dataframe(
     assembly_number: str,
     output_dir: str = "",
     reference_path: str = "",
+    source: str | None = None,
+    sales_tax_rate: float = DEFAULT_SALES_TAX_RATE,
 ) -> dict[str, Any]:
     """Build a purchasing sheet from an Inventor-export-shaped DataFrame.
 
     Same path as a file export (used by the CAD BOM tool, which reads the BOM
     Inventor stored in Vault). ``output_dir`` defaults to the Desktop.
     """
-    df, err = coerce_bom_dataframe(raw)
+    df, err, info = price_bom_dataframe(raw, reference_path=reference_path)
     if err:
         return {"error": True, "message": err}
 
-    # Material precedence: the export's Material wins where non-blank; the
-    # reference file only fills blanks.
-    export_material = df["Material"].copy()
-    df, matched, total, unmatched, warnings = _enrich_with_reference(df, reference_path=reference_path)
-    keep = export_material.notna() & (export_material.astype(str).str.strip() != "")
-    df.loc[keep, "Material"] = export_material[keep]
-    warnings.extend(_fill_state_from_vault(df))
+    # The sheet's Name column is Title. The add-in's BOM file has no Title column
+    # (only Part Number and File Name), so Title is blank on every row unless the
+    # reference matched; the part number stands in, the same value By Vendor
+    # shows as Number. Done last so the state lookup's Title aliases stay as-is.
+    blank_title = df["Title"].isna() | (df["Title"].astype(str).str.strip() == "")
+    if blank_title.any():
+        df["Title"] = df["Title"].astype(object)
+        df.loc[blank_title, "Title"] = df.loc[blank_title, "Number"]
 
     if not output_dir:
         output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
     os.makedirs(output_dir, exist_ok=True)
     out_file = os.path.join(output_dir, f"{assembly_number}-PurchasingExport.xlsx")
 
-    build_purchasing_sheet(df, out_file, assembly_number)
+    build_purchasing_sheet(df, out_file, assembly_number, source=source,
+                           sales_tax_rate=sales_tax_rate)
 
     return {
         "output_path": out_file,
-        "matched_parts": matched,
-        "total_purchased_parts": total,
-        "unmatched_parts": unmatched,
-        "warnings": warnings,
+        "matched_parts": info["matched_parts"],
+        "total_purchased_parts": info["total_purchased_parts"],
+        "unmatched_parts": info["unmatched_parts"],
+        "warnings": info["warnings"],
+        "reference_source": info["reference_source"],
+        "reference_signin_needed": info["reference_signin_needed"],
     }
 
 

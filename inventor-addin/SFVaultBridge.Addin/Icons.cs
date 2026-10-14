@@ -1,0 +1,334 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Windows.Forms;
+
+namespace SFVaultBridge.Addin;
+
+/// <summary>Ribbon icons drawn in code: flat, transparent background, readable on Inventor's dark and light ribbons.</summary>
+internal static class Icons
+{
+    private sealed class PictureConverter : AxHost
+    {
+        private PictureConverter() : base("") { }
+        public static stdole.IPictureDisp ToPicture(Image image) => (stdole.IPictureDisp)GetIPictureDispFromPicture(image);
+    }
+
+    private static readonly Color Ink = ColorTranslator.FromHtml("#37474F");
+    private static readonly Color Paper = ColorTranslator.FromHtml("#F4F6F8");
+    private static readonly Color Green = ColorTranslator.FromHtml("#2E9E44");
+    private static readonly Color Red = ColorTranslator.FromHtml("#C62828");
+
+    public static stdole.IPictureDisp ToPicture(Image image) => PictureConverter.ToPicture(image);
+
+    public static (stdole.IPictureDisp Small, stdole.IPictureDisp Large) Pair(Func<int, Bitmap> draw) =>
+        (ToPicture(draw(16)), ToPicture(draw(32)));
+
+    private static Bitmap Canvas(int size, out Graphics g)
+    {
+        var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+        g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        g.Clear(Color.Transparent);
+        return bmp;
+    }
+
+    public static Bitmap Dot(int size, Color fill)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var rect = new RectangleF(1.5f, 1.5f, size - 3f, size - 3f);
+            using (var b = new SolidBrush(fill)) g.FillEllipse(b, rect);
+            using var pen = new Pen(Color.FromArgb(fill.R * 6 / 10, fill.G * 6 / 10, fill.B * 6 / 10), size >= 32 ? 1.5f : 1f);
+            g.DrawEllipse(pen, rect);
+        }
+        return bmp;
+    }
+
+    /// <summary>Spreadsheet grid: light cells, dark grid lines, green header row.</summary>
+    public static Bitmap Spreadsheet(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var m = size >= 32 ? 3f : 1.5f;
+            var box = new RectangleF(m, m, size - 2 * m, size - 2 * m);
+            var header = box.Height * (size >= 32 ? 0.25f : 0.3f);
+            var line = size >= 32 ? 1.25f : 1f;
+            using (var b = new SolidBrush(Paper)) g.FillRectangle(b, box);
+            using (var b = new SolidBrush(Green)) g.FillRectangle(b, box.X, box.Y, box.Width, header);
+            using var pen = new Pen(Ink, line);
+            var cols = size >= 32 ? 3 : 2;
+            var rows = size >= 32 ? 4 : 3;
+            for (var c = 1; c < cols; c++)
+            {
+                var x = box.X + box.Width * c / cols;
+                g.DrawLine(pen, x, box.Y, x, box.Bottom);
+            }
+            for (var r = 1; r < rows; r++)
+            {
+                var y = r == 1 ? box.Y + header : box.Y + header + (box.Height - header) * (r - 1) / (rows - 1);
+                g.DrawLine(pen, box.X, y, box.Right, y);
+            }
+            g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+        }
+        return bmp;
+    }
+
+    /// <summary>Page with a folded top-right corner and a red diagonal band (reading DRAFT on the 32 px icon).</summary>
+    public static Bitmap DraftPage(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var mx = size >= 32 ? 5f : 2.5f;
+            var my = size >= 32 ? 2.5f : 1.5f;
+            var l = mx; var t = my; var r = size - mx; var b = size - my;
+            var fold = (r - l) * 0.32f;
+            var page = new[] { new PointF(l, t), new PointF(r - fold, t), new PointF(r, t + fold), new PointF(r, b), new PointF(l, b) };
+            using (var br = new SolidBrush(Paper)) g.FillPolygon(br, page);
+
+            using (var clip = new GraphicsPath())
+            {
+                clip.AddPolygon(page);
+                var saved = g.Save();
+                g.SetClip(clip);
+                g.TranslateTransform(size / 2f, size * 0.58f);
+                g.RotateTransform(-38f);
+                var bandH = size >= 32 ? 9f : 5f;
+                using (var br = new SolidBrush(Red)) g.FillRectangle(br, -size, -bandH / 2, size * 2f, bandH);
+                if (size >= 32)
+                {
+                    using var font = new Font("Arial", 6.5f, FontStyle.Bold, GraphicsUnit.Pixel);
+                    using var white = new SolidBrush(Color.White);
+                    using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                    g.DrawString("DRAFT", font, white, new RectangleF(-size / 2f, -bandH / 2, size, bandH), fmt);
+                }
+                g.Restore(saved);
+            }
+
+            using var pen = new Pen(Ink, size >= 32 ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            g.DrawPolygon(pen, page);
+            var foldTri = new[] { new PointF(r - fold, t), new PointF(r - fold, t + fold), new PointF(r, t + fold) };
+            using (var br = new SolidBrush(Color.FromArgb(200, 176, 190, 197))) g.FillPolygon(br, foldTri);
+            g.DrawPolygon(pen, foldTri);
+        }
+        return bmp;
+    }
+
+    /// <summary>Isometric box with a green down arrow dropping into it.</summary>
+    public static Bitmap BoxDown(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var top = new[] { new PointF(S(16), S(13)), new PointF(S(27), S(18)), new PointF(S(16), S(23)), new PointF(S(5), S(18)) };
+            var left = new[] { new PointF(S(5), S(18)), new PointF(S(16), S(23)), new PointF(S(16), S(31)), new PointF(S(5), S(26)) };
+            var right = new[] { new PointF(S(27), S(18)), new PointF(S(16), S(23)), new PointF(S(16), S(31)), new PointF(S(27), S(26)) };
+            using (var b = new SolidBrush(Paper)) g.FillPolygon(b, top);
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, left);
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillPolygon(b, right);
+            g.DrawPolygon(pen, top); g.DrawPolygon(pen, left); g.DrawPolygon(pen, right);
+            var arrow = new[]
+            {
+                new PointF(S(13.5f), S(1)), new PointF(S(18.5f), S(1)), new PointF(S(18.5f), S(8)), new PointF(S(22), S(8)),
+                new PointF(S(16), S(15)), new PointF(S(10), S(8)), new PointF(S(13.5f), S(8)),
+            };
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, arrow);
+            using var ap = new Pen(Color.FromArgb(255, 30, 100, 45), big ? 1f : 0.75f) { LineJoin = LineJoin.Round };
+            g.DrawPolygon(ap, arrow);
+        }
+        return bmp;
+    }
+
+    /// <summary>Isometric box (same faces and colours as BoxDown) with a green arrow leaving it up and to the right.</summary>
+    public static Bitmap BoxOut(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var top = new[] { new PointF(S(14), S(13)), new PointF(S(25), S(18)), new PointF(S(14), S(23)), new PointF(S(3), S(18)) };
+            var left = new[] { new PointF(S(3), S(18)), new PointF(S(14), S(23)), new PointF(S(14), S(31)), new PointF(S(3), S(26)) };
+            var right = new[] { new PointF(S(25), S(18)), new PointF(S(14), S(23)), new PointF(S(14), S(31)), new PointF(S(25), S(26)) };
+            using (var b = new SolidBrush(Paper)) g.FillPolygon(b, top);
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, left);
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillPolygon(b, right);
+            g.DrawPolygon(pen, top); g.DrawPolygon(pen, left); g.DrawPolygon(pen, right);
+            // Arrow pointing up and to the right: shaft from the box top toward the corner, with a triangular head.
+            var arrow = new[]
+            {
+                new PointF(S(12), S(15)), new PointF(S(18), S(9)), new PointF(S(15), S(6)), new PointF(S(28), S(2)),
+                new PointF(S(24), S(15)), new PointF(S(21), S(12)), new PointF(S(15), S(18)),
+            };
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, arrow);
+            using var ap = new Pen(Color.FromArgb(255, 30, 100, 45), big ? 1f : 0.75f) { LineJoin = LineJoin.Round };
+            g.DrawPolygon(ap, arrow);
+        }
+        return bmp;
+    }
+
+    /// <summary>Printer nozzle (ink-outlined trapezoid hot end with an orange tip) above a block of three stacked layers in the BoxDown greys.</summary>
+    public static Bitmap PrintNozzle(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            // Hot end: wide at the top, narrowing to the tip.
+            var body = new[] { new PointF(S(9), S(2)), new PointF(S(23), S(2)), new PointF(S(23), S(8)), new PointF(S(18), S(14)), new PointF(S(14), S(14)), new PointF(S(9), S(8)) };
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillPolygon(b, body);
+            g.DrawPolygon(pen, body);
+            var tip = new[] { new PointF(S(14), S(14)), new PointF(S(18), S(14)), new PointF(S(16.8f), S(17.5f)), new PointF(S(15.2f), S(17.5f)) };
+            using (var b = new SolidBrush(Color.FromArgb(255, 0xEF, 0x6C, 0x00))) g.FillPolygon(b, tip);
+            using (var tp = new Pen(Color.FromArgb(255, 0xB8, 0x4F, 0x00), big ? 1f : 0.75f) { LineJoin = LineJoin.Round }) g.DrawPolygon(tp, tip);
+            // Three stacked layers, the top one lighter.
+            var greys = new[] { Color.FromArgb(255, 207, 216, 220), Color.FromArgb(255, 176, 190, 197), Color.FromArgb(255, 144, 164, 174) };
+            for (var i = 0; i < 3; i++)
+            {
+                var layer = new RectangleF(S(4), S(19 + i * 4), S(24), S(4));
+                using (var b = new SolidBrush(greys[i])) g.FillRectangle(b, layer);
+                g.DrawRectangle(pen, layer.X, layer.Y, layer.Width, layer.Height);
+            }
+        }
+        return bmp;
+    }
+
+    /// <summary>Clipboard: dark board, paper sheet, metal clip and a green check mark.</summary>
+    public static Bitmap ClipboardCheck(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var board = new RectangleF(S(5), S(4), S(22), S(26));
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillRectangle(b, board);
+            g.DrawRectangle(pen, board.X, board.Y, board.Width, board.Height);
+            var sheet = new RectangleF(S(8), S(8), S(16), S(19));
+            using (var b = new SolidBrush(Paper)) g.FillRectangle(b, sheet);
+            g.DrawRectangle(pen, sheet.X, sheet.Y, sheet.Width, sheet.Height);
+            var clip = new RectangleF(S(11), S(1.5f), S(10), S(5.5f));
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillRectangle(b, clip);
+            g.DrawRectangle(pen, clip.X, clip.Y, clip.Width, clip.Height);
+            using var tick = new Pen(Green, big ? 3f : 2f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLines(tick, new[] { new PointF(S(11.5f), S(18)), new PointF(S(15), S(22)), new PointF(S(21), S(13)) });
+        }
+        return bmp;
+    }
+
+    /// <summary>Approval seal: a green scalloped rosette with an ink rim and a white check mark.</summary>
+    public static Bitmap ApproveSeal(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            var cx = S(16); var cy = S(16);
+            var points = big ? 12 : 8;
+            var outer = S(15); var inner = S(12.5f);
+            var star = new PointF[points * 2];
+            for (var i = 0; i < star.Length; i++)
+            {
+                var r = i % 2 == 0 ? outer : inner;
+                var a = Math.PI * i / points - Math.PI / 2;
+                star[i] = new PointF(cx + (float)(r * Math.Cos(a)), cy + (float)(r * Math.Sin(a)));
+            }
+            using (var b = new SolidBrush(Green)) g.FillPolygon(b, star);
+            using (var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round }) g.DrawPolygon(pen, star);
+            if (big)
+            {
+                using var ring = new Pen(Color.FromArgb(200, Paper), 1.25f);
+                g.DrawEllipse(ring, cx - S(9.5f), cy - S(9.5f), S(19), S(19));
+            }
+            using var tick = new Pen(Color.White, big ? 3.25f : 2.25f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLines(tick, new[] { new PointF(S(10), S(16.5f)), new PointF(S(14.5f), S(21)), new PointF(S(22.5f), S(11.5f)) });
+        }
+        return bmp;
+    }
+
+    /// <summary>Clipboard with a sheet and two text lines, and an orange open-end wrench across its lower right corner.</summary>
+    public static Bitmap FixCard(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float S(float v) => v * size / 32f;
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            var board = new RectangleF(S(3), S(4), S(19), S(25));
+            using (var b = new SolidBrush(Color.FromArgb(255, 144, 164, 174))) g.FillRectangle(b, board);
+            g.DrawRectangle(pen, board.X, board.Y, board.Width, board.Height);
+            var sheet = new RectangleF(S(5.5f), S(8), S(14), S(18));
+            using (var b = new SolidBrush(Paper)) g.FillRectangle(b, sheet);
+            g.DrawRectangle(pen, sheet.X, sheet.Y, sheet.Width, sheet.Height);
+            var clip = new RectangleF(S(8), S(1.5f), S(9), S(5.5f));
+            using (var b = new SolidBrush(Color.FromArgb(255, 176, 190, 197))) g.FillRectangle(b, clip);
+            g.DrawRectangle(pen, clip.X, clip.Y, clip.Width, clip.Height);
+            if (big)
+            {
+                using var line = new Pen(Color.FromArgb(255, 144, 164, 174), 1.25f);
+                g.DrawLine(line, S(8), S(13), S(17), S(13));
+                g.DrawLine(line, S(8), S(17), S(15), S(17));
+            }
+            // Wrench: ink outline under an orange body so it reads on dark and light ribbons.
+            var orange = Color.FromArgb(255, 0xEF, 0x6C, 0x00);
+            var head = new RectangleF(S(20.5f), S(13), S(8), S(8));
+            var shaftFrom = new PointF(S(22), S(20)); var shaftTo = new PointF(S(13.5f), S(29));
+            var outlineW = big ? 6f : 4f; var bodyW = big ? 3.5f : 2.5f;
+            using (var o = new Pen(Ink, outlineW) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawLine(o, shaftFrom, shaftTo);
+                g.DrawArc(o, head, 350, 290);
+            }
+            using (var w = new Pen(orange, bodyW) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawLine(w, shaftFrom, shaftTo);
+                g.DrawArc(w, head, 350, 290);
+            }
+        }
+        return bmp;
+    }
+
+    /// <summary>Gear: eight-tooth cog with a round hole, slate body and ink outline so it reads on dark and light ribbons.</summary>
+    public static Bitmap Gear(int size)
+    {
+        var bmp = Canvas(size, out var g);
+        using (g)
+        {
+            var big = size >= 32;
+            float c = size / 2f;
+            float outer = size * 0.46f, root = size * 0.33f, hole = size * 0.14f;
+            const int teeth = 8;
+            var pts = new List<PointF>();
+            for (var i = 0; i < teeth; i++)
+            {
+                double a0 = (i - 0.5) * 2 * Math.PI / teeth, step = 2 * Math.PI / teeth / 4;
+                // root, tooth up, tooth top, tooth down, back to root.
+                var seq = new (double A, float R)[]
+                {
+                    (a0 + step * 0.2, root), (a0 + step * 1.2, outer), (a0 + step * 2.4, outer), (a0 + step * 3.4, root),
+                };
+                foreach (var (a, r) in seq) pts.Add(new PointF(c + r * (float)Math.Cos(a), c + r * (float)Math.Sin(a)));
+            }
+            using var path = new GraphicsPath();
+            path.AddPolygon(pts.ToArray());
+            path.AddEllipse(c - hole, c - hole, hole * 2, hole * 2);
+            using (var b = new SolidBrush(Color.FromArgb(255, 120, 144, 156))) g.FillPath(b, path);
+            using var pen = new Pen(Ink, big ? 1.25f : 1f) { LineJoin = LineJoin.Round };
+            g.DrawPath(pen, path);
+        }
+        return bmp;
+    }
+}

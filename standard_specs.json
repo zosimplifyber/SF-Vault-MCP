@@ -1,0 +1,49 @@
+{
+  "_comment": "Nominal dimensions (mm) for Content Center families, read by part_specs.card_from_standard. Coarse thread pitch. Add a family by adding a block; sizes not listed return no data.",
+  "pitch": {"M4": 0.7, "M5": 0.8, "M6": 1.0, "M8": 1.25, "M10": 1.5, "M12": 1.75},
+  "aliases": {"ISO 7093": "ISO 7093-1"},
+  "families": {
+    "ISO 4762": {"type": "screw", "threaded": true, "sizes": {
+      "M4": {"head_diameter": 7, "head_height": 4, "socket": 3},
+      "M5": {"head_diameter": 8.5, "head_height": 5, "socket": 4},
+      "M6": {"head_diameter": 10, "head_height": 6, "socket": 5},
+      "M8": {"head_diameter": 13, "head_height": 8, "socket": 6},
+      "M10": {"head_diameter": 16, "head_height": 10, "socket": 8},
+      "M12": {"head_diameter": 18, "head_height": 12, "socket": 10}}},
+    "ISO 4032": {"type": "nut", "threaded": true, "sizes": {
+      "M4": {"width_across_flats": 7, "height": 3.2},
+      "M5": {"width_across_flats": 8, "height": 4.7},
+      "M6": {"width_across_flats": 10, "height": 5.2},
+      "M8": {"width_across_flats": 13, "height": 6.8},
+      "M10": {"width_across_flats": 16, "height": 8.4},
+      "M12": {"width_across_flats": 18, "height": 10.8}}},
+    "ISO 7089": {"type": "washer", "threaded": false, "sizes": {
+      "M4": {"inner_diameter": 4.3, "outer_diameter": 9, "thickness": 0.8},
+      "M5": {"inner_diameter": 5.3, "outer_diameter": 10, "thickness": 1},
+      "M6": {"inner_diameter": 6.4, "outer_diameter": 12, "thickness": 1.6},
+      "M8": {"inner_diameter": 8.4, "outer_diameter": 16, "thickness": 1.6},
+      "M10": {"inner_diameter": 10.5, "outer_diameter": 20, "thickness": 2},
+      "M12": {"inner_diameter": 13, "outer_diameter": 24, "thickness": 2.5}}},
+    "ISO 7093-1": {"type": "washer", "threaded": false, "sizes": {
+      "M4": {"inner_diameter": 4.3, "outer_diameter": 12, "thickness": 1},
+      "M5": {"inner_diameter": 5.3, "outer_diameter": 15, "thickness": 1.2},
+      "M6": {"inner_diameter": 6.4, "outer_diameter": 18, "thickness": 1.6},
+      "M8": {"inner_diameter": 8.4, "outer_diameter": 24, "thickness": 2},
+      "M10": {"inner_diameter": 10.5, "outer_diameter": 30, "thickness": 2.5},
+      "M12": {"inner_diameter": 13, "outer_diameter": 37, "thickness": 3}}},
+    "DIN 127": {"type": "spring_washer", "threaded": false, "sizes": {
+      "M4": {"inner_diameter": 4.1, "outer_diameter": 7.6, "thickness": 0.9},
+      "M5": {"inner_diameter": 5.1, "outer_diameter": 9.2, "thickness": 1.2},
+      "M6": {"inner_diameter": 6.1, "outer_diameter": 11.8, "thickness": 1.6},
+      "M8": {"inner_diameter": 8.2, "outer_diameter": 14.8, "thickness": 2},
+      "M10": {"inner_diameter": 10.2, "outer_diameter": 18.1, "thickness": 2.2},
+      "M12": {"inner_diameter": 12.2, "outer_diameter": 21.1, "thickness": 2.5}}},
+    "DIN 6796": {"type": "spring_washer", "threaded": false, "sizes": {
+      "M4": {"inner_diameter": 4.3, "outer_diameter": 9, "thickness": 1, "free_height": 1.3},
+      "M5": {"inner_diameter": 5.3, "outer_diameter": 11, "thickness": 1.2, "free_height": 1.55},
+      "M6": {"inner_diameter": 6.4, "outer_diameter": 14, "thickness": 1.5, "free_height": 2},
+      "M8": {"inner_diameter": 8.4, "outer_diameter": 18, "thickness": 2, "free_height": 2.6},
+      "M10": {"inner_diameter": 10.5, "outer_diameter": 23, "thickness": 2.5, "free_height": 3.2},
+      "M12": {"inner_diameter": 13, "outer_diameter": 29, "thickness": 3, "free_height": 3.95}}}
+  }
+}

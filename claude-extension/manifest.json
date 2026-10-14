@@ -1,0 +1,34 @@
+{
+  "manifest_version": "0.3",
+  "name": "sf-vault-bridge",
+  "display_name": "SF Vault Bridge",
+  "version": "1.0.1",
+  "description": "Use Autodesk Vault and Inventor tools from Claude through your own running Inventor session (SF Vault Bridge add-in).",
+  "long_description": "Relays Claude Desktop to the SF Vault Bridge Inventor add-in at http://localhost:8790/mcp. Start Inventor and sign in to Vault first. Writes are preview-first and need your confirmation in Claude.",
+  "author": { "name": "Simplifyber" },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/SFVaultBridgeRelay.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/SFVaultBridgeRelay.exe",
+      "args": []
+    }
+  },
+  "tools": [
+    { "name": "bridge_status", "description": "Bridge and add-in status and version." },
+    { "name": "vault_search_files", "description": "Search Vault files by name or property." },
+    { "name": "vault_get_file", "description": "File properties, data card, lifecycle and compliance." },
+    { "name": "vault_where_used", "description": "Parents that use a file." },
+    { "name": "vault_uses", "description": "Children of a file with versions." },
+    { "name": "vault_file_versions", "description": "Version history of a file." },
+    { "name": "inventor_open_bom", "description": "Structured BOM of the active assembly in Inventor." },
+    { "name": "fix_data_card_preview", "description": "Preview a data card fix (no changes)." },
+    { "name": "fix_data_card_apply", "description": "Apply a previewed data card fix; needs confirm." },
+    { "name": "mcmaster_intake_preview", "description": "Preview a McMaster part intake (no changes)." },
+    { "name": "mcmaster_intake_commit", "description": "Commit a previewed McMaster intake; needs confirm." },
+    { "name": "job_status", "description": "Status or result of a long write started by an apply or commit tool." }
+  ],
+  "tools_generated": true,
+  "keywords": ["vault", "inventor", "simplifyber"],
+  "compatibility": { "platforms": ["win32"] }
+}

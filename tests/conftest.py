@@ -29,3 +29,36 @@ def _no_live_vault_lookups(monkeypatch):
         return {}
 
     monkeypatch.setattr(vault_state, "_fetch_states", _no_fetch)
+
+
+_INVENTOR_PROGIDS = {"inventor.application"}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_inventor(monkeypatch, request):
+    """Never start or attach to a real Inventor from the test suite.
+
+    A test that reached win32com with "Inventor.Application" launched a hidden
+    /Automation Inventor each run (eight were found on 2026-10-13), holding memory
+    and blocking add-in installs. Tests that need COM supply their own fakes.
+    """
+    try:
+        import pythoncom
+        import win32com.client as w
+    except ImportError:
+        return
+
+    def _guard(real):
+        def wrapper(progid, *args, **kwargs):
+            if str(progid).strip().lower() in _INVENTOR_PROGIDS:
+                if os.environ.get("SFVB_GUARD_LOG"):
+                    with open(os.environ["SFVB_GUARD_LOG"], "a", encoding="utf-8") as fh:
+                        fh.write(request.node.nodeid + "\n")
+                raise pythoncom.com_error(
+                    -2147221021, f"test suite blocked Inventor COM ({request.node.nodeid})", None, None)
+            return real(progid, *args, **kwargs)
+        return wrapper
+
+    for name in ("Dispatch", "DispatchEx", "GetActiveObject"):
+        if hasattr(w, name):
+            monkeypatch.setattr(w, name, _guard(getattr(w, name)))

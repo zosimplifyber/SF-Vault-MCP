@@ -285,8 +285,27 @@ about 120,000 raw.
 | `vault_get_job` | Get a job's status and metadata by ID |
 | **Files / utilities** | |
 | `vault_watermark_pdfs_in_folder` | Download every PDF in a Vault folder, watermark it, save locally |
+| **McMaster intake** | |
+| `vault_mcmaster_intake_preview` | Preview a new part from a McMaster download (number, folder, properties) |
+| `vault_mcmaster_intake_commit` | Write the approved preview to Vault as a Part - Purchased with two attachments |
+| `vault_get_part_specs` | Spec card for a CD part or an assembly, built from the attached specs |
 
 The `wrike_*` MCP tools (search/create/update tasks, folders, comments, timelogs, metadata) live in [SF-WrikeConnector](https://github.com/zosimplifyber/SF-WrikeConnector) — see that repo's README for the tool list. This project no longer talks to Wrike at all.
+
+## McMaster intake
+
+1. Download the STEP and PDF for the part from McMaster into your Downloads folder.
+2. Ask Claude for the part (for example, "intake the DIN 6796 M8 washer from McMaster").
+3. Review the preview and approve it.
+
+**Before the first intake:** install the SF Vault Bridge (`inventor-addin/README.md`),
+start Inventor and **sign in to Vault there**. All intake writes run on that session,
+so Vault Explorer can stay open and no extra licence seat is used. Set Inventor's
+STEP import option to Convert Model.
+
+Optional: to find the numbering scheme name, run `py -3.14 -c "import sys; sys.path.insert(0,'scripts'); import vault_bridge as b; print(b.get_numbering_schemes())"` and put the name in `config.json` under `intake.numbering_scheme`. If it is empty, the default scheme is used.
+
+A write that times out may still have completed, so check Vault before retrying. The bridge loads only in Inventor 2026.
 
 ## Known issues / caveats
 

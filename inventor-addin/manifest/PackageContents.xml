@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0" AutodeskProduct="Inventor" Name="SF Vault Bridge"
+    Description="Simplifyber Vault tools and MCP server for Inventor." AppVersion="{{VERSION}}"
+    Author="Simplifyber" ProductType="Application"
+    ProductCode="{A53461D5-ECBC-48CA-B480-6CE4AE1C155C}" UpgradeCode="{41C97C28-2117-497D-B713-5513A844D2A4}">
+  <CompanyDetails Name="Simplifyber" Url="https://simplifyber.com" Email="" />
+  <Components>
+    <RuntimeRequirements OS="Win64" Platform="Inventor" SeriesMin="Ind30" SeriesMax="Ind30" />
+    <ComponentEntry AppName="SF Vault Bridge" Version="{{VERSION}}" ModuleName="./Contents/SFVaultBridge.addin"
+        AppType=".NET" LoadOnAppStartup="True" AppDescription="SF Vault Bridge" />
+  </Components>
+</ApplicationPackage>

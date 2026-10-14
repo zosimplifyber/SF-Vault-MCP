@@ -257,7 +257,7 @@ def lookup_file_states(
 
     cfg = vault_config(config_path)
     if not cfg:
-        return {}, ["No Vault connection configured — the State column is left blank."]
+        return {}, ["No Vault connection configured. The State column is left blank."]
 
     try:
         return _run(lambda: _fetch_states(cfg, unique, aliases)), []
