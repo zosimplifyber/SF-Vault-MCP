@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 using SFVaultBridge.Core;
+using SFVaultBridge.Core.McMaster;
 
 namespace SFVaultBridge.Addin;
 
 /// <summary>
-/// The Settings window: General (version, update check, log folder), Dropbox (app key, sign in and out), Purchasing and packages
-/// (sales tax, Process values, print materials, recent partners) and Claude (MCP endpoint, setup info, extension folder).
+/// The Settings window: General (version, update check, log folder), Dropbox (app key, sign in and out), McMaster (server URL,
+/// sign in and out), Purchasing and packages (sales tax, Process values, print materials, recent partners) and Claude (MCP endpoint,
+/// setup info, extension folder).
 /// Save validates, writes settings.json through BridgeSettings.Save (unknown keys stay, changed team keys are recorded in userOverrides).
 /// Every action loads settings fresh, so saved values apply to the next click with no restart. Never throws into Inventor.
 /// </summary>
@@ -123,6 +125,11 @@ internal sealed class SettingsForm : Form
     private readonly Label _error = new() { AutoSize = true, ForeColor = Color.Firebrick, MaximumSize = new Size(TabWidth - 220, 0) };
     private readonly Button _save = new() { Text = "Save", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _cancel = new() { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly TextBox _mcUrl = new() { Width = 480 };
+    private readonly Button _mcSignIn = new() { Text = "Sign in", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly Button _mcSignOut = new() { Text = "Sign out", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly Label _mcStatus = new() { AutoSize = true, MaximumSize = new Size(TabWidth - 60, 0) };
+    private CancellationTokenSource? _mcCts;
     private CancellationTokenSource? _signInCts;
     private string? _tokenKey;   // the app key a sign-in made in this window used
 
@@ -151,13 +158,18 @@ internal sealed class SettingsForm : Form
 
         _key.Text = _original.DropboxAppKey;
         _tax.Text = SettingsRules.PercentText(_original.SalesTaxRate);
+        _mcUrl.Text = _original.McMasterServerUrl;
         BuildLayout();
         RefreshDropbox();
+        RefreshMcMaster();
 
         _check.Click += (_, _) => Safe(OnCheckUpdates);
         _key.TextChanged += (_, _) => Safe(RefreshDropbox);
         _signIn.Click += (_, _) => Safe(OnSignIn);
         _signOut.Click += (_, _) => Safe(OnSignOut);
+        _mcUrl.TextChanged += (_, _) => Safe(RefreshMcMaster);
+        _mcSignIn.Click += (_, _) => Safe(OnMcMasterSignIn);
+        _mcSignOut.Click += (_, _) => Safe(OnMcMasterSignOut);
         _save.Click += (_, _) => Safe(OnSave);
         FormClosing += (_, _) => { try { _closing.Cancel(); } catch (ObjectDisposedException) { /* already disposed */ } };
     }
@@ -218,6 +230,20 @@ internal sealed class SettingsForm : Form
         Add(dropbox, _dropboxStatus);
         Add(dropbox, Note("Sign in opens your browser once. The Partner Package then uploads to Dropbox /Suppliers/<Partner>/. " +
                           "Changing the app key signs the old account out. See the README, Dropbox upload, for creating the app.", gray: true));
+
+        // McMaster
+        var mcmaster = Page(tabs, "McMaster");
+        Add(mcmaster, Note("McMaster server URL"), new Padding(0, 0, 0, 2));
+        Add(mcmaster, _mcUrl);
+        var mcButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        _mcSignIn.Margin = new Padding(0, 0, 8, 0);
+        mcButtons.Controls.Add(_mcSignIn); mcButtons.Controls.Add(_mcSignOut);
+        Add(mcmaster, mcButtons);
+        Add(mcmaster, _mcStatus);
+        Add(mcmaster, Note("Each engineer signs in once with their Simplifyber account (Cloudflare Access, in the browser). Import New Part uses it to fetch " +
+                           "a part's STEP and PDF by McMaster number; the Purchasing Sheet uses it for live McMaster prices. The sign-in is kept for this " +
+                           "Windows user only (encrypted) and lasts until you sign out or it expires. If you are not signed in, Fetch and the Purchasing Sheet " +
+                           "start the sign-in for you.", gray: true));
 
         // Purchasing and packages
         var purchasing = Page(tabs, "Purchasing and packages");
@@ -366,6 +392,73 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    /// <summary>The URL in the box when it is valid, else null.</summary>
+    private string? McMasterUrl() => SettingsRules.TryParseServerUrl(_mcUrl.Text, out var url, out _) ? url : null;
+
+    private void RefreshMcMaster()
+    {
+        var url = McMasterUrl();
+        var busy = _mcCts is not null;
+        string? server = null;
+        try { server = McMasterSession.SignedInServer(); } catch (Exception ex) { _log("settings: McMaster sign-in file unreadable: " + ex.Message); }
+        var signedInHere = url is not null && server is not null && McMasterOAuth.SameServer(server, url);
+        _mcSignIn.Enabled = url is not null && !busy;
+        _mcSignOut.Enabled = server is not null && !busy;
+        if (busy) _mcStatus.Text = "Finish the McMaster sign-in in your browser (it times out after 3 minutes).";
+        else if (url is null) _mcStatus.Text = "Enter the server URL, for example " + BridgeSettings.DefaultMcMasterServerUrl + ".";
+        else if (signedInHere) _mcStatus.Text = "Signed in to " + new Uri(url).Host + ".";
+        else if (server is not null) _mcStatus.Text = "Signed in to " + (Uri.TryCreate(server, UriKind.Absolute, out var s) ? s.Host : server) + ", not this URL. Sign in again for this one.";
+        else _mcStatus.Text = "Not signed in to McMaster.";
+    }
+
+    private async void OnMcMasterSignIn()
+    {
+        var url = McMasterUrl();
+        if (url is null || _mcCts is not null) return;
+        _mcCts = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+        var cts = _mcCts;
+        RefreshMcMaster();
+        try
+        {
+            var (auth, _) = McMasterSession.For(url, _log);
+            await Task.Run(() => auth.SignInAsync(cts.Token));
+            _error.Text = "";
+        }
+        catch (OperationCanceledException) { /* the window closed */ }
+        catch (Exception ex)
+        {
+            _log("settings McMaster sign-in failed: " + McMasterSession.Describe(ex));
+            if (!IsDisposed) _error.Text = "McMaster sign-in failed: " + McMasterSession.Describe(ex);
+        }
+        finally
+        {
+            _mcCts = null;
+            cts.Dispose();
+            if (!IsDisposed) RefreshMcMaster();
+        }
+    }
+
+    private async void OnMcMasterSignOut()
+    {
+        var server = McMasterSession.SignedInServer();
+        if (server is null) { RefreshMcMaster(); return; }
+        _mcSignOut.Enabled = false;
+        string? error = null;
+        try
+        {
+            var (auth, _) = McMasterSession.For(server, _log);
+            await Task.Run(() => auth.SignOutAsync(CancellationToken.None));
+        }
+        catch (Exception ex)
+        {
+            _log("settings McMaster sign-out failed: " + ex.Message);
+            error = "Could not sign out of McMaster: " + ex.Message;
+        }
+        if (IsDisposed) return;
+        _error.Text = error ?? "";
+        RefreshMcMaster();
+    }
+
     private void OnCopySetup()
     {
         Clipboard.SetText(ClaudeExtension.SetupInfo(_endpoint, TokenPath));
@@ -409,11 +502,13 @@ internal sealed class SettingsForm : Form
         if (SettingsRules.ListError("Process values", process) is { } e1) { _error.Text = e1; return; }
         if (SettingsRules.ListError("Print materials", materials) is { } e2) { _error.Text = e2; return; }
         if (_signInCts is not null) { _error.Text = "Finish or wait for the Dropbox sign-in first."; return; }
+        if (_mcCts is not null) { _error.Text = "Finish or wait for the McMaster sign-in first."; return; }
+        if (!SettingsRules.TryParseServerUrl(_mcUrl.Text, out var mcUrl, out var mcError)) { _error.Text = mcError; return; }
         var key = _key.Text.Trim();
         var edited = _original with
         {
             ProcessValues = process, PrintMaterials = materials, RecentPartners = _recent.Items,
-            DropboxAppKey = key, SalesTaxRate = rate,
+            DropboxAppKey = key, SalesTaxRate = rate, McMasterServerUrl = mcUrl,
         };
         // Save first. Only after the file is written is the old Dropbox token signed out (a token belongs to one app key;
         // a sign-in made here with the new key stays). Any failure keeps the window open.

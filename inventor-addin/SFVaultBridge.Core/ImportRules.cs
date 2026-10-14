@@ -43,7 +43,9 @@ public static class SelectionCheck
     }
 }
 
-public sealed record ImportPlan(string Vendor, string Subfolder, string VendorNumber, string Description, string Material, string MaterialFinish, string Designer, string Comments = "");
+/// <summary>EstimatedCost (per piece) and PackSize come from a McMaster Fetch; null leaves the Estimated Cost and Pack Size iProperties alone.</summary>
+public sealed record ImportPlan(string Vendor, string Subfolder, string VendorNumber, string Description, string Material, string MaterialFinish, string Designer, string Comments = "",
+                                double? EstimatedCost = null, int? PackSize = null);
 
 public static class ImportRules
 {

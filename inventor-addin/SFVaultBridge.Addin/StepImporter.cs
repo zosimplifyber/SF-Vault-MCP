@@ -18,7 +18,8 @@ internal sealed class StepImporter : IStepImporter
 
     /// <summary>As above; when material is non-empty it is looked up in the active material library and applied. A missing or unappliable material throws BridgeException("material") before the part is saved.</summary>
     public string ImportStepAsPart(string stepPath, string outIpt, IReadOnlyDictionary<string, string> design, IReadOnlyDictionary<string, string> custom,
-                                   string? material, ICollection<string>? warnings, string? comments = null, string? titleDescription = null)
+                                   string? material, ICollection<string>? warnings, string? comments = null, string? titleDescription = null,
+                                   double? estimatedCost = null, int? packSize = null)
     {
         if (!System.IO.File.Exists(stepPath)) throw new BridgeException("not_found", $"STEP file not found: {stepPath}");
         if (System.IO.File.Exists(outIpt)) throw new BridgeException("exists", $"Refusing to overwrite existing file {outIpt}");
@@ -46,6 +47,22 @@ internal sealed class StepImporter : IStepImporter
             {
                 try { user[name].Value = value; }
                 catch (Exception ex) when (ex is COMException or ArgumentException) { user.Add(value, name); }
+            }
+
+            if (estimatedCost is > 0)
+            {
+                // Number-typed: Estimated Cost takes a double (see DataCardHost).
+                try { tracking["Cost"].Value = estimatedCost.Value; }
+                catch (Exception ex) when (ex is COMException or ArgumentException) { warnings?.Add($"Estimated Cost was not set ({ex.Message}); set it by hand."); }
+            }
+            if (packSize is > 0)
+            {
+                try { user["Pack Size"].Value = packSize.Value; }
+                catch (Exception ex) when (ex is COMException or ArgumentException)
+                {
+                    try { user.Add(packSize.Value, "Pack Size"); }
+                    catch (Exception ex2) when (ex2 is COMException or ArgumentException) { warnings?.Add($"Pack Size was not set ({ex2.Message})."); }
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(material))

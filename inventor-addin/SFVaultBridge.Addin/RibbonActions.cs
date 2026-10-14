@@ -1,5 +1,6 @@
 using System.Windows.Forms;
 using SFVaultBridge.Core;
+using SFVaultBridge.Core.McMaster;
 using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
@@ -30,7 +31,7 @@ internal sealed class RibbonActions
         Add("Manufacturing", "Assembly Package", "SFVaultBridge.AssemblyPackage", "Build the assembly package PDF (assembly and sub-assembly drawings, NOT RELEASED stamped where needed) and check it into Vault.", Icons.ClipboardCheck, a => BuildPackage(a, PackageMode.Assembly));
         Add("Manufacturing", "Partner Package", "SFVaultBridge.PartnerPackage", "Build a zip of STEP models, PDF drawings, DXF flat patterns and a BOM for a manufacturing partner, and check it into Vault. Covers the whole assembly, the parts selected in it, or the open part.", Icons.BoxOut, null, PartnerPackage);
         Add("Manufacturing", "3D Print Package", "SFVaultBridge.PrintPackage", "Build a zip of 3MF (or STL) print files, one per 3D printed part, grouped by material, and check it into Vault.", Icons.PrintNozzle, PrintPackage);
-        Add("Parts", "Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
+        Add("Parts", "Import New Part", "SFVaultBridge.ImportPart", "Pick a vendor STEP and PDF, or fetch them by McMaster number, and file them in Vault as a numbered purchased part.", Icons.BoxDown, null, ImportNewPart);
         Add("Parts", "Fix Data Card", "SFVaultBridge.FixDataCard", "Fix the data card (part number, title, description, vendor, source, process, finish, cost) of the open part or the parts selected in an assembly, with a preview first.", Icons.FixCard, null, FixDataCard);
         Add("Release", "I Approve!", "SFVaultBridge.Approve", "Sign off (Engr Approved By) and release this assembly's engineering parts, Make sub-assemblies, the assembly and their drawings, bottom up, with a preview first. Then builds the Purchasing Sheet and Assembly Package and opens Partner Package.", Icons.ApproveSeal, null, Approve);
     }
@@ -116,35 +117,18 @@ internal sealed class RibbonActions
     private void ImportNewPart()
     {
         const string title = "Import New Part";
-        string? step = null, pdf = null;
-        var downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        while (true)
-        {
-            using var dlg = new OpenFileDialog
-            {
-                Title = "Select the vendor STEP and PDF",
-                InitialDirectory = System.IO.Directory.Exists(downloads) ? downloads : "",
-                Filter = "Vendor files (*.stp;*.step;*.pdf)|*.stp;*.step;*.pdf",
-                Multiselect = true,
-            };
-            var owner = OwnerWindow();
-            var ok = owner is null ? dlg.ShowDialog() : dlg.ShowDialog(owner);
-            if (ok != DialogResult.OK) return;
-            var check = SelectionCheck.Check(dlg.FileNames);
-            if (check.Error is not null) { Msg(check.Error, title); continue; }
-            step = check.Step; pdf = check.Pdf;
-            break;
-        }
-        if (step is null || pdf is null) return;
-
+        // The form opens straight away: its McMaster number box fetches the files, and Choose files picks downloaded ones.
         ImportPlan? plan;
-        using (var form = new ImportPartForm(_app, step, pdf, _log))
+        string? step, pdf;
+        var mcmasterUrl = BridgeSettings.Load(BridgeSettings.DefaultPath, _log).McMasterServerUrl;
+        using (var form = new ImportPartForm(_app, null, null, _log, mcmasterUrl))
         {
             var owner = OwnerWindow();
             var r = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
             plan = r == DialogResult.OK ? form.Plan : null;
+            step = form.StepFile; pdf = form.PdfFile;
         }
-        if (plan is null) return;
+        if (plan is null || step is null || pdf is null) return;
 
         ImportResult result;
         var cursor = Cursor.Current;
@@ -288,6 +272,10 @@ internal sealed class RibbonActions
         var lines = BomOrdering.Flatten(BomEnricher.Apply(BomReader.Read(asm), VaultFiles.WorkingFolderRoot(), _log));
         if (lines.Count == 0) throw new BridgeException("no_bom", "The assembly has no BOM rows.");
         var source = BomReader.SourceLine(asm);
+        var settings = BridgeSettings.Load(BridgeSettings.DefaultPath, _log);
+        var (priced, mcNote, mcProblem) = LiveMcMasterPrices(lines, settings.McMasterServerUrl);
+        lines = priced;
+        if (mcNote.Length > 0) source += " | " + mcNote;
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SFVaultBridge", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(temp);
         try
@@ -296,12 +284,56 @@ internal sealed class RibbonActions
             var resultPath = System.IO.Path.Combine(temp, "result.json");
             BomFile.Write(bom, lines);
             var name = VaultPaths.PurchasingName(asm.FullFileName);
-            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath, source, BridgeSettings.Load(BridgeSettings.DefaultPath, _log).SalesTaxRate), resultPath, ToolTimeout), "workbook", "lines");
+            var result = ToolResults.Parse(ToolRunner.Run(ToolResults.PurchasingArgs(bom, stem, temp, name, resultPath, source, settings.SalesTaxRate), resultPath, ToolTimeout), "workbook", "lines");
             if (!result.Ok) throw new BridgeException("tool_failed", result.Error ?? "The purchasing tool failed.");
             Publish(result.Output!, System.IO.Path.Combine(folder, name), vaultFolder, name, $"Purchasing sheet for {stem}",
-                    $"{result.Count} BOM lines." + (result.Note is null ? "" : $"\n{result.Note}") + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
+                    $"{result.Count} BOM lines." + (result.Note is null ? "" : $"\n{result.Note}")
+                    + (mcNote.Length == 0 ? "" : $"\n{mcNote}." + (mcProblem is null ? "" : $" {mcProblem}"))
+                    + (result.Unmatched.Count > 0 ? $"\nNot matched: {string.Join(", ", result.Unmatched)}" : ""));
         }
         finally { try { System.IO.Directory.Delete(temp, true); } catch { } }
+    }
+
+    /// <summary>
+    /// Live McMaster prices for the McMaster rows (McMasterRule). Starts the McMaster sign-in when needed, in a window with Cancel;
+    /// anything not priced live (cancelled, budget used up, lookup failed) keeps its list or file price. Never throws.
+    /// Returns the lines (with the live columns filled), the note for row 2 and the result message, and the first problem.
+    /// </summary>
+    private (IReadOnlyList<BomLine> Lines, string Note, string? Problem) LiveMcMasterPrices(IReadOnlyList<BomLine> lines, string serverUrl)
+    {
+        var (parts, noNumber) = McMasterPricing.PartsToPrice(lines);
+        if (parts.Count == 0 && noNumber.Count == 0) return (lines, "", null);
+        var today = DateTime.Today;
+        McMasterPriceRun run;
+        if (parts.Count == 0) run = McMasterPriceRun.AllFellBack(Array.Empty<string>(), "No McMaster part has a Vendor Number.");
+        else
+        {
+            var cursor = Cursor.Current;
+            try
+            {
+                var (_, result, error) = BusyDialog.Run(OwnerWindow(), "Purchasing Sheet", $"Getting live McMaster prices for {parts.Count} part{(parts.Count == 1 ? "" : "s")}...",
+                    async (progress, ct) =>
+                    {
+                        var (auth, tools) = McMasterSession.For(serverUrl, _log);
+                        void OnStatus(string s) => progress.Report(s + " Cancel uses the list and file prices.");
+                        auth.Status += OnStatus;
+                        try
+                        {
+                            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            limit.CancelAfter(TimeSpan.FromMinutes(6));
+                            return await McMasterPricing.FetchAsync(tools, parts, _log, limit.Token).ConfigureAwait(false);
+                        }
+                        finally { auth.Status -= OnStatus; }
+                    });
+                run = result ?? McMasterPriceRun.AllFellBack(parts.Select(p => p.PartNumber),
+                    error is null ? "Live McMaster prices were cancelled." : McMasterSession.Describe(error));
+                if (error is not null) _log("purchasing: McMaster prices failed: " + error.GetType().Name + ": " + McMasterSession.Describe(error));
+            }
+            finally { Cursor.Current = cursor; }
+        }
+        var fellBack = run.FellBack.Count + noNumber.Count;
+        _log($"purchasing: McMaster live {run.Live.Count}, fell back {fellBack}" + (noNumber.Count > 0 ? $" (no Vendor Number: {string.Join(", ", noNumber)})" : ""));
+        return (McMasterPricing.Apply(lines, run.Live, today), McMasterPricing.Note(run.Live.Count, fellBack, today), run.Problems.FirstOrDefault());
     }
 
     /// <summary>Whole assembly, the components selected in it, or the open part (see PackageScope.Decide).</summary>

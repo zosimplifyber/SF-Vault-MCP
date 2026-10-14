@@ -1,4 +1,5 @@
 using SFVaultBridge.Core;
+using SFVaultBridge.Core.McMaster;
 using Inv = Inventor;
 
 namespace SFVaultBridge.Addin;
@@ -67,7 +68,8 @@ internal static class ImportPartRunner
                 ["Engr Approved By"] = "NOT REVIEWED",
             };
             custom["Material Finish"] = ImportRules.NormalizeFinish(plan.MaterialFinish);
-            var savedIpt = new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings, plan.Comments, plan.Description);
+            var savedIpt = new StepImporter(app).ImportStepAsPart(stepPath, localIpt, design, custom, plan.Material.Trim(), warnings, plan.Comments, plan.Description,
+                                                                  plan.EstimatedCost, plan.PackSize);
             partDone = true;
             if (!string.Equals(savedIpt, localIpt, StringComparison.OrdinalIgnoreCase))
             {
@@ -154,6 +156,19 @@ internal static class ImportPartRunner
         }
     }
 
+    /// <summary>Deletes Downloads\SF Vault Bridge\McMaster\&lt;PN&gt; once a Fetch's files have moved out of it. Any other folder is left alone.</summary>
+    private static void RemoveEmptyFetchFolder(string? dir)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(dir)) return;
+            var root = System.IO.Path.GetDirectoryName(McMasterImport.DownloadFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "x"))!;
+            if (!string.Equals(System.IO.Path.GetDirectoryName(dir), root, StringComparison.OrdinalIgnoreCase)) return;
+            if (!System.IO.Directory.EnumerateFileSystemEntries(dir).Any()) System.IO.Directory.Delete(dir);
+        }
+        catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>Moves the downloads to Downloads\Imported (adding " (n)" on a name clash); a failure is a warning.</summary>
     private static void Tidy(IEnumerable<string> files, List<string> warnings)
     {
@@ -170,6 +185,7 @@ internal static class ImportPartRunner
                     var target = System.IO.Path.Combine(done, stem + ext);
                     for (var n = 2; System.IO.File.Exists(target); n++) target = System.IO.Path.Combine(done, $"{stem} ({n}){ext}");
                     System.IO.File.Move(f, target);
+                    RemoveEmptyFetchFolder(System.IO.Path.GetDirectoryName(f));
                 }
                 catch (Exception ex) { warnings.Add($"Could not move {System.IO.Path.GetFileName(f)} to Downloads\\Imported: {ex.Message}"); }
             }

@@ -101,6 +101,7 @@ internal static class BomReader
         var isSheetMetal = false;
         double? cost = null;
         string hsCode = "", source = "";
+        int? packSize = null;
         string partNumber = "", description = "", revision = "", material = "", fileName = "", fullPath = "", vendor = "", vendorNumber = "";
         double qty;
         try { qty = Convert.ToDouble(row.ItemQuantity, System.Globalization.CultureInfo.InvariantCulture); } catch { qty = 0; }
@@ -137,6 +138,7 @@ internal static class BomReader
             hsCode = Prop("Inventor User Defined Properties", "HS/HTS Code").Trim();
             source = Prop("Inventor User Defined Properties", "Source").Trim();
             try { cost = ParseCost(sets?["Design Tracking Properties"]["Cost"].Value); } catch { cost = null; }
+            try { packSize = ParsePackSize(sets?["Inventor User Defined Properties"]["Pack Size"].Value); } catch { packSize = null; }
             vendorNumber = SourceRules.VendorNumber(Prop("Design Tracking Properties", "Catalog Web Link"), Prop("Inventor User Defined Properties", "Vendor Number"));
         }
         catch { }
@@ -148,7 +150,14 @@ internal static class BomReader
         IReadOnlyList<BomNode> children = Array.Empty<BomNode>();
         try { children = Rows(row.ChildRows); }
         catch (Exception ex) { System.Diagnostics.Trace.TraceWarning($"BOM child rows of {partNumber} could not be read: {ex.Message}"); }
-        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal, Cost: cost, HsCode: hsCode, Source: source);
+        return new BomNode(partNumber, description, qty, "Each", structure, revision, material, fileName, fullPath, children, vendor, vendorNumber, Process: process, MaterialFinish: finish, IsSheetMetal: isSheetMetal, Cost: cost, HsCode: hsCode, Source: source, PackSize: packSize);
+    }
+
+    /// <summary>The Pack Size iProperty (set by a McMaster Fetch at import) as a whole number above 0; anything else is unknown.</summary>
+    internal static int? ParsePackSize(object? v)
+    {
+        var d = ParseCost(v);
+        return d is >= 1 and < int.MaxValue ? (int)Math.Floor(d.Value) : null;
     }
 
     /// <summary>Estimated Cost from COM (double, decimal or string); 0, negative, blank or unparseable is no cost.</summary>

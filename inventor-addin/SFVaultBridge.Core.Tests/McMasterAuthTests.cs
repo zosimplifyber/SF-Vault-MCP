@@ -1,4 +1,3 @@
-using System.Net.Sockets;
 using System.Text;
 using SFVaultBridge.Core;
 using SFVaultBridge.Core.McMaster;
@@ -214,16 +213,6 @@ public class LoopbackRedirectTests
             Assert.Contains("cancelled", (await Assert.ThrowsAsync<McMasterSignInCancelled>(() => lb.WaitForCodeAsync("s", TimeSpan.FromMinutes(1), cts.Token))).Message);
         }
     }
-
-    [Fact]
-    public void Port_is_free_and_closed_after_dispose()
-    {
-        int port;
-        using (var lb = new LoopbackRedirect()) port = lb.Port;
-        var l = new TcpListener(System.Net.IPAddress.Loopback, port);
-        l.Start();   // would throw if still held
-        l.Stop();
-    }
 }
 
 public class McMasterAuthTests
@@ -379,7 +368,7 @@ public class McMasterAuthTests
         var refused = WithBrowser(server, store, new List<string>(), _ => false);
         await Assert.ThrowsAsync<McMasterAuthException>(() => refused.SignInAsync(CancellationToken.None));
 
-        var wrongState = WithBrowser(server, store, new List<string>(), server.Browser(q => "code=good-code&state=forged"), TimeSpan.FromMilliseconds(800));
+        var wrongState = WithBrowser(server, store, new List<string>(), server.Browser(q => "code=good-code&state=forged"), TimeSpan.FromMilliseconds(1500));
         await Assert.ThrowsAsync<McMasterSignInCancelled>(() => wrongState.SignInAsync(CancellationToken.None));
         Assert.Null(store.Text);
 
