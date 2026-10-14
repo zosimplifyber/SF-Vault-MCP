@@ -5,6 +5,9 @@ if (-not $Version) {
     $vf = Join-Path $here '..\inventor-addin\VERSION'
     if (Test-Path $vf) { $Version = (Get-Content $vf -Raw).Trim() } else { $Version = '1.0.0' }
 }
+# Never leave an old build behind: drop everything in dist first so a failed build cannot be mistaken for a fresh one.
+$dist = Join-Path $here 'dist'
+if (Test-Path $dist) { Remove-Item (Join-Path $dist '*') -Recurse -Force }
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("sfvb-mcpb-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
@@ -21,7 +24,6 @@ try {
     $m.version = $Version
     $json = $m | ConvertTo-Json -Depth 10
     [IO.File]::WriteAllText((Join-Path $stage 'manifest.json'), $json, (New-Object Text.UTF8Encoding($false)))
-    $dist = Join-Path $here 'dist'
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     $out = Join-Path $dist 'SF Vault Bridge.mcpb'
     if (Test-Path $out) { Remove-Item $out -Force }
@@ -44,6 +46,18 @@ try {
             }
         } finally { $zip.Dispose() }
     }
+    # Check what was packed: the manifest (stamped with this version) and the relay exe must both be inside.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $z = [IO.Compression.ZipFile]::OpenRead($out)
+    try {
+        $names = @($z.Entries | ForEach-Object { $_.FullName.Replace([string][char]92, '/') })
+        foreach ($need in 'manifest.json', 'server/SFVaultBridgeRelay.exe') {
+            if ($names -notcontains $need) { throw "Packed $out lacks $need (has: $($names -join ', '))." }
+        }
+        $entry = $z.GetEntry('manifest.json'); $rd = New-Object IO.StreamReader($entry.Open())
+        try { $packedVersion = ($rd.ReadToEnd() | ConvertFrom-Json).version } finally { $rd.Dispose() }
+        if ($packedVersion -ne $Version) { throw "Packed manifest version is $packedVersion, expected $Version." }
+    } finally { $z.Dispose() }
     Write-Host "Built $out (version $Version)"
 } finally {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue

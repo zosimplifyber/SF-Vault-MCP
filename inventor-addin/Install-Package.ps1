@@ -52,7 +52,9 @@ function Merge-TeamSettings([string]$teamFile, [string]$settingsFile) {
         $merged | Add-Member -NotePropertyName $key -NotePropertyValue $value -Force
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $settingsFile) | Out-Null
-    [IO.File]::WriteAllText($settingsFile, (ConvertTo-Json -InputObject $merged -Depth 10), (New-Object Text.UTF8Encoding($false)))
+    $tmp = "$settingsFile.tmp"
+    [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $merged -Depth 10), (New-Object Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $settingsFile -Force  # swap in whole: a crash never leaves a half-written file
 }
 
 function Find-Inventor2026 {

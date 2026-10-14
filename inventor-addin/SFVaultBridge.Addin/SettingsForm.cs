@@ -339,26 +339,30 @@ internal sealed class SettingsForm : Form
         }
     }
 
-    private void OnSignOut()
+    private async void OnSignOut()
     {
         var key = (_tokenKey ?? (_original.DropboxAppKey.Length > 0 ? _original.DropboxAppKey : _key.Text)).Trim();
-        SignOutWith(key);
+        _signOut.Enabled = false;
+        var error = await Task.Run(() => SignOutWith(key));
+        if (IsDisposed) return;
+        _error.Text = error ?? "";
         RefreshDropbox();
     }
 
-    private void SignOutWith(string key)
+    /// <summary>Signs out of Dropbox (revoke is best effort, then the token file goes). Runs off the UI thread. Returns an error text or null.</summary>
+    private string? SignOutWith(string key)
     {
         try
         {
             using var http = DropboxClient.NewHttpClient();
             new DropboxAuth(key, http).SignOut();
             _tokenKey = null;
-            _error.Text = "";
+            return null;
         }
         catch (Exception ex)
         {
             _log("settings dropbox sign-out failed: " + ex.Message);
-            _error.Text = "Could not sign out of Dropbox: " + ex.Message;
+            return "Could not sign out of Dropbox: " + ex.Message;
         }
     }
 
@@ -396,7 +400,7 @@ internal sealed class SettingsForm : Form
         MessageBox.Show(this, how, Text);
     }
 
-    private void OnSave()
+    private async void OnSave()
     {
         _error.Text = "";
         if (!SettingsRules.TryParsePercent(_tax.Text, out var rate, out var taxError)) { _error.Text = taxError; return; }
@@ -404,16 +408,15 @@ internal sealed class SettingsForm : Form
         var materials = SettingsRules.CleanList(_materials.Items);
         if (SettingsRules.ListError("Process values", process) is { } e1) { _error.Text = e1; return; }
         if (SettingsRules.ListError("Print materials", materials) is { } e2) { _error.Text = e2; return; }
+        if (_signInCts is not null) { _error.Text = "Finish or wait for the Dropbox sign-in first."; return; }
         var key = _key.Text.Trim();
         var edited = _original with
         {
             ProcessValues = process, PrintMaterials = materials, RecentPartners = _recent.Items,
             DropboxAppKey = key, SalesTaxRate = rate,
         };
-        if (_signInCts is not null) { _error.Text = "Finish or wait for the Dropbox sign-in first."; return; }
-        // A different app key cannot use the old account's token: sign the old one out (a sign-in made here with the new key stays).
-        if (key != _original.DropboxAppKey && TokenExists() && _tokenKey != key)
-            SignOutWith(_original.DropboxAppKey.Length > 0 ? _original.DropboxAppKey : key);
+        // Save first. Only after the file is written is the old Dropbox token signed out (a token belongs to one app key;
+        // a sign-in made here with the new key stays). Any failure keeps the window open.
         if (!BridgeSettings.Save(_settingsPath, _original, edited, _log))
         {
             _error.Text = "Could not write settings.json. Details are in bridge.log.";
@@ -421,6 +424,20 @@ internal sealed class SettingsForm : Form
         }
         Saved = true;
         _log("settings saved; changed: " + string.Join(", ", BridgeSettings.ChangedKeys(_original, edited)));
+        if (key != _original.DropboxAppKey && TokenExists() && _tokenKey != key)
+        {
+            _save.Enabled = false;
+            var oldKey = _original.DropboxAppKey.Length > 0 ? _original.DropboxAppKey : key;
+            var error = await Task.Run(() => SignOutWith(oldKey));
+            if (IsDisposed) return;
+            _save.Enabled = true;
+            if (error is not null)
+            {
+                _error.Text = "Settings saved, but the old Dropbox account is still signed in. " + error + " Press Sign out, then Cancel.";
+                RefreshDropbox();
+                return;
+            }
+        }
         DialogResult = DialogResult.OK;
         Close();
     }

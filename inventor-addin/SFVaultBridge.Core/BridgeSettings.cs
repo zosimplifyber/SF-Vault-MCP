@@ -171,7 +171,7 @@ public sealed record BridgeSettings(IReadOnlyList<string> ProcessValues, IReadOn
         {
             var dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(path, text, new UTF8Encoding(false));
+            AtomicFile.WriteAllText(path, text);
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

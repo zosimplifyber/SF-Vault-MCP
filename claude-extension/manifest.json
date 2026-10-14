@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "sf-vault-bridge",
   "display_name": "SF Vault Bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Use Autodesk Vault and Inventor tools from Claude through your own running Inventor session (SF Vault Bridge add-in).",
   "long_description": "Relays Claude Desktop to the SF Vault Bridge Inventor add-in at http://localhost:8790/mcp. Start Inventor and sign in to Vault first. Writes are preview-first and need your confirmation in Claude.",
   "author": { "name": "Simplifyber" },

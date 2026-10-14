@@ -46,9 +46,18 @@ Copy-Item (Join-Path $addin 'manifest\team-settings.json') $out
 Write-Host '== Claude Desktop extension'
 $extBuild = Join-Path $ExtensionDir 'build.ps1'
 if (Test-Path $extBuild) {
-    & $extBuild -Version $version
     $mcpb = Join-Path $ExtensionDir 'dist\SF Vault Bridge.mcpb'
+    if (Test-Path $mcpb) { Remove-Item $mcpb -Force }   # no stale build can be picked up
+    & $extBuild -Version $version
     if (-not (Test-Path $mcpb)) { throw "Extension build.ps1 ran but $mcpb is missing." }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $z = [IO.Compression.ZipFile]::OpenRead($mcpb)
+    try {
+        $names = @($z.Entries | ForEach-Object { $_.FullName.Replace([string][char]92, '/') })
+        foreach ($need in 'manifest.json', 'server/SFVaultBridgeRelay.exe') {
+            if ($names -notcontains $need) { throw "$mcpb lacks $need (has: $($names -join ', ')). Not releasing." }
+        }
+    } finally { $z.Dispose() }
     Copy-Item $mcpb (Join-Path $out 'SF Vault Bridge.mcpb')
 } else {
     Write-Host "EXTENSION NOT BUILT: $extBuild not found. The package has no SF Vault Bridge.mcpb."

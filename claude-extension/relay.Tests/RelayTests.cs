@@ -185,6 +185,18 @@ public class RelayTests
     }
 
     [Fact]
+    public async Task NullIdGetsAnInvalidRequestErrorAndIsNotForwarded()
+    {
+        using var s = new FakeServer((r, res) => Json(res, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"));
+        var (relay, o) = Make(s.Url, TmpToken("t"));
+        await relay.HandleAsync("{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"tools/list\"}");
+        Assert.Empty(s.Seen);
+        var m = JsonNode.Parse(o.Single())!;
+        Assert.Null(m["id"]);
+        Assert.Equal(-32600, (int)m["error"]!["code"]!);
+    }
+
+    [Fact]
     public async Task IdZeroGetsLocalAnswerWhenBridgeDown()
     {
         string url;

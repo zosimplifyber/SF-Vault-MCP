@@ -122,7 +122,7 @@ public static class SettingsMerge
         }
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllText(path, Merge(existing, teamJson), new System.Text.UTF8Encoding(false));
+        AtomicFile.WriteAllText(path, Merge(existing, teamJson));
         return backup;
     }
 

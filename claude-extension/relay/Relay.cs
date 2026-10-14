@@ -156,8 +156,13 @@ public sealed class Relay
         try { msg = JsonNode.Parse(line) as JsonObject; } catch { msg = null; }
         if (msg == null) { _log("ignoring unparseable stdin line"); return; }
 
+        if (msg.ContainsKey("id") && msg["id"] == null)
+        {
+            Emit(Error(null, -32600, "Invalid Request: id must not be null."));
+            return;
+        }
         var id = msg["id"];
-        var isNotification = id == null; // JSON null parses to a C# null; id 0 is a real node
+        var isNotification = !msg.ContainsKey("id"); // id 0 is a real node
         string? method = null;
         if (msg["method"] is JsonValue mv && mv.TryGetValue<string>(out var ms)) method = ms;
 

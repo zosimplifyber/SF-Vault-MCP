@@ -270,3 +270,45 @@ public class ClaudeExtensionTests : IDisposable
         Assert.Contains(@"VaultBridge\token", text);
     }
 }
+
+public class AtomicFileTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "sfvb-atomic-" + Guid.NewGuid().ToString("N"));
+    public AtomicFileTests() => Directory.CreateDirectory(_dir);
+    public void Dispose()
+    {
+        foreach (var f in Directory.GetFiles(_dir)) File.SetAttributes(f, FileAttributes.Normal);
+        Directory.Delete(_dir, true);
+    }
+
+    [Fact]
+    public void WritesNewAndExistingFilesWithoutLeavingATempFile()
+    {
+        var p = Path.Combine(_dir, "settings.json");
+        AtomicFile.WriteAllText(p, "one");
+        Assert.Equal("one", File.ReadAllText(p));
+        AtomicFile.WriteAllText(p, "two");
+        Assert.Equal("two", File.ReadAllText(p));
+        Assert.Equal(new[] { p }, Directory.GetFiles(_dir));
+    }
+
+    [Fact]
+    public void FailedSwapKeepsTheOldFileWholeAndCleansUp()
+    {
+        var p = Path.Combine(_dir, "settings.json");
+        File.WriteAllText(p, "old");
+        File.SetAttributes(p, FileAttributes.ReadOnly);
+        Assert.ThrowsAny<Exception>(() => AtomicFile.WriteAllText(p, "new"));
+        Assert.Equal("old", File.ReadAllText(p));
+        Assert.Equal(new[] { p }, Directory.GetFiles(_dir));
+    }
+
+    [Fact]
+    public void SaveGoesThroughTheSwap()
+    {
+        var p = Path.Combine(_dir, "s", "settings.json");
+        var s = BridgeSettings.Defaults;
+        Assert.True(BridgeSettings.Save(p, s, s with { SalesTaxRate = 0.2 }, _ => { }));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(p)!, "*.tmp"));
+    }
+}

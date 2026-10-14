@@ -7,7 +7,8 @@ void Log(string m) { try { Console.Error.WriteLine($"[sf-vault-bridge-relay] {m}
 
 // SFVB_MCP_URL and SFVB_TOKEN_FILE exist for tests; production uses the defaults.
 var url = Environment.GetEnvironmentVariable("SFVB_MCP_URL");
-if (string.IsNullOrEmpty(url)) url = "http://localhost:8790/mcp";
+// The token goes with every request, so the override is honoured for loopback hosts only.
+if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var parsed) || !parsed.IsLoopback) url = "http://localhost:8790/mcp";
 var tokenFile = Environment.GetEnvironmentVariable("SFVB_TOKEN_FILE");
 if (string.IsNullOrEmpty(tokenFile)) tokenFile = Relay.DefaultTokenFile();
 
