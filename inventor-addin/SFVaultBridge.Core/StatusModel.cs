@@ -7,7 +7,7 @@ public sealed record BridgeStatusView(BridgeState State, string Title, string De
 /// <summary>Pure mapping from bridge facts to the ribbon button's state and text.</summary>
 public static class StatusModel
 {
-    public static BridgeStatusView Evaluate(bool listening, StatusInfo? status, DateTime? lastRequestUtc, string prefix)
+    public static BridgeStatusView Evaluate(bool listening, StatusInfo? status, DateTime? lastRequestUtc, string prefix, string? version = null, string? updateVersion = null)
     {
         var signedIn = status?.SignedIn == true;
         var (state, title) = !listening ? (BridgeState.Stopped, "Stopped")
@@ -17,11 +17,13 @@ public static class StatusModel
         var lines = new List<string>
         {
             title,
+            $"Version: {(string.IsNullOrWhiteSpace(version) ? AppVersion.Current : version)}",
             $"User: {(string.IsNullOrWhiteSpace(status?.User) ? "none" : status!.User)}",
             $"Vault: {(string.IsNullOrWhiteSpace(status?.Vault) ? "none" : status!.Vault)}",
             $"Address: {prefix}",
             $"Last request: {last}",
         };
+        if (!string.IsNullOrWhiteSpace(updateVersion)) lines.Insert(1, $"Update available: {updateVersion}");
         if (state == BridgeState.Stopped) lines.Add("See bridge.log for the reason.");
         else if (state == BridgeState.SignInNeeded) lines.Add("Sign in on the Vault tab (Log In).");
         return new BridgeStatusView(state, title, string.Join(Environment.NewLine, lines));

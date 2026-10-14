@@ -156,6 +156,36 @@ def fix_data_card(files: Iterable[str], design: dict[str, str] | None = None, cu
     return _call("fix_data_card", body)
 
 
+def staging_dir() -> Path:
+    """Inside Downloads, the one place besides the workspace the add-in may read from."""
+    return Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads" / "SF Vault Bridge" / "publish"
+
+
+def publish_release(zip_path: str | Path, version: str | None = None) -> dict[str, Any]:
+    """Check a release zip into Vault at $/Tools/SF Vault Bridge/ (refuses a version that is already there).
+
+    The zip is copied into Downloads/SF Vault Bridge/publish first because the add-in reads only the
+    workspace and Downloads; the copy is removed afterwards."""
+    import re
+    import shutil
+    src = Path(zip_path)
+    if not src.is_file():
+        raise FileNotFoundError(f"{src} does not exist")
+    if version is None:
+        m = re.fullmatch(r"SF Vault Bridge (\d+\.\d+\.\d+)\.zip", src.name)
+        if not m:
+            raise ValueError("pass --version, or name the zip 'SF Vault Bridge <x.y.z>.zip'")
+        version = m.group(1)
+    staging = staging_dir()
+    staging.mkdir(parents=True, exist_ok=True)
+    staged = staging / src.name
+    shutil.copy2(src, staged)
+    try:
+        return _call("publish_release", {"zipPath": str(staged), "version": version})
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def _pairs(items: Iterable[str], flag: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for item in items:
@@ -180,6 +210,9 @@ def build_parser():
     fix.add_argument("--comment", default=None, help="check-in comment")
     fix.add_argument("--revise-released", action="store_true",
                      help="also fix Released files: Released -> Work in Progress, edit, check in, back to Released (never Content Center)")
+    pub = sub.add_parser("publish-release", help="Check a release zip into Vault at $/Tools/SF Vault Bridge/")
+    pub.add_argument("zip", help="release/SF Vault Bridge <version>.zip from build-release.ps1")
+    pub.add_argument("--version", default=None, help="x.y.z (default: from the zip name)")
     return parser
 
 
@@ -193,6 +226,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         counts = result.get("counts", {})
         return 1 if counts.get("error") else 0
+    if args.command == "publish-release":
+        print(json.dumps(publish_release(args.zip, args.version), indent=2))
+        return 0
     return 2
 
 

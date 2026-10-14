@@ -6,7 +6,7 @@ using WsFile = Autodesk.Connectivity.WebServices.File;
 namespace SFVaultBridge.Addin;
 
 /// <summary>Vault file work for the ribbon buttons, on Inventor's signed-in session.</summary>
-internal static class VaultFiles
+internal static partial class VaultFiles
 {
     private static VDF.Vault.Currency.Connections.Connection Conn => VaultSession.Connection;
 

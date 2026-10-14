@@ -20,7 +20,7 @@ public static class BridgeOps
             return new JsonObject
             {
                 ["signed_in"] = s.SignedIn, ["user"] = s.User, ["vault"] = s.Vault, ["server"] = s.Server,
-                ["inventor_version"] = inventor.InventorVersion, ["bridge_version"] = bridgeVersion,
+                ["inventor_version"] = inventor.InventorVersion, ["bridge_version"] = bridgeVersion, ["version"] = bridgeVersion,
             };
         });
         Reg("get_numbering_schemes", _ => new JsonObject

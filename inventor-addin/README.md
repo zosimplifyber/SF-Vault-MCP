@@ -6,13 +6,19 @@ Spec: `docs/superpowers/specs/2026-10-12-inventor-vault-bridge-design.md`.
 
 ## Install (per Windows user, no admin)
 
+Engineers: unzip `SF Vault Bridge <version>.zip` (from Vault `$/Tools/SF Vault Bridge/`), close Inventor, double-click `Install.cmd`, start Inventor, allow the add-in once in Add-In Manager (unsigned), sign in to Vault. The package installs `%APPDATA%\Autodesk\ApplicationPlugins\SFVaultBridge.bundle` and merges `team-settings.json` into `%APPDATA%\Simplifyber\VaultBridge\settings.json` (team keys overwrite, `recentPartners` stays). `Uninstall SF Vault Bridge.cmd` is written next to the bundle.
+
+Dev loop (this PC):
+
 1. Close Inventor.
-2. `pwsh -File inventor-addin/Install-VaultBridge.ps1` (needs the .NET 8 SDK on the build PC).
+2. `pwsh -File inventor-addin/Install-VaultBridge.ps1` (needs the .NET 8 SDK). It builds, stages the bundle and runs `Install-Package.ps1` on it.
 3. Start Inventor and sign in to Vault.
+
+Release: edit `inventor-addin/VERSION` (single source for assemblies, PackageContents.xml, zip name, Status tooltip, bridge.log), run `pwsh -File build-release.ps1` (add `-ExtensionDir <folder with build.ps1>` for the Claude Desktop extension; without it the step logs `EXTENSION NOT BUILT`). Output: `release/SF Vault Bridge <version>.zip`. Publish with the add-in running and signed in: `py -3.14 scripts/vault_bridge.py publish-release "release/SF Vault Bridge <version>.zip"` (refuses a version already in Vault). Running add-ins check `$/Tools/SF Vault Bridge/` on start and every 6 hours and show "Update available: <version>" on the Status button; clicking it downloads the zip to `Downloads\SF Vault Bridge`. Nothing installs automatically.
 
 ## Check it
 
-- Log: `%APPDATA%\Simplifyber\VaultBridge\bridge.log` should say `started 0.1.0 on http://localhost:8790/`.
+- Log: `%APPDATA%\Simplifyber\VaultBridge\bridge.log` should say `started <version> on http://localhost:8790/`.
 - `py -3.14 -c "import sys; sys.path.insert(0, 'scripts'); import vault_bridge; print(vault_bridge.status())"`
 - Ribbon: its own **SF Vault Bridge** tab (Part, Assembly, Drawing and the no-document ribbon). The Status panel shows a dot, refreshed every 5 s.
   Green = Ready (listening, Vault signed in). Amber = Sign in to Vault (listening, not signed in). Red = Stopped (not listening; see bridge.log).

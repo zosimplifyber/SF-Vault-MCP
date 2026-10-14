@@ -34,6 +34,7 @@ internal sealed class RibbonStatus
     private Inv.ButtonDefinitionSink_OnExecuteEventHandler? _onExecute;
     private Timer? _timer;
     private BridgeStatusView? _last;
+    private readonly UpdateChecker _updates;
 
     public IReadOnlyList<Inv.RibbonPanel> Panels => _panels;
 
@@ -44,6 +45,7 @@ internal sealed class RibbonStatus
     public RibbonStatus(Inv.Application app, Func<HttpHost?> host, Func<StatusInfo?> vaultStatus, string prefix, string logPath, Action<string> log)
     {
         _app = app; _host = host; _vaultStatus = vaultStatus; _prefix = prefix; _logPath = logPath; _log = log;
+        _updates = new UpdateChecker(log);
     }
 
     public void Create()
@@ -120,7 +122,9 @@ internal sealed class RibbonStatus
         StatusInfo? status = null;
         try { status = _vaultStatus(); } catch (Exception) { }
         var host = _host();
-        return StatusModel.Evaluate(host?.IsListening ?? false, status, host?.LastRequestUtc, _prefix);
+        if (status?.SignedIn == true && _updates.Due(DateTime.UtcNow)) _updates.Check(DateTime.UtcNow);
+        return StatusModel.Evaluate(host?.IsListening ?? false, status, host?.LastRequestUtc, _prefix,
+            AppVersion.Current, _updates.Available?.Version.ToString());
     }
 
     private void Refresh()
@@ -154,6 +158,22 @@ internal sealed class RibbonStatus
         try
         {
             var view = Current();
+            if (_updates.Available is { } update
+                && MessageBox.Show($"Update available: {update.Version} (this is {AppVersion.Current}).{Environment.NewLine}{Environment.NewLine}Download {update.Version} now?",
+                    "SF Vault Bridge", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+            {
+                string saved;
+                try { saved = _updates.Download(update.Name); }
+                catch (Exception ex)
+                {
+                    _log("update download failed: " + ex.Message);
+                    MessageBox.Show("The download failed: " + ex.Message, "SF Vault Bridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                MessageBox.Show($"Saved {saved}.{Environment.NewLine}{Environment.NewLine}Close Inventor, unzip it, then run Install.cmd.",
+                    "SF Vault Bridge " + update.Version, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             var answer = MessageBox.Show(view.Details + Environment.NewLine + Environment.NewLine + "Open bridge.log?",
                 "SF Vault Bridge: " + view.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Information);
             if (answer == DialogResult.Yes) Process.Start(new ProcessStartInfo(_logPath) { UseShellExecute = true });

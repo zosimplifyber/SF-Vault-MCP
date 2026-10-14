@@ -6,13 +6,21 @@ namespace SFVaultBridge.Addin;
 /// <summary>Runs SFVaultTools.exe (installed next to this add-in) and returns its result file text.</summary>
 internal static class ToolRunner
 {
-    public static string ToolPath =>
-        System.IO.Path.Combine(System.IO.Path.GetDirectoryName(typeof(ToolRunner).Assembly.Location)!, "SFVaultTools.exe");
+    /// <summary>Bundle layout: Contents/tools/SFVaultTools.exe. Falls back to next to the DLL (older installs).</summary>
+    public static string ToolPath
+    {
+        get
+        {
+            var dir = System.IO.Path.GetDirectoryName(typeof(ToolRunner).Assembly.Location)!;
+            var inTools = System.IO.Path.Combine(dir, "tools", "SFVaultTools.exe");
+            return System.IO.File.Exists(inTools) ? inTools : System.IO.Path.Combine(dir, "SFVaultTools.exe");
+        }
+    }
 
     public static string? Run(IReadOnlyList<string> args, string resultPath, TimeSpan timeout)
     {
         if (!System.IO.File.Exists(ToolPath))
-            throw new BridgeException("tool_missing", $"SFVaultTools.exe is not installed next to the add-in ({ToolPath}). Rerun Install-VaultBridge.ps1.");
+            throw new BridgeException("tool_missing", $"SFVaultTools.exe is not installed next to the add-in ({ToolPath}). Reinstall the SF Vault Bridge package.");
         var psi = new ProcessStartInfo(ToolPath) { UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi) ?? throw new BridgeException("tool_failed", "SFVaultTools.exe did not start.");

@@ -62,3 +62,4 @@ inventor-addin/**/bin/
 inventor-addin/**/obj/
 inventor-addin/tools/
 build/sfvaulttools/
+release/

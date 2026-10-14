@@ -13,7 +13,7 @@ namespace SFVaultBridge.Addin;
 [ComVisible(true)]
 public sealed class AddInServer : Inv.ApplicationAddInServer
 {
-    public const string Version = "0.1.0";
+    public static string Version => AppVersion.Current;
     public const string Prefix = "http://localhost:8790/";
 
     private Inv.Application? _app;
@@ -65,6 +65,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             _vault = NewVaultSession();
             BridgeOps.RegisterAll(router, _vault, new StepImporter(_app), new PathGuard(roots), Version, RunOnUi,
                 new DataCardHost(_app), _log.Write);
+            ReleaseChannelOps.Register(router, new ReleaseChannel(), new PathGuard(roots), RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write);
             _host.Start();
             _log.Write($"started {Version} on {Prefix}; vault assembly: {DescribeVaultAssembly()}; roots: {string.Join(" | ", roots)}");
