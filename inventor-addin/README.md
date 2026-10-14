@@ -203,6 +203,29 @@ Numeric Design properties (`Cost`) are converted with the invariant culture (`--
 
 Released files are skipped unless you pass `--revise-released`. Then, for a file in the state named `Released`, the add-in moves it to `Work in Progress`, does the normal checkout, edit and check-in, and moves it back to `Released`, looking each transition up by state name in the file's lifecycle definition (via `DocumentServiceExtensions.UpdateFileLifeCycleStates`). Both transitions are checked before anything changes, and the dry run shows `would_revise: true` and the transition names. If the edit fails the file is still returned to `Released`; if it cannot be returned the result is `status: "error", step: "re_release"` with the actual `state_after`. Content Center files are never revised. Results carry `revision_before`, `revision_after`, `state_after`, and `linked_to_item: true` for files linked to an item (the item is not touched).
 
+### Attach McMaster PDF
+
+Older McMaster parts in Vault often have no vendor drawing PDF. This attaches it to an existing part without re-importing it. It needs Inventor open, a Vault sign-in and, for the download, the McMaster sign-in (the browser opens on first use, the same one Import New Part's Fetch uses). It is a preview unless you pass `--apply`:
+
+```
+py -3.14 scripts/vault_bridge.py attach-vendor-pdf CD-001897.ipt CD-001885.ipt
+py -3.14 scripts/vault_bridge.py attach-vendor-pdf CD-001897.ipt CD-001885.ipt --apply --revise-released
+py -3.14 scripts/vault_bridge.py attach-vendor-pdf CD-001162.ipt --source "C:/Users/you/Downloads/drawing.pdf" --apply
+```
+
+For each part it reads Vendor and Vendor Number from Vault and names the PDF `<CD> McMaster-Carr <VendorNumber>.pdf`, the same rule Import New Part uses. `--source mcmaster` (the default) downloads the McMaster 2-D PDF (`get_cad`, content checked to start `%PDF`); `--source <path>` attaches a PDF you already have under Downloads, to one part. The preview shows what would be downloaded, added and attached and writes nothing, not even a download.
+
+A part is skipped, with the reason, when:
+
+- it already has an attachment with that name, or any PDF attachment whose name contains the vendor number;
+- it has no Vendor Number, or (for the McMaster source) is not a McMaster part;
+- it is a Content Center file (never touched, with or without `--revise-released`), is not an `.ipt`, is checked out, has a local copy that differs from Vault, or is open in Inventor with unsaved changes;
+- it is released (any state with the released flag, such as `Library`) and `--revise-released` was not passed.
+
+The PDF is added beside the part in its Vault folder with category Documents. If a file with that name is already in the folder but not attached, that file is attached instead of adding a duplicate (the preview says `attach_existing`). The part then gets a new version: it is checked out, and checked in again with every existing dependency and attachment re-passed exactly (the same association re-pass Fix Data Card uses) plus the PDF as an attachment; a failure before the check-in undoes the checkout. A released part goes through its edit state the same way Fix Data Card revises one, chosen by lifecycle flags in the part's own lifecycle and verified by state id: `Library` to `Library Edit`, check in, back to `Library`. The PDF is added before the part is revised, so a failed add never moves the part, and a failed attach returns the part to its original state. Rerunning after a failure is safe: a PDF that already reached Vault is attached, not added twice.
+
+In the Fix Data Card form, tick the **Attach McMaster PDF** box on the rows you want and press the **Attach McMaster PDF** button. It checks those parts (reading Vault only), lists what will be downloaded and added, and asks before writing. Tick **Revise and re-release Released parts** first for released parts. The same operation is the MCP pair `attach_vendor_pdf_preview` (arguments `file`, `source`, `revise_released`, returns a `preview_hash`) and `attach_vendor_pdf_apply` (needs the `preview_hash` and `confirm: true` within 10 minutes).
+
 ### Process property
 
 Inventor custom property `Process` says how a Make part is made. Values: `CNC`, `3D Print`, `Sheet Metal`, `Weldment`, `In-house`, `Other`. Matching is case-insensitive and trimmed. It drives part selection in the Partner and 3D Print Packages.
@@ -283,6 +306,8 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `inventor_open_bom` | read | Structured BOM of the active assembly with Vault facts |
 | `fix_data_card_preview` | preview | Dry run of Fix Data Card (writes nothing) |
 | `fix_data_card_apply` | write | Applies it; needs `confirm: true` and a matching preview in the last 10 minutes |
+| `attach_vendor_pdf_preview` | preview | Plans attaching the McMaster drawing PDF to an existing part (writes and downloads nothing), returns `preview_hash` |
+| `attach_vendor_pdf_apply` | write | Downloads, adds and attaches it; needs `preview_hash` and `confirm: true` within 10 minutes |
 | `mcmaster_intake_preview` | preview | Plans a vendor part import from Downloads (STEP + PDF), returns a token |
 | `mcmaster_intake_commit` | write | Imports it via Import New Part; needs the token and `confirm: true` |
 | `vault_list_folder` | read | List a folder's subfolders and files (state, revision, category) |

@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
+using System.Text.Json.Nodes;
 using SFVaultBridge.Core;
 
 namespace SFVaultBridge.Addin;
@@ -16,7 +17,8 @@ internal sealed class FixDataCardForm : Form
 {
     private const int FileCol = 0;
     private const int StatusCol = 1;
-    private const int FirstFieldCol = 2;
+    private const int AttachCol = 2;
+    private const int FirstFieldCol = 3;
 
     private static readonly Color ChangedBack = Color.FromArgb(255, 249, 196);
 
@@ -29,6 +31,8 @@ internal sealed class FixDataCardForm : Form
     }
 
     private readonly IDataCardHost _host;
+    private readonly IAttachPdfHost? _attach;
+    private readonly IVendorPdfFetcher? _fetcher;
     private readonly IReadOnlyList<string> _processValues;
     private readonly Action<string> _log;
     private readonly List<RowData> _rows = new();
@@ -38,6 +42,7 @@ internal sealed class FixDataCardForm : Form
     private readonly TextBox _detail = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, TabStop = false };
     private readonly Button _preview = new() { Text = "Preview", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _apply = new() { Text = "Apply", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly Button _attachPdf = new() { Text = "Attach McMaster PDF", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Enabled = false };
     private readonly Button _copy = new() { Text = "Copy results", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _stop = new() { Text = "Stop", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Enabled = false };
     private readonly Button _close = new() { Text = "Close", DialogResult = DialogResult.Cancel, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
@@ -52,9 +57,9 @@ internal sealed class FixDataCardForm : Form
     private readonly Dictionary<int, string> _autoTitle = new();
 
     public FixDataCardForm(IDataCardHost host, IReadOnlyList<FixCardSource> sources, IReadOnlyList<string> skippedNotes,
-                           IReadOnlyList<string> processValues, Action<string> log)
+                           IReadOnlyList<string> processValues, Action<string> log, IAttachPdfHost? attach = null, IVendorPdfFetcher? fetcher = null)
     {
-        _host = host; _processValues = processValues; _log = log;
+        _host = host; _processValues = processValues; _log = log; _attach = attach; _fetcher = fetcher;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         Text = "Fix Data Card";
@@ -71,11 +76,12 @@ internal sealed class FixDataCardForm : Form
         _status.Text = "Reading " + _rows.Count + (_rows.Count == 1 ? " part" : " parts") + " from Vault...";
 
         _grid.CellValueChanged += (_, e) => Safe(() => OnCellChanged(e.RowIndex, e.ColumnIndex));
-        _grid.CurrentCellDirtyStateChanged += (_, _) => { if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewComboBoxCell) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+        _grid.CurrentCellDirtyStateChanged += (_, _) => { if (_grid.IsCurrentCellDirty && _grid.CurrentCell is DataGridViewComboBoxCell or DataGridViewCheckBoxCell) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
         _grid.SelectionChanged += (_, _) => Safe(ShowDetail);
         _grid.DataError += (_, e) => { e.ThrowException = false; };
         _revise.CheckedChanged += (_, _) => Safe(OnReviseChanged);
         _preview.Click += (_, _) => Safe(OnPreview);
+        _attachPdf.Click += (_, _) => Safe(OnAttachPdf);
         _apply.Click += (_, _) => Safe(OnApply);
         _copy.Click += (_, _) => Safe(OnCopy);
         _stop.Click += (_, _) => { _stopRequested = true; _stop.Enabled = false; _status.Text = "Stopping after the current part..."; };
@@ -129,6 +135,7 @@ internal sealed class FixDataCardForm : Form
         _grid.TabIndex = 0;
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File", ReadOnly = true, Width = Px(150), Frozen = true, SortMode = DataGridViewColumnSortMode.NotSortable });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", ReadOnly = true, Width = Px(120), Frozen = true, SortMode = DataGridViewColumnSortMode.NotSortable });
+        _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Attach\nMcMaster PDF", Width = Px(80), Frozen = true, SortMode = DataGridViewColumnSortMode.NotSortable });
         var widths = new Dictionary<string, int>
         {
             ["Part Number"] = 140, ["Title"] = 220, ["Description"] = 200, ["Vendor"] = 120, ["Vendor Number"] = 110, ["Source"] = 70,
@@ -175,14 +182,15 @@ internal sealed class FixDataCardForm : Form
             Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false,
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(0, Px(2), 0, Px(6)),
         };
-        foreach (var b in new[] { _close, _apply, _preview, _copy, _stop })
+        foreach (var b in new[] { _close, _apply, _preview, _attachPdf, _copy, _stop })
         {
             b.MinimumSize = new Size(Px(88), 0); b.Margin = new Padding(Px(6), Px(3), Px(0), Px(3));
         }
-        _preview.TabIndex = 2; _apply.TabIndex = 3; _stop.TabIndex = 4; _copy.TabIndex = 5; _close.TabIndex = 6;
+        _preview.TabIndex = 2; _apply.TabIndex = 3; _stop.TabIndex = 4; _copy.TabIndex = 5; _close.TabIndex = 6; _attachPdf.TabIndex = 7;
         buttons.Controls.Add(_close);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_preview);
+        buttons.Controls.Add(_attachPdf);
         buttons.Controls.Add(_copy);
         buttons.Controls.Add(_stop);
         Fixed(buttons);
@@ -204,7 +212,8 @@ internal sealed class FixDataCardForm : Form
     private void GreyOut(int i, string detail)
     {
         _grid.Rows[i].DefaultCellStyle.ForeColor = SystemColors.GrayText;
-        for (var c = FirstFieldCol; c < _grid.ColumnCount; c++) _grid.Rows[i].Cells[c].ReadOnly = true;
+        for (var c = AttachCol; c < _grid.ColumnCount; c++) _grid.Rows[i].Cells[c].ReadOnly = true;
+        _grid.Rows[i].Cells[AttachCol].Value = false;
         _grid.Rows[i].Cells[StatusCol].ToolTipText = detail;
         _rows[i].Problem = detail;
     }
@@ -324,6 +333,7 @@ internal sealed class FixDataCardForm : Form
 
     private void OnCellChanged(int row, int col)
     {
+        if (col == AttachCol) { if (!_filling) UpdateButtons(); return; }
         if (_filling || row < 0 || col < FirstFieldCol || (col - FirstFieldCol) % 2 == 0) return;
         FollowTitle(row, (col - FirstFieldCol) / 2);
         RefreshRow(row);
@@ -381,6 +391,7 @@ internal sealed class FixDataCardForm : Form
         _preview.Enabled = canWork;
         _apply.Enabled = canWork && _previewed && _rows.Any(r => r.Outcome?.Status == FixCardOutcome.WouldChange);
         _copy.Enabled = !_busy && _rows.Any(r => r.Outcome is not null);
+        _attachPdf.Enabled = _attach is not null && _loaded && !_busy && TickedRows().Count > 0;
         _revise.Enabled = !_busy && !_applied;
         _grid.Enabled = !_busy;
         _close.Enabled = !_busy;
@@ -398,6 +409,9 @@ internal sealed class FixDataCardForm : Form
         _grid.Rows[i].DefaultCellStyle.ForeColor = o.Status is FixCardOutcome.NoChange or FixCardOutcome.Skipped ? SystemColors.GrayText
             : o.Status == FixCardOutcome.Error ? Color.Firebrick : SystemColors.ControlText;
     }
+
+    private List<int> TickedRows() => Enumerable.Range(0, _rows.Count)
+        .Where(i => _rows[i].Loaded is { Problem: null } && _grid.Rows[i].Cells[AttachCol].Value is true).ToList();
 
     private List<int> WorkRows() => Enumerable.Range(0, _rows.Count).Where(i => _rows[i].Loaded is { Problem: null }).ToList();
 
@@ -465,6 +479,80 @@ internal sealed class FixDataCardForm : Form
         {
             _log($"fix data card {row.Source.VaultPath}: {ex}");
             return new FixCardOutcome(row.Source.VaultPath, FixCardOutcome.Error, "unexpected: " + ex.Message);
+        }
+    }
+
+    // ---- Attach McMaster PDF ----
+
+    /// <summary>The ticked parts, one at a time: a preview pass (reads Vault only), a confirmation that says what will be downloaded and
+    /// added, then the same checkout / check-in path the HTTP operation uses. Released parts need "Revise and re-release" ticked.</summary>
+    private void OnAttachPdf()
+    {
+        if (_attach is null) return;
+        _grid.EndEdit();
+        var rows = TickedRows();
+        if (rows.Count == 0) return;
+        var revise = _revise.Checked;
+        var previews = new Dictionary<int, JsonObject>();
+        RunQueue(rows, i =>
+        {
+            _status.Text = $"Checking {_rows[i].Source.Name} ({rows.IndexOf(i) + 1} of {rows.Count})...";
+            var req = new AttachPdfRequest(new[] { _rows[i].Loaded!.VaultPath }, AttachRules.McMasterSource, true, revise, null);
+            previews[i] = AttachVendorPdf.Run(req, _attach, _fetcher, _log)["results"]![0]!.AsObject();
+            SetOutcome(i, AttachOutcome(_rows[i], previews[i]));
+        }, () =>
+        {
+            var go = rows.Where(i => previews.TryGetValue(i, out var p) && p["status"]!.GetValue<string>() == "preview").ToList();
+            if (go.Count == 0)
+            {
+                _status.Text = "No part needs the PDF. Select a row to see why.";
+                UpdateButtons();
+                ShowDetail();
+                return;
+            }
+            var released = go.Count(i => previews[i]["would_revise"]?.GetValue<bool>() == true);
+            var text = $"Download the McMaster drawing PDF and attach it to {go.Count} {(go.Count == 1 ? "part" : "parts")}?\n\n"
+                       + string.Join("\n", go.Select(i => $"{_rows[i].Source.Name}: {previews[i]["pdf_name"]} ({(previews[i]["action"]!.GetValue<string>() == "attach_existing" ? "attach the file already in Vault" : "download and add")})"))
+                       + (released > 0 ? $"\n\n{released} released {(released == 1 ? "part is" : "parts are")} moved to the edit state and back." : "")
+                       + "\n\nMcMaster may open your browser to sign in.";
+            if (MessageBox.Show(this, text, Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
+            {
+                _status.Text = "Cancelled. Nothing was changed.";
+                UpdateButtons();
+                return;
+            }
+            var run = new DataCardFix.RunState();
+            RunQueue(go, i =>
+            {
+                _status.Text = $"Attaching the PDF to {_rows[i].Source.Name} ({go.IndexOf(i) + 1} of {go.Count})...";
+                var req = new AttachPdfRequest(new[] { _rows[i].Loaded!.VaultPath }, AttachRules.McMasterSource, false, revise, null);
+                var result = AttachVendorPdf.Run(req, _attach, _fetcher, _log, run)["results"]![0]!.AsObject();
+                SetOutcome(i, AttachOutcome(_rows[i], result));
+                if (result["status"]!.GetValue<string>() == "fixed") _grid.Rows[i].Cells[AttachCol].Value = false;
+            }, () =>
+            {
+                var done = go.Count(i => _rows[i].Outcome?.Status == FixCardOutcome.Fixed);
+                _status.Text = $"{done} of {go.Count} attached. Use Copy results to keep a record.";
+                Invalidated();
+            }, i => SetOutcome(i, FixCardRules.NotAttemptedOutcome(_rows[i].Source.VaultPath)));
+        }, i => SetOutcome(i, FixCardRules.NotAttemptedOutcome(_rows[i].Source.VaultPath)));
+    }
+
+    private static FixCardOutcome AttachOutcome(RowData row, JsonObject r)
+    {
+        var path = row.Loaded?.VaultPath ?? row.Source.VaultPath;
+        var detail = (r["reason"] ?? r["message"])?.GetValue<string>() ?? "";
+        switch (r["status"]!.GetValue<string>())
+        {
+            case "preview":
+                return new FixCardOutcome(path, FixCardOutcome.WouldChange, $"would attach {r["pdf_name"]}");
+            case "fixed":
+                return new FixCardOutcome(path, FixCardOutcome.Fixed, $"attached {r["pdf_name"]}" + (r["warning"] is { } w ? " (" + w + ")" : ""),
+                    Version: r["version"]?.ToString() ?? "");
+            case "skipped":
+                return new FixCardOutcome(path, FixCardOutcome.Skipped, detail);
+            default:
+                return new FixCardOutcome(path, FixCardOutcome.Error, detail);
         }
     }
 

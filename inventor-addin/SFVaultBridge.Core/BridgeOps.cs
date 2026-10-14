@@ -10,7 +10,8 @@ public static class BridgeOps
 
     public static void RegisterAll(Router router, IVaultSession vault, IStepImporter inventor, PathGuard guard,
                                    string bridgeVersion, Func<Func<JsonNode?>, JsonNode?> onUi,
-                                   IDataCardHost? dataCard = null, Action<string>? log = null)
+                                   IDataCardHost? dataCard = null, Action<string>? log = null,
+                                   IAttachPdfHost? attachPdf = null, IVendorPdfFetcher? pdfFetcher = null)
     {
         void Reg(string name, Func<JsonObject, JsonNode?> op) => router.Register(name, body => onUi(() => op(body)));
 
@@ -74,6 +75,12 @@ public static class BridgeOps
             var req = DataCardFix.ParseRequest(b);
             if (dataCard is null) throw new BridgeException("unavailable", "fix_data_card is not available in this build.");
             return DataCardFix.Run(req, dataCard, log);
+        });
+        Reg("attach_vendor_pdf", b =>
+        {
+            var req = AttachVendorPdf.ParseRequest(b, guard);
+            if (attachPdf is null) throw new BridgeException("unavailable", "attach_vendor_pdf is not available in this build.");
+            return AttachVendorPdf.Run(req, attachPdf, pdfFetcher, log);
         });
     }
 

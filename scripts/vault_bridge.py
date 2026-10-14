@@ -156,6 +156,27 @@ def fix_data_card(files: Iterable[str], design: dict[str, str] | None = None, cu
     return _call("fix_data_card", body)
 
 
+def attach_vendor_pdf(files: Iterable[str], source: str = "mcmaster", dry_run: bool = True,
+                      revise_released: bool = False, comment: str | None = None) -> dict[str, Any]:
+    """Attach the vendor drawing PDF to existing Vault parts that have none. Dry run by default.
+
+    source "mcmaster" downloads the McMaster 2-D PDF (McMaster sign-in on first use) and names it
+    "<CD> McMaster-Carr <VendorNumber>.pdf"; a local path under Downloads attaches that PDF to one part.
+    The PDF is added beside the part (category Documents) and the part gets a new version with the PDF added
+    to its attachments, keeping every existing reference. revise_released=True also handles released states
+    (Library -> Library Edit -> check in -> Library). Content Center files are never touched."""
+    names = [str(f) for f in files]
+    if not names:
+        raise ValueError("files must not be empty")
+    body: dict[str, Any] = {"files": names, "source": source, "dryRun": bool(dry_run)}
+    if revise_released:
+        body["reviseReleased"] = True
+    if comment:
+        body["comment"] = comment
+    # Each part may wait on the McMaster sign-in in the browser, so allow longer than a plain write.
+    return _call("attach_vendor_pdf", body, timeout=900)
+
+
 def staging_dir() -> Path:
     """Inside Downloads, the one place besides the workspace the add-in may read from."""
     return Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads" / "SF Vault Bridge" / "publish"
@@ -210,6 +231,14 @@ def build_parser():
     fix.add_argument("--comment", default=None, help="check-in comment")
     fix.add_argument("--revise-released", action="store_true",
                      help="also fix Released files: Released -> Work in Progress, edit, check in, back to Released (never Content Center)")
+    att = sub.add_parser("attach-vendor-pdf", help="Attach the vendor drawing PDF to existing Vault parts (dry run unless --apply)")
+    att.add_argument("files", nargs="+", help="file names (CD-001897.ipt) or full $/ paths")
+    att.add_argument("--source", default="mcmaster",
+                     help='"mcmaster" (download the McMaster 2-D PDF, default) or the path of a PDF under Downloads (one part only)')
+    att.add_argument("--apply", action="store_true", help="download, add and attach (default is a preview)")
+    att.add_argument("--revise-released", action="store_true",
+                     help="also handle released parts: Library -> Library Edit -> check in -> Library (never Content Center)")
+    att.add_argument("--comment", default=None, help="check-in comment")
     pub = sub.add_parser("publish-release", help="Check a release zip into Vault at $/Tools/SF Vault Bridge/")
     pub.add_argument("zip", help="release/SF Vault Bridge <version>.zip from build-release.ps1")
     pub.add_argument("--version", default=None, help="x.y.z (default: from the zip name)")
@@ -223,6 +252,12 @@ def main(argv: list[str] | None = None) -> int:
                                summary=_pairs(args.summary, "--summary"),
                                part_number_from_file_name=not args.no_part_number, dry_run=not args.apply, comment=args.comment,
                                revise_released=args.revise_released)
+        print(json.dumps(result, indent=2))
+        counts = result.get("counts", {})
+        return 1 if counts.get("error") else 0
+    if args.command == "attach-vendor-pdf":
+        result = attach_vendor_pdf(args.files, source=args.source, dry_run=not args.apply,
+                                   revise_released=args.revise_released, comment=args.comment)
         print(json.dumps(result, indent=2))
         counts = result.get("counts", {})
         return 1 if counts.get("error") else 0

@@ -258,7 +258,8 @@ public static class McpCatalog
 {
     public static IReadOnlyList<McpTool> Build(IVaultReader vault, IInventorReader inventor, IVaultSession session, IStepImporter importer,
                                                string bridgeVersion, IDataCardHost? dataCard, IIntakeHost? intake, PathGuard downloadsGuard,
-                                               string downloadsDir, JobManager jobs, Action<string>? log = null, IVaultExtras? extras = null)
+                                               string downloadsDir, JobManager jobs, Action<string>? log = null, IVaultExtras? extras = null,
+                                               IAttachPdfHost? attachPdf = null, IVendorPdfFetcher? pdfFetcher = null)
     {
         var list = new List<McpTool>();
         var reads = ReadTools.Build(vault, inventor, session, importer, bridgeVersion, () => list.Count);
@@ -266,6 +267,7 @@ public static class McpCatalog
         list.AddRange(FixDataCardTools.Build(dataCard, new PreviewGate(), log));
         list.AddRange(IntakeTools.Build(intake, downloadsGuard, downloadsDir, new PreviewStore<IntakePlanned>()));
         if (extras is not null) list.AddRange(ExtraTools.Build(extras, new PreviewStore<PdfJobPlan>()));
+        if (attachPdf is not null) list.AddRange(AttachPdfTools.Build(attachPdf, pdfFetcher, downloadsGuard, new PreviewStore<AttachPdfRequest>(), log));
         list.Add(JobTools.Build(jobs));
         return list;
     }

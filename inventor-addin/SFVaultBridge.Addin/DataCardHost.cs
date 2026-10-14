@@ -11,7 +11,7 @@ namespace SFVaultBridge.Addin;
 /// Fixes iProperties of existing Vault .ipt parts: check out through the signed-in VDF connection, edit in Inventor, check in a new version.
 /// Runs on Inventor's UI thread. Never connects on its own; uses the Vault add-in's session.
 /// </summary>
-internal sealed class DataCardHost : IDataCardHost
+internal sealed class DataCardHost : IAttachPdfHost
 {
     private const string LocalDiffers = "local copy differs from Vault; check in or discard local changes first";
 
@@ -319,6 +319,130 @@ internal sealed class DataCardHost : IDataCardHost
             return inst?.Val?.ToString();
         }
         catch (Exception) { return null; }
+    }
+
+    // ---- Attach vendor PDF ----
+
+    public AttachFacts ReadFacts(DataCardFileInfo file)
+    {
+        var latest = Latest(file);
+        RequireNotDirty(latest, file.Name);
+        try
+        {
+            var read = VaultFiles.CardValueReader(latest, out _);
+            var attached = AttachedFiles(latest.Id).Select(f => f.Name).ToList();
+            return new AttachFacts(read("Vendor") ?? "", read("Vendor Number") ?? "", attached, VaultFiles.FolderPathOf(latest).TrimEnd('/'));
+        }
+        catch (Exception ex) when (ex is not DataCardStepException and not DataCardSkipException)
+        { throw new DataCardStepException("read", "could not read the part's vendor and attachments from Vault: " + ex.Message); }
+    }
+
+    /// <summary>The files attached to this version of the part (Attachment associations only).</summary>
+    private static IReadOnlyList<WsFile> AttachedFiles(long fileId)
+    {
+        var ds = Conn.WebServiceManager.DocumentService;
+        var lites = ds.GetFileAssociationLitesByIds(new[] { fileId }, FileAssocAlg.Actual, FileAssociationTypeEnum.None, false,
+            FileAssociationTypeEnum.Attachment, false, true, false, false) ?? Array.Empty<FileAssocLite>();
+        var ids = lites.Where(a => a.ParFileId == fileId).Select(a => a.CldFileId).Distinct().ToArray();
+        if (ids.Length == 0) return Array.Empty<WsFile>();
+        return (ds.GetFilesByIds(ids) ?? Array.Empty<WsFile>()).Where(f => f.Id > 0).ToList();
+    }
+
+    /// <summary>A part open in Inventor with unsaved changes is left alone. A clean open one is fine: the check-in sends identical bytes.</summary>
+    private Inv.Document? RequireNotDirty(WsFile latest, string name)
+    {
+        var open = DrawingExporter.FindOpen(_app, VaultFiles.LocalPathOf(latest));
+        if (open is not null && open.Dirty)
+            throw new DataCardSkipException($"{name} is open in Inventor with unsaved changes. Save or close it first.");
+        return open;
+    }
+
+    public AttachFileRef? FindInFolder(string folder, string name)
+    {
+        var f = VaultFiles.FindLatest($"{folder.TrimEnd('/')}/{name}");
+        return f is null ? null : new AttachFileRef(f.Id, f.MasterId, f.Name);
+    }
+
+    public PdfInVault EnsurePdf(string folder, string pdfName, string? localPath, AttachFileRef? existing, string comment)
+    {
+        if (existing is not null) return new PdfInVault(existing.Id, false);
+        // Looked up again right before the add, so a file that appeared since the preview is attached rather than duplicated.
+        var now = VaultFiles.FindLatest($"{folder.TrimEnd('/')}/{pdfName}");
+        if (now is not null) return new PdfInVault(now.Id, false);
+        if (string.IsNullOrEmpty(localPath) || !System.IO.File.Exists(localPath)) throw new DataCardStepException("pdf", $"PDF not found: {localPath}");
+        try
+        {
+            var (added, catError) = VaultFiles.AddNew(localPath, folder, pdfName, Array.Empty<long>(), AttachRules.DocumentsCategory, comment);
+            if (catError is not null)
+                throw new DataCardStepException("category", $"{pdfName} is in Vault but its category could not be set to {AttachRules.DocumentsCategory}: {catError}");
+            var latest = Conn.WebServiceManager.DocumentService.GetLatestFileByMasterId(added.MasterId);
+            return new PdfInVault(latest is { Id: > 0 } ? latest.Id : added.Id, true);
+        }
+        catch (Exception ex) when (ex is not DataCardStepException)
+        {
+            var landed = false;
+            try { landed = VaultFiles.FindLatest($"{folder.TrimEnd('/')}/{pdfName}") is not null; } catch (Exception) { }
+            throw new DataCardStepException("pdf", ex.Message + (landed ? $" ({pdfName} did reach Vault; run it again to attach it)" : ""));
+        }
+    }
+
+    /// <summary>
+    /// Checks the part out (no Inventor involved), then checks in a new version with every existing child association re-passed exactly
+    /// (Dependency and Attachment, original reference ids) plus the PDF as an attachment. Any failure before the check-in succeeds undoes the checkout.
+    /// </summary>
+    public DataCardApplied AttachToPart(DataCardFileInfo file, long pdfFileId, string comment)
+    {
+        var conn = Conn;
+        var ds = conn.WebServiceManager.DocumentService;
+        var latest = Latest(file);
+        var again = Describe(latest);
+        var skip = DataCardFix.SkipReason(again);
+        if (skip is not null) throw new DataCardSkipException(skip);
+        if (again.Version != file.Version)
+            throw new DataCardSkipException($"{file.Name} changed in Vault since the preview (version {file.Version} to {again.Version}). Run it again.");
+        var open = RequireNotDirty(latest, file.Name);
+        var local = VaultFiles.LocalPathOf(latest);
+        if (System.IO.File.Exists(local))
+        {
+            var temp = NewTempDir();
+            try { RequireLocalMatches(local, DownloadBaseline(latest, temp)); }
+            finally { DeleteQuietly(temp); }
+        }
+        FileAssocParam[]? assocs;
+        try { assocs = ChildAssociations(conn, latest, rows => AttachRules.AttachAssociations(rows, latest.Id, pdfFileId)); }
+        catch (Exception ex) { throw new DataCardStepException("children", "could not read the file's child associations: " + ex.Message); }
+
+        VDF.Vault.Currency.Entities.FileIteration? checkedOut = null;
+        var path = local;
+        var step = "checkout";
+        try
+        {
+            (checkedOut, path) = CheckOut(conn, latest, overwrite: open is null, comment);
+            ClearReadOnly(path);
+            step = "checkin";
+            var after = conn.FileManager.CheckinFile(checkedOut, comment, false, assocs, null, false, null,
+                FileClassification.None, false, new VDF.Currency.FilePathAbsolute(path));
+            return AttachReadBack(ds, after.EntityMasterId, pdfFileId);
+        }
+        catch (Exception ex)
+        {
+            var undone = UndoIfStillMine(conn, latest.MasterId, path);
+            var failedStep = ex is DataCardStepException se ? se.Step : step;
+            throw new DataCardStepException(failedStep, $"{ex.Message} ({undone})");
+        }
+    }
+
+    // After a successful check-in nothing may report a failure or undo anything; a missing attachment is a warning to look at in Vault.
+    private static DataCardApplied AttachReadBack(DocumentService ds, long masterId, long pdfFileId)
+    {
+        try
+        {
+            var now = ds.GetLatestFileByMasterId(masterId);
+            var pdfMaster = ds.GetFilesByIds(new[] { pdfFileId })?.FirstOrDefault()?.MasterId ?? -1;
+            var attached = AttachedFiles(now.Id).Any(f => f.Id == pdfFileId || (pdfMaster > 0 && f.MasterId == pdfMaster));
+            return new DataCardApplied(now.VerNum, attached ? null : "Checked in, but the PDF does not show as attached to the new version; open the part in Vault and check its Attachments.");
+        }
+        catch (Exception ex) { return new DataCardApplied(-1, $"Checked in, but the result could not be read back: {ex.Message}"); }
     }
 
     // ---- Apply ----

@@ -65,12 +65,13 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             _vault = NewVaultSession();
             var importer = new StepImporter(_app);
             var dataCard = new DataCardHost(_app);
-            BridgeOps.RegisterAll(router, _vault, importer, new PathGuard(roots), Version, RunOnUi, dataCard, _log.Write);
+            var pdfFetcher = new McMasterPdfFetcher(() => BridgeSettings.Load(BridgeSettings.DefaultPath, _log.Write).McMasterServerUrl, _log.Write);
+            BridgeOps.RegisterAll(router, _vault, importer, new PathGuard(roots), Version, RunOnUi, dataCard, _log.Write, dataCard, pdfFetcher);
             ReleaseChannelOps.Register(router, new ReleaseChannel(), new PathGuard(roots), RunOnUi);
             var downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
             var jobs = new JobManager(RunOnUi, log: _log.Write);
             var tools = McpCatalog.Build(new VaultReader(), new InventorReader(_app, _log.Write), _vault, importer, Version, dataCard,
-                new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, jobs, _log.Write, new VaultExtrasReader());
+                new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, jobs, _log.Write, new VaultExtrasReader(), dataCard, pdfFetcher);
             McpCatalog.RegisterReadOps(router, tools, RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write) { Mcp = new McpServer(token, Version, tools, RunOnUi, log: _log.Write, jobs: jobs) };
             _host.Start();

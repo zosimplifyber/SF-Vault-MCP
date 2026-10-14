@@ -184,7 +184,9 @@ internal sealed class RibbonActions
             catch (BridgeException ex) { return new FixCardSource("", name, ex.Message); }
         }).ToList();
         var process = BridgeSettings.Load(BridgeSettings.DefaultPath, _log).ProcessValues;
-        using var form = new FixDataCardForm(new DataCardHost(_app), sources, pick.Skipped, process, _log);
+        var host = new DataCardHost(_app);
+        var fetcher = new McMasterPdfFetcher(() => BridgeSettings.Load(BridgeSettings.DefaultPath, _log).McMasterServerUrl, _log);
+        using var form = new FixDataCardForm(host, sources, pick.Skipped, process, _log, host, fetcher);
         var owner = OwnerWindow();
         if (owner is null) form.ShowDialog(); else form.ShowDialog(owner);
     }

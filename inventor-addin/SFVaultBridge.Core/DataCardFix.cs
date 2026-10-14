@@ -385,7 +385,13 @@ public static class DataCardFix
     /// <summary>Released state to the edit state, the normal checkout/edit/check-in, then back to the original state. Once the first move was attempted and the file is
     /// found in Work in Progress, the way back is always attempted, whatever happened in the middle, and a failure to get back is reported loudly with
     /// the actual state.</summary>
-    private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host, RevisePlan plan)
+    private static JsonObject ReviseAndFix(DataCardFileInfo info, IReadOnlyList<PropChange> changes, string comment, IDataCardHost host, RevisePlan plan) =>
+        ReviseAround(info, ChangesJson(changes), comment, host, plan, fresh => host.Apply(fresh, changes, comment));
+
+    /// <summary>The revise wrapper itself, shared with attach_vendor_pdf: move to the edit state, run edit on the refreshed file, always move back.
+    /// changesJson is what the result reports under "changes".</summary>
+    internal static JsonObject ReviseAround(DataCardFileInfo info, JsonObject changesJson, string comment, IDataCardHost host, RevisePlan plan,
+                                            Func<DataCardFileInfo, DataCardApplied> edit)
     {
         var revisionBefore = info.Revision;
         string? firstError = null;
@@ -414,7 +420,7 @@ public static class DataCardFix
             try
             {
                 var fresh = Refresh(host, info);
-                applied = host.Apply(fresh, changes, comment);
+                applied = edit(fresh);
             }
             catch (DataCardSkipException ex) { editStep = "skipped"; editError = ex.Message; }
             catch (DataCardStepException ex) { editStep = ex.Step; editError = ex.Message; }
@@ -429,7 +435,7 @@ public static class DataCardFix
         try { back = host.ChangeState(Refresh(host, info), plan.ReturnState, comment); }
         catch (Exception ex) { backError = ex.Message; }
 
-        var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = ChangesJson(changes), ["revision_before"] = revisionBefore, ["transitions"] = TransitionsJson(plan) };
+        var result = new JsonObject { ["file"] = info.VaultPath, ["changes"] = changesJson, ["revision_before"] = revisionBefore, ["transitions"] = TransitionsJson(plan) };
         if (backError is not null)
         {
             result["status"] = "error";
@@ -463,7 +469,7 @@ public static class DataCardFix
 
     private static JsonArray TransitionsJson(RevisePlan plan) => new(plan.ToWorkInProgress, plan.ToReleased);
 
-    private static DataCardFileInfo Refresh(IDataCardHost host, DataCardFileInfo info)
+    internal static DataCardFileInfo Refresh(IDataCardHost host, DataCardFileInfo info)
     {
         var m = host.Find(ParseFile(info.VaultPath));
         if (m.Count != 1) throw new DataCardStepException("resolve", $"{info.VaultPath} could not be re-read from Vault.");
@@ -483,8 +489,8 @@ public static class DataCardFix
         return o;
     }
 
-    private static JsonObject Skipped(string file, string reason) => new() { ["file"] = file, ["status"] = "skipped", ["reason"] = reason };
+    internal static JsonObject Skipped(string file, string reason) => new() { ["file"] = file, ["status"] = "skipped", ["reason"] = reason };
 
-    private static JsonObject Error(string file, string step, string message) =>
+    internal static JsonObject Error(string file, string step, string message) =>
         new() { ["file"] = file, ["status"] = "error", ["step"] = step, ["message"] = message };
 }

@@ -249,3 +249,32 @@ def test_fix_data_card_summary_title(server):
     assert "summary" not in server.seen[0][1]
     assert server.seen[1][1]["summary"] == {"Title": "CD-1-Washer"}
     assert server.seen[2][1]["summary"] == {"Title": "CD-1-Steel=Washer"}
+
+
+def test_attach_vendor_pdf_request_body(server):
+    server.replies["attach_vendor_pdf"] = (200, {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    vb.attach_vendor_pdf(["CD-001897.ipt"])
+    vb.attach_vendor_pdf(("CD-001897.ipt", "CD-001885.ipt"), dry_run=False, revise_released=True, comment="Attach PDF")
+    assert server.seen[0][0] == "attach_vendor_pdf"
+    assert server.seen[0][1] == {"files": ["CD-001897.ipt"], "source": "mcmaster", "dryRun": True}
+    assert server.seen[1][1] == {"files": ["CD-001897.ipt", "CD-001885.ipt"], "source": "mcmaster", "dryRun": False,
+                                 "reviseReleased": True, "comment": "Attach PDF"}
+
+
+def test_attach_vendor_pdf_rejects_empty(server):
+    with pytest.raises(ValueError):
+        vb.attach_vendor_pdf([])
+
+
+def test_attach_vendor_pdf_cli(server, capsys):
+    server.replies["attach_vendor_pdf"] = (200, {"results": [], "counts": {"preview": 1, "fixed": 0, "no_change": 0, "skipped": 0, "error": 0}})
+    assert vb.main(["attach-vendor-pdf", "CD-001897.ipt", "CD-001885.ipt"]) == 0
+    assert vb.main(["attach-vendor-pdf", "CD-001162.ipt", "--source", r"C:\Users\z\Downloads\x.pdf", "--apply", "--revise-released"]) == 0
+    assert server.seen[0][1] == {"files": ["CD-001897.ipt", "CD-001885.ipt"], "source": "mcmaster", "dryRun": True}
+    assert server.seen[1][1] == {"files": ["CD-001162.ipt"], "source": r"C:\Users\z\Downloads\x.pdf", "dryRun": False, "reviseReleased": True}
+    assert '"counts"' in capsys.readouterr().out
+
+
+def test_attach_vendor_pdf_cli_exit_code_follows_errors(server):
+    server.replies["attach_vendor_pdf"] = (200, {"results": [], "counts": {"preview": 0, "fixed": 0, "no_change": 0, "skipped": 0, "error": 1}})
+    assert vb.main(["attach-vendor-pdf", "a.ipt", "--apply"]) == 1

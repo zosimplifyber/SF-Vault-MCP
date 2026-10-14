@@ -24,6 +24,8 @@
     { "name": "inventor_open_bom", "description": "Structured BOM of the active assembly in Inventor." },
     { "name": "fix_data_card_preview", "description": "Preview a data card fix (no changes)." },
     { "name": "fix_data_card_apply", "description": "Apply a previewed data card fix; needs confirm." },
+    { "name": "attach_vendor_pdf_preview", "description": "Preview attaching a McMaster drawing PDF to an existing part (no changes)." },
+    { "name": "attach_vendor_pdf_apply", "description": "Attach a previewed vendor PDF; needs confirm." },
     { "name": "mcmaster_intake_preview", "description": "Preview a McMaster part intake (no changes)." },
     { "name": "mcmaster_intake_commit", "description": "Commit a previewed McMaster intake; needs confirm." },
     { "name": "vault_list_folder", "description": "List a Vault folder: subfolders and files." },
