@@ -5,9 +5,9 @@ namespace SFVaultBridge.Core;
 /// <summary>What a tool does to Vault. Read: no writes. Preview: computes a change and writes nothing, but unlocks the matching Write tool. Write: needs a preview and confirm.</summary>
 public enum McpToolKind { Read, Preview, Write }
 
-/// <summary>One MCP tool. A handler result that is a JSON object with "ok": false is reported to the client as a tool error (isError).</summary>
+/// <summary>One MCP tool. UiThread false means the handler is thread-safe and runs on the request thread (job_status). A handler result that is a JSON object with "ok": false is reported to the client as a tool error (isError).</summary>
 public sealed record McpTool(string Name, string Title, string Description, JsonObject InputSchema, McpToolKind Kind,
-                             Func<JsonObject, JsonNode?> Handler, TimeSpan? Timeout = null);
+                             Func<JsonObject, JsonNode?> Handler, TimeSpan? Timeout = null, bool UiThread = true);
 
 /// <summary>Small helpers that build the JSON Schema objects for tool inputs.</summary>
 public static class Schema

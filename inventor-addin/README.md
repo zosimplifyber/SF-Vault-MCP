@@ -210,7 +210,7 @@ A rerun overwrites the file, so an existing shared link keeps working. If team p
 
 ## MCP endpoint
 
-While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses) at `POST http://localhost:8790/mcp`. Auth is the bridge token (`X-Bridge-Token` or `Authorization: Bearer <token>`); only localhost origins are accepted. `Mcp-Session-Id` is issued on initialize and accepted afterwards (no per-session state). Tool calls run on Inventor's UI thread with a timeout (90 s for reads, 10 min for writes).
+While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses) at `POST http://localhost:8790/mcp`. Auth is the bridge token (`X-Bridge-Token` or `Authorization: Bearer <token>`); only localhost origins are accepted. `Mcp-Session-Id` is issued on initialize and accepted afterwards (no per-session state). Requests are served concurrently; only loopback peers with a localhost Host header are accepted, token and Origin are checked before the body is read, and bodies are capped at 1 MB. Inventor work runs on the UI thread; a read that cannot start within 90 s is cancelled and never runs. The Origin check accepts any localhost port, so the token is the real barrier. Writes run as jobs: the call waits up to 45 s, then returns a job_id to poll with job_status (jobs are kept for 1 hour; one write at a time).
 
 | Tool | Kind | What it does |
 |---|---|---|
@@ -225,6 +225,7 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `fix_data_card_apply` | write | Applies it; needs `confirm: true` and a matching preview in the last 10 minutes |
 | `mcmaster_intake_preview` | preview | Plans a vendor part import from Downloads (STEP + PDF), returns a token |
 | `mcmaster_intake_commit` | write | Imports it via Import New Part; needs the token and `confirm: true` |
+| `job_status` | read | State and result of a write that was still running (job_id), optional cancel before it starts |
 
 The read tools are also bridge ops (`POST /op/<name>`, same arguments). Planned (phase 2, needs non-UI variants): Purchasing Sheet, Design Review, packages and I Approve! preview as MCP tools.
 

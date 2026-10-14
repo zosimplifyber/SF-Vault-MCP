@@ -7,7 +7,7 @@ using SFVaultBridge.Core;
 
 namespace SFVaultBridge.Core.Tests;
 
-public class McpTests
+public partial class McpTests
 {
     private const string Token = "0123456789abcdef0123456789abcdef";
 
@@ -95,11 +95,12 @@ public class McpTests
     private sealed class FakeCard : IDataCardHost
     {
         public int Applies;
+        public ManualResetEventSlim? BlockApply;
         public IReadOnlyList<DataCardFileInfo> Find(DataCardFileRef file) =>
             new[] { new DataCardFileInfo("$/DESIGNS/x/CD-001909.ipt", "CD-001909.ipt", "Part - Purchased", "Work in Progress", false, false, "", 3, Revision: "A") };
         public IReadOnlyDictionary<PropRef, string?> Read(DataCardFileInfo file, IReadOnlyList<PropRef> props) =>
             props.ToDictionary(p => p, p => (string?)(p.Name == "Part Number" ? "CD-001909" : "old"));
-        public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) { Applies++; return new DataCardApplied(4); }
+        public DataCardApplied Apply(DataCardFileInfo file, IReadOnlyList<PropChange> changes, string comment) { BlockApply?.Wait(); Applies++; return new DataCardApplied(4); }
         public RevisePlan PlanRevise(DataCardFileInfo file) => new(null, "a", "b");
         public DataCardStateChange ChangeState(DataCardFileInfo file, string toStateName, string comment) => new(toStateName, "A");
         public bool? LinkedToItem(DataCardFileInfo file) => false;
@@ -134,11 +135,14 @@ public class McpTests
         public McpServer Server;
         public IReadOnlyList<McpTool> Tools;
         public List<string> Logs = new();
-        public Rig(TimeSpan? timeout = null, Func<Func<JsonNode?>, JsonNode?>? onUi = null)
+        public readonly JobManager Jobs;
+        public Rig(TimeSpan? timeout = null, Func<Func<JsonNode?>, JsonNode?>? onUi = null, TimeSpan? jobWait = null)
         {
             Directory.CreateDirectory(Downloads);
-            Tools = McpCatalog.Build(Vault, new FakeInventor(), Session, new FakeImporter(), "1.2.3", Card, Intake, new PathGuard(new[] { Downloads }), Downloads);
-            Server = new McpServer(Token, "1.2.3", Tools, onUi ?? (w => w()), timeout, Logs.Add);
+            var ui = onUi ?? (w => w());
+            Jobs = new JobManager(ui, jobWait ?? TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+            Tools = McpCatalog.Build(Vault, new FakeInventor(), Session, new FakeImporter(), "1.2.3", Card, Intake, new PathGuard(new[] { Downloads }), Downloads, Jobs);
+            Server = new McpServer(Token, "1.2.3", Tools, ui, timeout, Logs.Add, Jobs);
         }
         public void Dispose() { try { Directory.Delete(Downloads, true); } catch { } }
 
@@ -324,7 +328,7 @@ public class McpTests
         Assert.Equal(new[]
         {
             "bridge_status", "vault_search_files", "vault_get_file", "vault_where_used", "vault_uses", "vault_file_versions", "inventor_open_bom",
-            "fix_data_card_preview", "fix_data_card_apply", "mcmaster_intake_preview", "mcmaster_intake_commit",
+            "fix_data_card_preview", "fix_data_card_apply", "mcmaster_intake_preview", "mcmaster_intake_commit", "job_status",
         }, names);
         foreach (var t in tools)
         {
@@ -371,7 +375,7 @@ public class McpTests
         Assert.True(j["signed_in"]!.GetValue<bool>());
         Assert.Equal("1.2.3", j["bridge_version"]!.GetValue<string>());
         Assert.Equal("Asm1.iam (assembly)", j["active_document"]!.GetValue<string>());
-        Assert.Equal(11, j["tool_count"]!.GetValue<int>());
+        Assert.Equal(12, j["tool_count"]!.GetValue<int>());
     }
 
     [Fact]
@@ -404,7 +408,7 @@ public class McpTests
         var (_, err, text) = rig.Call("vault_search_files", new JsonObject { ["query"] = "nut" });
         Assert.True(err);
         Assert.Equal("internal", JsonNode.Parse(text)!["error"]!.GetValue<string>());
-        Assert.Contains("boom", text);
+        Assert.DoesNotContain("boom", text);
     }
 
     [Fact]
@@ -746,7 +750,7 @@ public class McpTests
     }
 
     [Fact]
-    public void Write_tools_get_a_long_timeout_and_the_kinds_are_right()
+    public void Tool_kinds_are_right_and_write_descriptions_point_at_job_status()
     {
         using var rig = new Rig();
         var byName = rig.Tools.ToDictionary(t => t.Name);
@@ -754,8 +758,10 @@ public class McpTests
         Assert.Equal(McpToolKind.Write, byName["fix_data_card_apply"].Kind);
         Assert.Equal(McpToolKind.Preview, byName["mcmaster_intake_preview"].Kind);
         Assert.Equal(McpToolKind.Write, byName["mcmaster_intake_commit"].Kind);
-        Assert.True(byName["fix_data_card_apply"].Timeout >= TimeSpan.FromMinutes(5));
-        Assert.True(byName["mcmaster_intake_commit"].Timeout >= TimeSpan.FromMinutes(5));
+        Assert.False(byName["job_status"].UiThread);
+        Assert.Equal(McpToolKind.Read, byName["job_status"].Kind);
+        Assert.Contains("job_status", byName["fix_data_card_apply"].Description);
+        Assert.Contains("job_status", byName["mcmaster_intake_commit"].Description);
         Assert.Contains("preview", byName["fix_data_card_apply"].Description, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("preview", byName["mcmaster_intake_commit"].Description, StringComparison.OrdinalIgnoreCase);
     }

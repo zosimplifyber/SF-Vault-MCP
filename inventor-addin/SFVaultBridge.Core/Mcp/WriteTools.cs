@@ -28,12 +28,13 @@ public static class FixDataCardTools
             new McpTool("fix_data_card_preview", "Preview data card fix",
                 "Dry run of Fix Data Card on existing Vault parts: shows, per file, which iProperties would change (from and to) and which files would be skipped and why. Writes nothing. " +
                 "Use it whenever a part's data card (Vendor, Vendor Number, Source, Material, Description, Cost, Title...) is wrong or empty. Show the result to the engineer; " +
-                "only after they approve call fix_data_card_apply with the identical request plus confirm true within 10 minutes. Takes a while: each file is downloaded and opened invisibly in Inventor.",
+                "only after they approve call fix_data_card_apply with the identical request plus confirm true within 10 minutes. The preview binds the request, not Vault's state: apply re-reads each file, so if a file changed in between, what is written can differ. " +
+                "Takes a while (each file is downloaded and opened invisibly in Inventor): keep one call to a few files.",
                 previewSchema, McpToolKind.Preview, a => Preview(a, host, gate, log), WriteTimeout),
             new McpTool("fix_data_card_apply", "Apply data card fix",
                 "Writes the data card changes to Vault: checks each part out, sets the iProperties in Inventor, saves and checks in a new version. A WRITE. " +
                 "Requires confirm true and exactly the same request (files, design, custom, summary, options) that fix_data_card_preview returned a preview for in the last 10 minutes; each preview unlocks one apply. " +
-                "Never call it without showing the engineer the preview first.",
+                "Never call it without showing the engineer the preview first. If it returns {status:\"running\", job_id}, the write is still going: call job_status with that job_id and never start it again.",
                 Schema.Obj(applyProps, "files", "confirm"), McpToolKind.Write, a => Apply(a, host, gate, log), WriteTimeout),
         };
     }
@@ -124,7 +125,7 @@ public static class IntakeTools
                 McpToolKind.Preview, a => Preview(a, host, downloadsGuard, downloadsDir, store)),
             new McpTool("mcmaster_intake_commit", "Commit vendor part import",
                 "Adds the previewed vendor part to Vault: takes the next CD number, imports the STEP as a part in Inventor, saves and adds the PDF and the part to Vault with the right categories, then moves the downloads to Downloads\\Imported. A WRITE that takes a minute or more. " +
-                "Needs the token from mcmaster_intake_preview (valid 10 minutes, one use) and confirm true, only after the engineer approved the preview. On failure it names the step and lists what already reached Vault; nothing is rolled back.",
+                "Needs the token from mcmaster_intake_preview (valid 10 minutes, one use) and confirm true, only after the engineer approved the preview. On failure it names the step and lists what already reached Vault; nothing is rolled back. If it returns {status:\"running\", job_id}, the import is still going: call job_status with that job_id and never commit again.",
                 Schema.Obj(Schema.Props(
                     ("token", Schema.Str("The token returned by mcmaster_intake_preview.")),
                     ("confirm", Schema.Bool("Must be true. Set it only after the engineer has seen the preview and said yes."))), "token", "confirm"),
@@ -257,23 +258,25 @@ public static class McpCatalog
 {
     public static IReadOnlyList<McpTool> Build(IVaultReader vault, IInventorReader inventor, IVaultSession session, IStepImporter importer,
                                                string bridgeVersion, IDataCardHost? dataCard, IIntakeHost? intake, PathGuard downloadsGuard,
-                                               string downloadsDir, Action<string>? log = null)
+                                               string downloadsDir, JobManager jobs, Action<string>? log = null)
     {
         var list = new List<McpTool>();
         var reads = ReadTools.Build(vault, inventor, session, importer, bridgeVersion, () => list.Count);
         list.AddRange(reads);
         list.AddRange(FixDataCardTools.Build(dataCard, new PreviewGate(), log));
         list.AddRange(IntakeTools.Build(intake, downloadsGuard, downloadsDir, new PreviewStore<IntakePlanned>()));
+        list.Add(JobTools.Build(jobs));
         return list;
     }
 
     /// <summary>Every read tool is also POST /op/&lt;name&gt; with the same arguments.</summary>
-    public static void RegisterReadOps(Router router, IEnumerable<McpTool> tools, Func<Func<JsonNode?>, JsonNode?> onUi)
+    public static void RegisterReadOps(Router router, IEnumerable<McpTool> tools, Func<Func<JsonNode?>, JsonNode?> onUi, TimeSpan? timeout = null)
     {
         foreach (var t in tools.Where(t => t.Kind == McpToolKind.Read))
         {
-            var handler = t.Handler;
-            router.Register(t.Name, body => onUi(() => handler(body)));
+            var tool = t;
+            var limit = timeout ?? tool.Timeout ?? McpServer.DefaultCallTimeout;
+            router.Register(tool.Name, body => tool.UiThread ? UiCall.Run(onUi, tool.Name, () => tool.Handler(body), limit) : tool.Handler(body));
         }
     }
 }

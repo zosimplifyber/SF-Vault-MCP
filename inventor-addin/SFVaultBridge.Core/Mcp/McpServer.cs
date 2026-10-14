@@ -30,9 +30,10 @@ public sealed class McpServer
     private readonly Func<Func<JsonNode?>, JsonNode?> _onUi;
     private readonly TimeSpan _callTimeout;
     private readonly Action<string> _log;
+    private readonly JobManager _jobs;
 
     public McpServer(string token, string serverVersion, IEnumerable<McpTool> tools, Func<Func<JsonNode?>, JsonNode?> onUi,
-                     TimeSpan? callTimeout = null, Action<string>? log = null)
+                     TimeSpan? callTimeout = null, Action<string>? log = null, JobManager? jobs = null)
     {
         if (string.IsNullOrWhiteSpace(token)) throw new ArgumentException("token is required", nameof(token));
         _token = Encoding.UTF8.GetBytes(token);
@@ -42,17 +43,26 @@ public sealed class McpServer
         _onUi = onUi;
         _callTimeout = callTimeout ?? DefaultCallTimeout;
         _log = log ?? (_ => { });
+        _jobs = jobs ?? new JobManager(onUi, log: _log);
     }
 
     public IReadOnlyList<McpTool> Tools => _tools;
 
     /// <summary>Session ids are issued on initialize and accepted when sent back; the server keeps no per-session state, so a missing or stale id is never an error.</summary>
+    /// <summary>Origin and token, judged from headers alone so the host can refuse before reading a body. Null when fine.</summary>
+    public McpHttpResponse? Precheck(string? origin, string? bridgeToken, string? authorization)
+    {
+        if (!OriginAllowed(origin))
+            return Http(403, RpcError(null, -32600, "Origin not allowed: the MCP endpoint only serves localhost."));
+        if (!TokenMatches(bridgeToken, authorization))
+            return Http(401, RpcError(null, -32001, "Missing or wrong token. Send X-Bridge-Token or Authorization: Bearer."));
+        return null;
+    }
+
     public McpHttpResponse Handle(McpHttpRequest req)
     {
-        if (!OriginAllowed(req.Origin))
-            return Http(403, RpcError(null, -32600, "Origin not allowed: the MCP endpoint only serves localhost."));
-        if (!TokenMatches(req))
-            return Http(401, RpcError(null, -32001, "Missing or wrong token. Send X-Bridge-Token or Authorization: Bearer."));
+        var refused = Precheck(req.Origin, req.BridgeToken, req.Authorization);
+        if (refused is not null) return refused;
         switch (req.Method)
         {
             case "POST": break;
@@ -76,6 +86,7 @@ public sealed class McpServer
                 : Http(400, RpcError(id?.DeepClone(), -32600, "Message has no method."));
         }
         var method = msg["method"]!.GetValue<string>();
+        if (id is null && msg.ContainsKey("id")) return Http(400, RpcError(null, -32600, "A request id must not be null."));
         if (id is null) return new McpHttpResponse(202, null); // notification (notifications/initialized, cancelled, ...)
 
         var idClone = id.DeepClone();
@@ -99,10 +110,10 @@ public sealed class McpServer
         return u.Host is "localhost" or "127.0.0.1" or "[::1]" or "::1";
     }
 
-    private bool TokenMatches(McpHttpRequest req)
+    private bool TokenMatches(string? bridgeToken, string? authorization)
     {
-        var supplied = req.BridgeToken;
-        if (string.IsNullOrEmpty(supplied) && req.Authorization is { } a && a.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        var supplied = bridgeToken;
+        if (string.IsNullOrEmpty(supplied) && authorization is { } a && a.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             supplied = a["Bearer ".Length..].Trim();
         return !string.IsNullOrEmpty(supplied) && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(supplied), _token);
     }
@@ -174,12 +185,13 @@ public sealed class McpServer
         catch (Exception ex)
         {
             isError = true;
-            text = ErrorText("internal", ex.GetType().Name + ": " + ex.Message);
+            SafeLog($"mcp tool {name} crashed: {ex}");
+            text = ErrorText("internal", $"An unexpected error occurred ({ex.GetType().Name}); see bridge.log.");
         }
         if (text.Length > MaxResultChars)
             text = $"[TRUNCATED: the result was {text.Length} characters and was cut at {MaxResultChars}. Narrow the request (limit, levels, a specific file) and call again.]\n" + text[..MaxResultChars];
         SafeLog($"mcp tool {name} ({tool.Kind}) -> {(isError ? "error" : "ok")} in {sw.ElapsedMilliseconds} ms" +
-                (tool.Kind == McpToolKind.Read ? "" : " args=" + Truncate(args.ToJsonString(), 500)) +
+                (tool.Kind == McpToolKind.Read ? "" : " args=" + Truncate(Redacted(args), 500)) +
                 (isError ? " " + Truncate(text, 300) : ""));
         var content = new JsonObject
         {
@@ -191,18 +203,17 @@ public sealed class McpServer
 
     private JsonNode? RunWithTimeout(McpTool tool, JsonObject args)
     {
-        var limit = tool.Timeout ?? _callTimeout;
-        var task = Task.Run(() => _onUi(() => tool.Handler(args)));
-        if (Task.WaitAny(new Task[] { task }, limit) < 0)
-        {
-            // Never leave the late result unobserved.
-            task.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-            var tail = tool.Kind == McpToolKind.Write
-                ? " The operation may still be running or may have finished; check Vault before trying again."
-                : " Inventor may be busy (a dialog open?). Try again.";
-            throw new BridgeException("timeout", $"{tool.Name} did not finish within {(int)limit.TotalSeconds} seconds.{tail}");
-        }
-        return task.GetAwaiter().GetResult();
+        if (!tool.UiThread) return tool.Handler(args);
+        // Writes run as jobs: never abandoned, and a long one hands back a job_id instead of timing out.
+        if (tool.Kind == McpToolKind.Write) return _jobs.RunOrDetach(tool.Name, () => tool.Handler(args));
+        return UiCall.Run(_onUi, tool.Name, () => tool.Handler(args), tool.Timeout ?? _callTimeout);
+    }
+
+    private static string Redacted(JsonObject args)
+    {
+        var c = (JsonObject)args.DeepClone();
+        if (c.ContainsKey("token")) c["token"] = "***";
+        return c.ToJsonString();
     }
 
     private void SafeLog(string line)
