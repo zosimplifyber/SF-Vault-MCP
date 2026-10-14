@@ -231,7 +231,22 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `fix_data_card_apply` | write | Applies it; needs `confirm: true` and a matching preview in the last 10 minutes |
 | `mcmaster_intake_preview` | preview | Plans a vendor part import from Downloads (STEP + PDF), returns a token |
 | `mcmaster_intake_commit` | write | Imports it via Import New Part; needs the token and `confirm: true` |
+| `vault_list_folder` | read | List a folder's subfolders and files (state, revision, category) |
+| `vault_find_folder` | read | Check a folder path exists; returns folder_id |
+| `vault_advanced_search` | read | Files by property conditions (AND, or OR with `any`), optional folder |
+| `vault_job_queue` | read | Recent jobs with type, status, submitter, created, file |
+| `vault_job_queue_enabled` | read | Whether the Vault job queue is on |
+| `vault_submit_pdf_job_preview` | preview | Plans the standard PDF job for a drawing's latest version, returns `preview_hash` |
+| `vault_submit_pdf_job_apply` | write | Queues the previewed PDF job; needs `preview_hash` and `confirm: true` within 10 minutes |
+| `vault_property_definitions` | read | Property names, types and usage (filter, entity) |
+| `vault_categories` | read | Categories and what they apply to |
+| `vault_lifecycles` | read | Lifecycle definitions with states (released/obsolete flags) and transitions |
+| `vault_revision_schemes` | read | Revision schemes and their label sequences |
+| `vault_users` | read | Users (active only by default) |
+| `vault_groups` | read | Groups with member users and child groups |
 | `job_status` | read | State and result of a write that was still running (job_id), optional cancel before it starts |
+
+The PDF job is the standard Vault drawing job `Autodesk.Vault.PDF.Create.idw` / `.dwg` with `FileVersionId` and `UpdateViewOption=False` (same as `vault_publish_pdf_from_drawing` and `publish_bom.py`); the preview hash binds file version and job type, so a newer drawing version since the preview is refused. `vault_advanced_search` runs `starts_with` as a contains search and filters the hits afterwards.
 
 The read tools are also bridge ops (`POST /op/<name>`, same arguments). Planned (phase 2, needs non-UI variants): Purchasing Sheet, Design Review, packages and I Approve! preview as MCP tools.
 
