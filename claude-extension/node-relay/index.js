@@ -155,7 +155,7 @@ function createRelay(opts = {}) {
 
 function main() {
   let version = '1.0.0';
-  try { version = require('../manifest.json').version; } catch { /* ignore */ }
+  try { version = require('../../manifest.json').version; } catch { /* ignore */ }
   const relay = createRelay({ version });
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on('line', (l) => relay.push(l));

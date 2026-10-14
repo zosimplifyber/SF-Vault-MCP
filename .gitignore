@@ -63,3 +63,8 @@ inventor-addin/**/obj/
 inventor-addin/tools/
 build/sfvaulttools/
 release/
+
+claude-extension/relay/bin/
+claude-extension/relay/obj/
+claude-extension/relay.Tests/bin/
+claude-extension/relay.Tests/obj/
