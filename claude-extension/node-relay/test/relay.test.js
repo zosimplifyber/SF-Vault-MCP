@@ -5,7 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRelay, DOWN_MESSAGE } = require('../server/index.js');
+const { createRelay, DOWN_MESSAGE } = require('../index.js');
 
 function fakeServer(handler) {
   const seen = [];

@@ -8,7 +8,15 @@ if (-not $Version) {
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("sfvb-mcpb-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 try {
-    Copy-Item (Join-Path $here 'server') (Join-Path $stage 'server') -Recurse
+    # The relay is a framework-dependent single-file win-x64 exe (needs the .NET 8 runtime Inventor 2026 installs).
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue) -and (Test-Path 'C:\Program Files\dotnet\dotnet.exe')) {
+        $env:PATH = 'C:\Program Files\dotnet;' + $env:PATH
+    }
+    $serverDir = Join-Path $stage 'server'
+    & dotnet publish (Join-Path $here 'relay\SFVaultBridgeRelay.csproj') -c Release -r win-x64 --self-contained false `
+        -p:PublishSingleFile=true -p:Version=$Version -o $serverDir | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $serverDir 'SFVaultBridgeRelay.exe'))) { throw 'dotnet publish of the relay failed.' }
+    Get-ChildItem $serverDir -File | Where-Object { $_.Name -ne 'SFVaultBridgeRelay.exe' } | Remove-Item -Force
     $m = Get-Content (Join-Path $here 'manifest.json') -Raw | ConvertFrom-Json
     $m.version = $Version
     $json = $m | ConvertTo-Json -Depth 10
