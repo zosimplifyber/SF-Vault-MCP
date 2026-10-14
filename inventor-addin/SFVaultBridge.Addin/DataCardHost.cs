@@ -64,6 +64,8 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
     private bool IsReleased(WsFile f, out string? unreadable)
     {
         unreadable = null;
+        // A file with no lifecycle at all (e.g. an Unclassified library file) can never be released, so it is editable.
+        if (f.FileLfCyc is null || (f.FileLfCyc.LfCycDefId <= 0 && f.FileLfCyc.LfCycStateId <= 0)) return false;
         var released = StateReleased(f.FileLfCyc?.LfCycStateId ?? 0);
         if (released is null) { unreadable = "could not read lifecycle state"; return false; }
         return released.Value;
