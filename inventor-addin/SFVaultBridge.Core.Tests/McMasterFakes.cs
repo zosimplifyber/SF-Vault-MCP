@@ -37,6 +37,11 @@ internal sealed class FakeMcMasterServer : HttpMessageHandler
     public bool UseSse, SendSessionId = true, OfferS256 = true, OfferRegistration = true, NamesMetadataIn401 = true, Revoked;
     public int ExpiresIn = 900, TokenCalls, RefreshCalls, Initializes, Reject401Remaining;
     public bool RefreshIsDead;
+    /// <summary>When set, a refresh answers this error with RefreshErrorStatus (invalid_client when Access purged the client).</summary>
+    public string? RefreshError;
+    public int RefreshErrorStatus = 400;
+    /// <summary>Paths that answer 302 to elsewhere (token endpoint, /mcp, /files/abc).</summary>
+    public readonly HashSet<string> Redirects = new();
     private int _issued;
     private readonly HashSet<string> _validAccess = new();
     private string _refresh = "";
@@ -68,6 +73,7 @@ internal sealed class FakeMcMasterServer : HttpMessageHandler
                 ClientId = "client-" + Guid.NewGuid().ToString("N")[..8];
                 return Json(201, new JsonObject { ["client_id"] = ClientId, ["redirect_uris"] = reg["redirect_uris"]!.DeepClone() });
             }
+            if (Redirects.Contains(path)) return Redirect();
             if (path == "/cdn-cgi/access/oauth/token") return Token(Form(body));
             if (path == "/cdn-cgi/access/oauth/revoke") { Revoked = Form(body).GetValueOrDefault("token") == _refresh; return new HttpResponseMessage(HttpStatusCode.OK); }
             return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -86,6 +92,7 @@ internal sealed class FakeMcMasterServer : HttpMessageHandler
                 r.Headers.TryAddWithoutValidation("WWW-Authenticate", "Bearer realm=\"OAuth\", error=\"invalid_token\", error_description=\"Missing or invalid access token\", resource_metadata=\"https://mcmaster.example.test/.well-known/cloudflare-access-protected-resource/mcp\"");
             return r;
         }
+        if (Redirects.Contains(path)) return Redirect();
         if (path == "/files/abc") return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(FileBytes) };
         if (path != "/mcp") return new HttpResponseMessage(HttpStatusCode.NotFound);
 
@@ -159,12 +166,21 @@ internal sealed class FakeMcMasterServer : HttpMessageHandler
         else
         {
             RefreshCalls++;
+            if (RefreshError is not null && f["refresh_token"] == _refresh)
+                return Json(RefreshErrorStatus, new JsonObject { ["error"] = RefreshError });
             if (RefreshIsDead || f["refresh_token"] != _refresh || f.GetValueOrDefault("resource") != Server)
                 return Json(400, new JsonObject { ["error"] = "invalid_grant" });
         }
         var access = GrantAccess();
         _refresh = "refresh-" + _issued;
         return Json(200, new JsonObject { ["access_token"] = access, ["token_type"] = "Bearer", ["expires_in"] = ExpiresIn, ["refresh_token"] = _refresh });
+    }
+
+    private static HttpResponseMessage Redirect()
+    {
+        var r = new HttpResponseMessage(HttpStatusCode.TemporaryRedirect);
+        r.Headers.Location = new Uri("https://evil.example/steal");
+        return r;
     }
 
     private HttpResponseMessage Rpc(long id, JsonObject? result, string? error = null)

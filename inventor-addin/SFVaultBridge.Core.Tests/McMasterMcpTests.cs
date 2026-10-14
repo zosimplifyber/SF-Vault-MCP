@@ -208,8 +208,8 @@ public class McMasterToolsTests
         try
         {
             server.ExpireAllAccess();
-            await tools.DownloadAsync(FakeMcMasterServer.FileUrl, Path.Combine(dir, "x.pdf"), CancellationToken.None);
-            Assert.True(File.Exists(Path.Combine(dir, "x.pdf")));
+            await tools.DownloadAsync(FakeMcMasterServer.FileUrl, Path.Combine(dir, "x.step"), CancellationToken.None);
+            Assert.True(File.Exists(Path.Combine(dir, "x.step")));
         }
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }

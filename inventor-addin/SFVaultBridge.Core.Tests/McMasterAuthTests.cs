@@ -15,10 +15,78 @@ public class McMasterOAuthTests
     [Fact]
     public void Resource_metadata_url_comes_from_the_live_challenge()
     {
-        Assert.Equal("https://mcmaster.simplifyber-app.com/.well-known/cloudflare-access-protected-resource/mcp", McMasterOAuth.ResourceMetadataUrl(new[] { LiveChallenge }));
-        Assert.Null(McMasterOAuth.ResourceMetadataUrl(new[] { "Bearer realm=\"x\"" }));
-        Assert.Null(McMasterOAuth.ResourceMetadataUrl(new[] { "Bearer resource_metadata=\"http://evil.example/x\"" }));
-        Assert.Null(McMasterOAuth.ResourceMetadataUrl(null));
+        Assert.Equal("https://mcmaster.simplifyber-app.com/.well-known/cloudflare-access-protected-resource/mcp", McMasterOAuth.ResourceMetadataUrl(new[] { LiveChallenge }, LiveServer));
+        Assert.Null(McMasterOAuth.ResourceMetadataUrl(new[] { "Bearer realm=\"x\"" }, LiveServer));
+        Assert.Null(McMasterOAuth.ResourceMetadataUrl(null, LiveServer));
+    }
+
+    [Theory]
+    [InlineData("https://evil.example/.well-known/oauth-protected-resource/mcp")]                 // another origin
+    [InlineData("http://mcmaster.simplifyber-app.com/.well-known/oauth-protected-resource/mcp")]  // not https
+    [InlineData("https://mcmaster.simplifyber-app.com:8443/.well-known/x")]                       // another port
+    [InlineData("https://sub.mcmaster.simplifyber-app.com/.well-known/x")]                        // another host
+    public void Resource_metadata_hint_off_the_server_origin_is_ignored(string url) =>
+        Assert.Null(McMasterOAuth.ResourceMetadataUrl(new[] { $"Bearer resource_metadata=\"{url}\"" }, LiveServer));
+
+    [Theory]
+    [InlineData("https://mcmaster.simplifyber-app.com/mcp")]
+    [InlineData("https://MCMASTER.simplifyber-app.com/mcp/")]
+    [InlineData("https://mcmaster.simplifyber-app.com")]
+    [InlineData("https://mcmaster.simplifyber-app.com/")]
+    public void Resource_is_the_server_url_or_its_origin(string resource) =>
+        Assert.Equal(resource, McMasterOAuth.ParseProtectedResource(LiveResource.Replace("\"https://mcmaster.simplifyber-app.com/mcp\"", $"\"{resource}\""), LiveServer).Resource);
+
+    [Theory]
+    [InlineData("https://mcmaster.simplifyber-app.com/other")]       // same origin, other path
+    [InlineData("https://mcmaster.simplifyber-app.com/mcp/extra")]
+    [InlineData("http://mcmaster.simplifyber-app.com/mcp")]          // not https
+    [InlineData("https://evil.example/mcp")]
+    public void Resource_that_is_not_the_server_is_refused(string resource) =>
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseProtectedResource(LiveResource.Replace("\"https://mcmaster.simplifyber-app.com/mcp\"", $"\"{resource}\""), LiveServer));
+
+    [Fact]
+    public void Non_https_authorization_servers_are_dropped()
+    {
+        var json = "{\"resource\":\"" + LiveServer + "\",\"authorization_servers\":[\"http://old-flower-628d.cloudflareaccess.com\"]}";
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseProtectedResource(json, LiveServer));
+    }
+
+    [Theory]
+    [InlineData("authorization_endpoint", "https://evil.example/cdn-cgi/access/oauth/authorization")]
+    [InlineData("token_endpoint", "https://evil.example/cdn-cgi/access/oauth/token")]
+    [InlineData("registration_endpoint", "https://evil.example/cdn-cgi/access/oauth/registration")]
+    [InlineData("revocation_endpoint", "https://evil.example/cdn-cgi/access/oauth/revoke")]
+    [InlineData("token_endpoint", "http://old-flower-628d.cloudflareaccess.com/cdn-cgi/access/oauth/token")]
+    [InlineData("registration_endpoint", "http://old-flower-628d.cloudflareaccess.com/cdn-cgi/access/oauth/registration")]
+    public void Endpoints_off_the_issuer_origin_or_not_https_are_refused(string key, string url)
+    {
+        var o = System.Text.Json.Nodes.JsonNode.Parse(LiveAuthServer)!.AsObject();
+        o[key] = url;
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseAuthServer(o.ToJsonString(), "https://old-flower-628d.cloudflareaccess.com"));
+    }
+
+    [Fact]
+    public void Issuer_must_be_https()
+    {
+        var http = LiveAuthServer.Replace("https://old-flower-628d", "http://old-flower-628d");
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseAuthServer(http, "http://old-flower-628d.cloudflareaccess.com"));
+    }
+
+    [Fact]
+    public void Refresh_4xx_means_sign_in_again_and_3xx_is_an_error()
+    {
+        Assert.Null(McMasterOAuth.ParseToken(401, "{\"error\":\"invalid_client\"}", refresh: true));
+        Assert.Null(McMasterOAuth.ParseToken(400, "{\"error\":\"invalid_request\"}", refresh: true));
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseToken(400, "{\"error\":\"invalid_client\"}"));   // a code exchange still fails loudly
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseToken(500, "{\"error\":\"server_error\"}", refresh: true)); // a server fault keeps the sign-in
+        Assert.Throws<McMasterAuthException>(() => McMasterOAuth.ParseToken(307, "", refresh: true));
+    }
+
+    [Fact]
+    public void Http_handler_never_follows_redirects()
+    {
+        using var h = McMasterHttp.NewHandler();
+        Assert.False(h.AllowAutoRedirect);
     }
 
     [Fact]
@@ -405,4 +473,143 @@ public class McMasterAuthTests
     {
         Assert.Throws<ArgumentException>(() => new McMasterAuth("http://mcmaster.example.test/mcp", new HttpClient(), new MemoryStore(), _ => true, _ => { }));
     }
+}
+
+public class McMasterFixRound1Tests
+{
+    [Fact]
+    public async Task Idle_preconnect_socket_does_not_hold_up_the_callback()
+    {
+        using var lb = new LoopbackRedirect();
+        var wait = lb.WaitForCodeAsync("st", TimeSpan.FromSeconds(20), CancellationToken.None, readTimeout: TimeSpan.FromSeconds(15));
+        using var idle = new System.Net.Sockets.TcpClient();
+        await idle.ConnectAsync(System.Net.IPAddress.Loopback, lb.Port);   // connects, sends nothing
+        await Task.Delay(100);
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await http.GetAsync(lb.RedirectUri + "?code=c1&state=st");
+        Assert.Equal("c1", await wait);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Idle_socket_is_dropped_after_its_read_timeout()
+    {
+        using var lb = new LoopbackRedirect();
+        var wait = lb.WaitForCodeAsync("st", TimeSpan.FromSeconds(20), CancellationToken.None, readTimeout: TimeSpan.FromMilliseconds(300));
+        using var idle = new System.Net.Sockets.TcpClient();
+        await idle.ConnectAsync(System.Net.IPAddress.Loopback, lb.Port);
+        var buffer = new byte[16];
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var n = await idle.GetStream().ReadAsync(buffer, cts.Token);   // the listener closes it: 0 bytes
+        Assert.Equal(0, n);
+        using var http = new HttpClient();
+        await http.GetAsync(lb.RedirectUri + "?code=c2&state=st");
+        Assert.Equal("c2", await wait);
+    }
+
+    [Fact]
+    public async Task Refresh_refused_with_invalid_client_clears_the_sign_in_and_signs_in_again()
+    {
+        var server = new FakeMcMasterServer();
+        var store = new MemoryStore();
+        var opened = new List<string>();
+        var auth = new McMasterAuth(FakeMcMasterServer.Server, new HttpClient(server), store, server.Browser(opened: opened), _ => { }, TimeSpan.FromSeconds(10));
+        await auth.GetAccessTokenAsync(true, CancellationToken.None);
+        server.RefreshError = "invalid_client";
+        server.RefreshErrorStatus = 401;
+
+        var fresh = new McMasterAuth(FakeMcMasterServer.Server, new HttpClient(server), store, _ => false, _ => { });
+        await Assert.ThrowsAsync<McMasterNotSignedIn>(() => fresh.GetAccessTokenAsync(false, CancellationToken.None));
+        Assert.Null(store.Text);
+
+        server.RefreshError = null;
+        var again = new McMasterAuth(FakeMcMasterServer.Server, new HttpClient(server), store, server.Browser(opened: opened), _ => { }, TimeSpan.FromSeconds(10));
+        Assert.StartsWith("access-", await again.GetAccessTokenAsync(true, CancellationToken.None));
+        Assert.Equal(2, opened.Count);
+        Assert.NotNull(store.Text);
+    }
+
+    [Fact]
+    public async Task Server_fault_on_refresh_keeps_the_sign_in()
+    {
+        var server = new FakeMcMasterServer();
+        var store = new MemoryStore();
+        var auth = new McMasterAuth(FakeMcMasterServer.Server, new HttpClient(server), store, server.Browser(), _ => { }, TimeSpan.FromSeconds(10));
+        await auth.GetAccessTokenAsync(true, CancellationToken.None);
+        server.RefreshError = "temporarily_unavailable";
+        server.RefreshErrorStatus = 503;
+        await Assert.ThrowsAsync<McMasterAuthException>(() => auth.GetAccessTokenAsync(false, CancellationToken.None, forceRefresh: true));
+        Assert.NotNull(store.Text);
+    }
+
+    [Fact]
+    public async Task Redirect_from_the_token_endpoint_is_an_error_and_not_followed()
+    {
+        var server = new FakeMcMasterServer();
+        server.Redirects.Add("/cdn-cgi/access/oauth/token");
+        var store = new MemoryStore();
+        var auth = new McMasterAuth(FakeMcMasterServer.Server, new HttpClient(server), store, server.Browser(), _ => { }, TimeSpan.FromSeconds(10));
+        var ex = await Assert.ThrowsAsync<McMasterAuthException>(() => auth.SignInAsync(CancellationToken.None));
+        Assert.Contains("redirect", ex.Message);
+        Assert.DoesNotContain(server.Calls, c => c.Contains("evil.example"));
+        Assert.Null(store.Text);
+    }
+
+    private static (McMasterTools Tools, FakeMcMasterServer Server) Tools()
+    {
+        var server = new FakeMcMasterServer();
+        var token = server.GrantAccess();
+        Task<string> TokenFor(bool force, CancellationToken _) { if (force) token = server.GrantAccess(); return Task.FromResult(token); }
+        var http = new HttpClient(server);
+        server.Tools["get_product"] = a => FakeMcMasterServer.Product((string)a["part_number"]!);
+        return (new McMasterTools(new McpHttpClient(FakeMcMasterServer.Server, http, TokenFor, "1"), http, TokenFor), server);
+    }
+
+    [Fact]
+    public async Task Redirect_from_the_mcp_server_is_an_error()
+    {
+        var (tools, server) = Tools();
+        server.Redirects.Add("/mcp");
+        var ex = await Assert.ThrowsAsync<McMasterToolException>(() => tools.GetProductAsync("91251A054", CancellationToken.None));
+        Assert.Contains("redirect", ex.Message);
+    }
+
+    [Fact]
+    public async Task Redirected_or_wrong_content_downloads_leave_nothing_behind()
+    {
+        var (tools, server) = Tools();
+        var dir = Path.Combine(Path.GetTempPath(), "sfvb-mc-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var step = Path.Combine(dir, "x.step");
+            server.Redirects.Add("/files/abc");
+            await Assert.ThrowsAsync<McMasterToolException>(() => tools.DownloadAsync(FakeMcMasterServer.FileUrl, step, CancellationToken.None));
+            server.Redirects.Clear();
+
+            server.FileBytes = System.Text.Encoding.ASCII.GetBytes("<!doctype html><html>Sign in</html>");
+            var ex = await Assert.ThrowsAsync<McMasterToolException>(() => tools.DownloadAsync(FakeMcMasterServer.FileUrl, step, CancellationToken.None));
+            Assert.Contains("not a STEP", ex.Message);
+            await Assert.ThrowsAsync<McMasterToolException>(() => tools.DownloadAsync(FakeMcMasterServer.FileUrl, Path.Combine(dir, "x.pdf"), CancellationToken.None));
+            Assert.False(File.Exists(step));
+            Assert.False(Directory.Exists(dir) && Directory.EnumerateFiles(dir).Any());
+
+            server.FileBytes = System.Text.Encoding.ASCII.GetBytes("%PDF-1.7\n");
+            await tools.DownloadAsync(FakeMcMasterServer.FileUrl, Path.Combine(dir, "x.pdf"), CancellationToken.None);
+            Assert.True(File.Exists(Path.Combine(dir, "x.pdf")));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
+    [Theory]
+    [InlineData("ISO-10303-21;\nHEADER;", ".step", true)]
+    [InlineData("﻿ISO-10303-21;", ".stp", true)]
+    [InlineData("  ISO-10303-21;", ".STEP", true)]
+    [InlineData("<html>", ".step", false)]
+    [InlineData("%PDF-1.4", ".pdf", true)]
+    [InlineData("{\"error\":1}", ".pdf", false)]
+    [InlineData("", ".pdf", false)]
+    [InlineData("anything", ".dwg", true)]
+    public void Content_sniff(string head, string ext, bool ok) =>
+        Assert.Equal(ok, McMasterTools.ContentMatches(System.Text.Encoding.UTF8.GetBytes(head), ext));
 }

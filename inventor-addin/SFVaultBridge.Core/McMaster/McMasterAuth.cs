@@ -72,7 +72,7 @@ public sealed class McMasterAuth
             var stored = McMasterOAuth.FromJson(SafeLoad());
             if (McMasterOAuth.IsFor(stored, ServerUrl))
             {
-                var reply = await PostFormAsync(stored!.TokenEndpoint, McMasterOAuth.RefreshForm(stored), ct).ConfigureAwait(false);
+                var reply = await PostFormAsync(stored!.TokenEndpoint, McMasterOAuth.RefreshForm(stored), ct, refresh: true).ConfigureAwait(false);
                 if (reply is not null)
                 {
                     if (reply.RefreshToken is not null && reply.RefreshToken != stored.RefreshToken)
@@ -133,8 +133,9 @@ public sealed class McMasterAuth
             probe.Headers.Accept.ParseAdd("application/json");
             probe.Headers.Accept.ParseAdd("text/event-stream");
             using var resp = await _http.SendAsync(probe, ct).ConfigureAwait(false);
+            McMasterHttp.ThrowOnRedirect(resp, "the McMaster server");
             if (resp.StatusCode == HttpStatusCode.Unauthorized && resp.Headers.TryGetValues("WWW-Authenticate", out var values)
-                && McMasterOAuth.ResourceMetadataUrl(values) is { } named)
+                && McMasterOAuth.ResourceMetadataUrl(values, ServerUrl) is { } named)
                 candidates.Add(named);
         }
         candidates.AddRange(McMasterOAuth.DefaultResourceMetadataUrls(ServerUrl));
@@ -171,6 +172,7 @@ public sealed class McMasterAuth
         using (var reg = new StringContent(McMasterOAuth.RegistrationRequest(redirect), Encoding.UTF8, "application/json"))
         using (var resp = await _http.PostAsync(server.RegistrationEndpoint, reg, ct).ConfigureAwait(false))
         {
+            McMasterHttp.ThrowOnRedirect(resp, "client registration");
             var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
                 throw new McMasterAuthException("The sign-in server refused to register SF Vault Bridge (" + (int)resp.StatusCode + ").");
@@ -197,14 +199,14 @@ public sealed class McMasterAuth
         return Remember(reply);
     }
 
-    private async Task<TokenReply?> PostFormAsync(string url, Dictionary<string, string> form, CancellationToken ct)
+    private async Task<TokenReply?> PostFormAsync(string url, Dictionary<string, string> form, CancellationToken ct, bool refresh = false)
     {
         using var content = new FormUrlEncodedContent(form);
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        return McMasterOAuth.ParseToken((int)resp.StatusCode, body);
+        return McMasterOAuth.ParseToken((int)resp.StatusCode, body, refresh);
     }
 
     private async Task<string?> GetJsonAsync(string url, CancellationToken ct)
@@ -212,6 +214,7 @@ public sealed class McMasterAuth
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        McMasterHttp.ThrowOnRedirect(resp, "the sign-in metadata");
         if (!resp.IsSuccessStatusCode) return null;
         return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
     }

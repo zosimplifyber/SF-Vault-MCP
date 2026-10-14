@@ -75,6 +75,24 @@ public static class McMasterShapes
 public sealed class McMasterTools : IMcMasterTools
 {
     public const long MaxDownloadBytes = 200L * 1024 * 1024;
+    private const int SniffBytes = 1024;
+
+    /// <summary>
+    /// True when the first bytes fit the extension: STEP starts "ISO-10303-21" and PDF "%PDF" (a UTF-8 BOM and leading white space are
+    /// allowed). Other extensions are not checked.
+    /// </summary>
+    public static bool ContentMatches(byte[] head, string extension)
+    {
+        var text = System.Text.Encoding.Latin1.GetString(head);
+        if (text.StartsWith("\u00EF\u00BB\u00BF", StringComparison.Ordinal)) text = text[3..];
+        text = text.TrimStart();
+        return extension.ToLowerInvariant() switch
+        {
+            ".step" or ".stp" => text.StartsWith("ISO-10303-21", StringComparison.Ordinal),
+            ".pdf" => text.StartsWith("%PDF", StringComparison.Ordinal),
+            _ => true,
+        };
+    }
 
     private readonly McpHttpClient _mcp;
     private readonly HttpClient _http;
@@ -97,7 +115,11 @@ public sealed class McMasterTools : IMcMasterTools
     public async Task<IReadOnlyList<McMasterBomLine>> EnrichBomAsync(IReadOnlyList<(string PartNumber, int Qty)> lines, CancellationToken ct) =>
         McMasterShapes.BomLines(await _mcp.CallToolAsync("enrich_bom", McMasterShapes.BomArgs(lines), ct).ConfigureAwait(false));
 
-    /// <summary>Downloads to a .part file, then moves it over path. Throws McMasterToolException with the server's status on failure.</summary>
+    /// <summary>
+    /// Downloads to a .part file, checks the content matches the extension (.step/.stp must start "ISO-10303-21", .pdf "%PDF", so an
+    /// HTML error page is never imported), then moves it over path. A failed or cancelled download leaves no .part file behind.
+    /// Throws McMasterToolException with the server's status on failure. Redirects are not followed.
+    /// </summary>
     public async Task DownloadAsync(string url, string path, CancellationToken ct)
     {
         if (!McMasterOAuth.IsAllowedUrl(url)) throw new McMasterToolException("McMaster returned a download link that is not https.");
@@ -108,25 +130,38 @@ public sealed class McMasterTools : IMcMasterTools
             if (ours) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await _tokenFor(attempt > 0, ct).ConfigureAwait(false));
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             if (resp.StatusCode == HttpStatusCode.Unauthorized && ours && attempt == 0) continue;
+            if (McMasterHttp.IsRedirect(resp))
+                throw new McMasterToolException($"The McMaster download answered with a redirect ({(int)resp.StatusCode}); it was not followed.");
             if (!resp.IsSuccessStatusCode)
                 throw new McMasterToolException($"The McMaster download failed ({(int)resp.StatusCode}). The link lasts one hour; press Fetch again.");
             if (resp.Content.Headers.ContentLength is > MaxDownloadBytes) throw new McMasterToolException("The McMaster file is too large to download.");
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             var temp = path + ".part";
-            await using (var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
-            await using (var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            try
             {
-                var buffer = new byte[81920];
-                long total = 0;
-                int n;
-                while ((n = await src.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                var head = new List<byte>();
+                await using (var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                await using (var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
-                    total += n;
-                    if (total > MaxDownloadBytes) throw new McMasterToolException("The McMaster file is too large to download.");
-                    await dst.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+                    var buffer = new byte[81920];
+                    long total = 0;
+                    int n;
+                    while ((n = await src.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    {
+                        total += n;
+                        if (total > MaxDownloadBytes) throw new McMasterToolException("The McMaster file is too large to download.");
+                        if (head.Count < SniffBytes) head.AddRange(buffer.Take(Math.Min(n, SniffBytes - head.Count)));
+                        await dst.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+                    }
                 }
+                if (!ContentMatches(head.ToArray(), Path.GetExtension(path)))
+                    throw new McMasterToolException($"McMaster sent something that is not a {Path.GetExtension(path).TrimStart('.').ToUpperInvariant()} file (often an error page). Nothing was saved; press Fetch again.");
+                File.Move(temp, path, true);
             }
-            File.Move(temp, path, true);
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
             return;
         }
     }

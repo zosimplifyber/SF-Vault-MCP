@@ -181,10 +181,12 @@ public sealed class McpHttpClient
                 if (attempt == 0) continue;
                 throw new McMasterUnauthorized();
             }
+            if (McMasterHttp.IsRedirect(resp))
+                throw new McMasterToolException($"The McMaster server answered with a redirect ({(int)resp.StatusCode}); SF Vault Bridge does not follow redirects. Check the server URL in Settings.");
             if (initialize && resp.Headers.TryGetValues("Mcp-Session-Id", out var sid)) _sessionId = sid.FirstOrDefault();
             if (id is null) return (resp.StatusCode, null);
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return (resp.StatusCode, null);
+            var body = await McMasterHttp.ReadCappedAsync(resp.Content, ct).ConfigureAwait(false);
             return (resp.StatusCode, McpJson.FindResponse(resp.Content.Headers.ContentType?.MediaType, body, id.Value));
         }
     }

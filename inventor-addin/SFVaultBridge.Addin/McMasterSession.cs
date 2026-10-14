@@ -51,7 +51,8 @@ internal sealed class DpapiSignInStore : ISignInStore
 /// </summary>
 internal static class McMasterSession
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(100) };
+    /// <summary>Never follows redirects (McMasterHttp): a code, refresh token or bearer is never re-sent to a redirect target.</summary>
+    private static readonly HttpClient Http = McMasterHttp.NewClient(TimeSpan.FromSeconds(100));
     private static readonly object Gate = new();
     private static (string Url, McMasterAuth Auth, McMasterTools Tools)? _current;
 

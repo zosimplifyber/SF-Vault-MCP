@@ -45,13 +45,17 @@ public static class McMasterOAuth
 
     private static readonly Regex ResourceMetadataParam = new("resource_metadata\\s*=\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
 
-    /// <summary>The resource_metadata URL from a Bearer WWW-Authenticate challenge; null when absent or not a usable URL.</summary>
-    public static string? ResourceMetadataUrl(IEnumerable<string>? wwwAuthenticate)
+    /// <summary>
+    /// The resource_metadata URL from a Bearer WWW-Authenticate challenge. Only an https URL on the MCP server's own origin is taken;
+    /// anything else is ignored (null) and the well-known URLs on the server are used instead.
+    /// </summary>
+    public static string? ResourceMetadataUrl(IEnumerable<string>? wwwAuthenticate, string serverUrl)
     {
         foreach (var header in wwwAuthenticate ?? Array.Empty<string>())
         {
             var m = ResourceMetadataParam.Match(header ?? "");
-            if (m.Success && IsAllowedUrl(m.Groups[1].Value)) return m.Groups[1].Value;
+            var url = m.Groups[1].Value;
+            if (m.Success && IsHttps(url) && SameOrigin(url, serverUrl)) return url;
         }
         return null;
     }
@@ -79,38 +83,50 @@ public static class McMasterOAuth
             : new[] { origin + "/.well-known/oauth-authorization-server" + path, origin + "/.well-known/openid-configuration" + path, origin + path + "/.well-known/openid-configuration" };
     }
 
-    /// <summary>Parses protected resource metadata and checks it belongs to the MCP server (same origin). Throws McMasterAuthException.</summary>
+    /// <summary>
+    /// Parses protected resource metadata. The resource must be the MCP server URL itself (trailing slash and host case ignored) or its
+    /// origin (RFC 9728 root metadata), and the authorization servers must be https. Throws McMasterAuthException.
+    /// </summary>
     public static ProtectedResource ParseProtectedResource(string json, string serverUrl)
     {
         var o = Parse(json) ?? throw new McMasterAuthException("The McMaster server's resource metadata is not valid JSON.");
         var resource = Str(o, "resource");
         if (string.IsNullOrWhiteSpace(resource) || !IsAllowedUrl(resource))
             throw new McMasterAuthException("The McMaster server's resource metadata names no resource.");
-        if (!SameOrigin(resource, serverUrl))
-            throw new McMasterAuthException($"The resource metadata is for {new Uri(resource).Host}, not {new Uri(serverUrl).Host}. Check the McMaster server URL in Settings.");
+        if (!SameServer(resource, serverUrl) && !IsOriginOf(resource, serverUrl))
+            throw new McMasterAuthException($"The resource metadata is for {resource}, not {serverUrl}. Check the McMaster server URL in Settings.");
         var servers = (o["authorization_servers"] as JsonArray)?.Select(x => x is JsonValue v && v.TryGetValue<string>(out var s) ? s : null)
-            .Where(s => s is not null && IsAllowedUrl(s)).Select(s => s!).ToList() ?? new List<string>();
+            .Where(s => s is not null && IsHttps(s)).Select(s => s!).ToList() ?? new List<string>();
         if (servers.Count == 0) throw new McMasterAuthException("The McMaster server's resource metadata names no authorization server.");
         return new ProtectedResource(resource, servers);
     }
 
-    /// <summary>Parses authorization server metadata. The issuer must match, the endpoints must be https, and PKCE S256 must be offered.</summary>
+    /// <summary>
+    /// Parses authorization server metadata. The issuer must be https and match; every endpoint (authorization, token, registration,
+    /// revocation) must be https on the issuer's origin; PKCE S256 must be offered. Throws McMasterAuthException.
+    /// </summary>
     public static AuthServer ParseAuthServer(string json, string expectedIssuer)
     {
+        if (!IsHttps(expectedIssuer)) throw new McMasterAuthException("The sign-in server must use https.");
         var o = Parse(json) ?? throw new McMasterAuthException("The sign-in server's metadata is not valid JSON.");
         var issuer = Str(o, "issuer") ?? "";
         if (!string.Equals(issuer.TrimEnd('/'), expectedIssuer.TrimEnd('/'), StringComparison.Ordinal))
             throw new McMasterAuthException("The sign-in server's metadata names a different issuer.");
         var authorize = Str(o, "authorization_endpoint");
         var token = Str(o, "token_endpoint");
-        if (!IsAllowedUrl(authorize) || !IsAllowedUrl(token))
-            throw new McMasterAuthException("The sign-in server's metadata has no usable authorization or token endpoint.");
+        bool OnIssuer(string? url) => IsHttps(url) && SameOrigin(url!, expectedIssuer);
+        if (!OnIssuer(authorize) || !OnIssuer(token))
+            throw new McMasterAuthException("The sign-in server's authorization and token endpoints must be https on " + new Uri(expectedIssuer).Host + ".");
         var methods = (o["code_challenge_methods_supported"] as JsonArray)?.Select(x => x?.ToString() ?? "").ToList() ?? new List<string>();
         if (!methods.Contains("S256", StringComparer.Ordinal))
             throw new McMasterAuthException("The sign-in server does not offer PKCE S256, so SF Vault Bridge will not sign in to it.");
         var register = Str(o, "registration_endpoint");
         var revoke = Str(o, "revocation_endpoint");
-        return new AuthServer(issuer, authorize!, token!, IsAllowedUrl(register) ? register : null, IsAllowedUrl(revoke) ? revoke : null, methods);
+        if (!string.IsNullOrEmpty(register) && !OnIssuer(register))
+            throw new McMasterAuthException("The sign-in server's registration endpoint is not https on " + new Uri(expectedIssuer).Host + ".");
+        if (!string.IsNullOrEmpty(revoke) && !OnIssuer(revoke))
+            throw new McMasterAuthException("The sign-in server's revocation endpoint is not https on " + new Uri(expectedIssuer).Host + ".");
+        return new AuthServer(issuer, authorize!, token!, string.IsNullOrEmpty(register) ? null : register, string.IsNullOrEmpty(revoke) ? null : revoke, methods);
     }
 
     /// <summary>RFC 7591 registration body for a public client with one loopback redirect.</summary>
@@ -188,21 +204,25 @@ public static class McMasterOAuth
     }
 
     /// <summary>
-    /// A token endpoint reply. Returns null for invalid_grant (the refresh token is dead: sign in again). Throws McMasterAuthException for
+    /// A token endpoint reply. Returns null for invalid_grant, and for any 4xx to a refresh (the sign-in is dead: sign in again). A 3xx throws. Throws McMasterAuthException for
     /// anything else that is not a success; the message holds only the server's error code and description, never a token.
     /// </summary>
-    public static TokenReply? ParseToken(int status, string body)
+    public static TokenReply? ParseToken(int status, string body, bool refresh = false)
     {
+        if (status is >= 300 and < 400) throw new McMasterAuthException("The McMaster sign-in server answered with a redirect (" + status + "); SF Vault Bridge does not follow redirects.");
         var o = Parse(body);
         var access = o is null ? null : Str(o, "access_token");
         if (status is >= 200 and < 300 && !string.IsNullOrEmpty(access))
         {
             var expires = o!["expires_in"] is JsonValue ev && ev.TryGetValue<int>(out var secs) ? secs
                 : o["expires_in"] is JsonValue ev2 && ev2.TryGetValue<double>(out var d) ? (int)d : 900;
-            var refresh = Str(o, "refresh_token");
-            return new TokenReply(access, string.IsNullOrEmpty(refresh) ? null : refresh, expires);
+            var newRefresh = Str(o, "refresh_token");
+            return new TokenReply(access, string.IsNullOrEmpty(newRefresh) ? null : newRefresh, expires);
         }
         if (o is not null && Str(o, "error") == "invalid_grant") return null;
+        // A refresh refused for any client reason (invalid_client when Access dropped the registered client, invalid_request, ...)
+        // means this sign-in is dead: start a fresh one rather than failing the same way every time.
+        if (refresh && status is >= 400 and < 500) return null;
         throw new McMasterAuthException("The McMaster sign-in server refused the token request (" + status + (o is null ? "" : ErrorSuffix(o)) + ").");
     }
 
@@ -247,6 +267,12 @@ public static class McMasterOAuth
         Uri.TryCreate(a, UriKind.Absolute, out var ua) && Uri.TryCreate(b, UriKind.Absolute, out var ub)
         && string.Equals(ua.Scheme, ub.Scheme, StringComparison.OrdinalIgnoreCase)
         && string.Equals(ua.Host, ub.Host, StringComparison.OrdinalIgnoreCase) && ua.Port == ub.Port;
+
+    public static bool IsHttps(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps;
+
+    /// <summary>True when url is just the origin of serverUrl ("https://host" or "https://host/").</summary>
+    public static bool IsOriginOf(string url, string serverUrl) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && SameOrigin(url, serverUrl) && u.AbsolutePath == "/" && u.Query.Length == 0;
 
     /// <summary>https anywhere, or http only to a loopback host (local test servers).</summary>
     public static bool IsAllowedUrl(string? url) =>
