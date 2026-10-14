@@ -874,6 +874,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
     last_col = get_column_letter(len(VENDOR_COLUMNS))
     bdr = _border()
     DOLLAR_FMT = '"$"#,##0.00'
+    PIECE_FMT = '"$"#,##0.00##'
 
     # Title
     ws.merge_cells(f"A1:{last_col}1")
@@ -912,11 +913,21 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
 
     parts["_qty_num"] = parts["Item Qty"].apply(safe_qty)
     parts["_cost_num"] = pd.to_numeric(parts["Cost Per"], errors="coerce").fillna(0)
+    # A live McMaster row is bought by the pack, the same as on the Purchasing
+    # tab: the line pays for whole packs. 0 means bought by the piece.
+    def pack_of(row: Any) -> int:
+        if str(row.get("Price source", "")).strip() != PRICE_SOURCE_MCMASTER:
+            return 0
+        size = row.get("Pack Size")
+        return pack_size_of(size) if pd.notna(size) else 0
+
+    parts["_pack"] = (parts.apply(pack_of, axis=1) if len(parts)
+                      else pd.Series(dtype=int))
 
     agg = (
         parts.groupby(
             ["Vendor", "Number", "Description (Item,CO)", "Material",
-             "Vendor Number", "_cost_num"],
+             "Vendor Number", "_cost_num", "_pack"],
             dropna=False, sort=False,
         )
         .agg(total_qty=("_qty_num", "sum"))
@@ -934,6 +945,13 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
         ri = HDR + 1 + i
         fill = alt_fill if i % 2 == 0 else white_fill
         qty = row["total_qty"]
+        pack = int(row["_pack"])
+        if pack:
+            # Packs to buy x pack price, where the pack price is Unit Cost x pack.
+            line_total = (f"=ROUNDUP({qty_col}{ri}/{pack},0)"
+                          f"*{unit_cost_col}{ri}*{pack}")
+        else:
+            line_total = f"={unit_cost_col}{ri}*{qty_col}{ri}"
         vals = [
             row["Vendor"],
             row["Number"],
@@ -942,7 +960,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
             row["Vendor Number"] if pd.notna(row.get("Vendor Number")) else None,
             int(qty) if qty == int(qty) else qty,
             row["_cost_num"] if row["_cost_num"] != 0 else None,
-            f"={unit_cost_col}{ri}*{qty_col}{ri}",
+            line_total,
         ]
         for ci, val in enumerate(vals, 1):
             c = ws.cell(row=ri, column=ci, value=val)
@@ -951,7 +969,8 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
             c.border = bdr
             c.alignment = Alignment(horizontal="left", vertical="center")
             if VENDOR_COLUMNS[ci - 1] in ("Unit Cost", "Line Total"):
-                c.number_format = DOLLAR_FMT
+                c.number_format = (PIECE_FMT if pack and VENDOR_COLUMNS[ci - 1] == "Unit Cost"
+                                   else DOLLAR_FMT)
 
     last_data_row = HDR + len(agg)
     ws.auto_filter.ref = f"A{HDR}:{last_col}{last_data_row}"

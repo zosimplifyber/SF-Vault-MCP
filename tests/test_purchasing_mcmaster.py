@@ -228,3 +228,62 @@ def test_cli_reads_mcmaster_columns_from_bom_file(tmp_path, monkeypatch):
     assert (mc["Price source"].value, mc["Pack Size"].value, mc["Packs to Buy"].value) == ("McMaster", 50, 3)
     assert mc["Cost Per"].value == pytest.approx(0.0936)
     assert (plain["Price source"].value, plain["Cost Per"].value, plain["Pack Size"].value) == ("File", 2.25, None)
+
+
+# ---- By Vendor tab ---------------------------------------------------------
+
+def _evaluate(ws, formula):
+    """Evaluate the simple arithmetic formulas the writer emits (cell refs, * / + and ROUNDUP)."""
+    import math
+    import re
+
+    def cell(m):
+        v = ws[m.group(0)].value
+        if isinstance(v, str) and v.startswith("="):
+            return f"({_evaluate(ws, v)})"
+        return repr(float(v or 0))
+
+    expr = re.sub(r"\b[A-Z]{1,3}\d+\b", cell, formula.lstrip("="))
+    expr = expr.replace("ROUNDUP(", "_roundup(")
+    return eval(expr, {"_roundup": lambda x, d: math.ceil(round(x, 9))})  # noqa: S307 - test-only, our own formulas
+
+
+def _vendor_rows(wb):
+    ws = wb["By Vendor"]
+    hdr = [c.value for c in ws[2]]
+    rows = []
+    for r in range(3, ws.max_row + 1):
+        vals = {h: ws.cell(row=r, column=i + 1) for i, h in enumerate(hdr)}
+        if vals["Vendor"].value:
+            rows.append(vals)
+    return ws, rows
+
+
+def test_by_vendor_uses_pack_rounded_totals_like_purchasing(tmp_path, monkeypatch):
+    res = _generate(tmp_path, [_mc(qty=120, price=4.68, size=50), {"Number": "P2", "Item Qty": 3, "Cost": 2.5, "Vendor": "Acme"}], monkeypatch)
+    wb = openpyxl.load_workbook(res["output_path"])
+    purchasing = wb["Purchasing"]
+    mc = next(r for r in (_row(purchasing, 1), _row(purchasing, 2)) if r["Price source"].value == "McMaster")
+    ri = mc["Sub Total"].row
+    assert _evaluate(purchasing, "=" + _paid(ri)) == pytest.approx(14.04)
+
+    ws, rows = _vendor_rows(wb)
+    by = {r["Vendor"].value: r for r in rows}
+    line = by["McMASTER-CARR"]["Line Total"]
+    assert line.value.startswith("=ROUNDUP(")
+    assert _evaluate(ws, line.value) == pytest.approx(14.04)                 # 3 packs x $4.68
+    assert by["McMASTER-CARR"]["Unit Cost"].number_format == '"$"#,##0.00##'  # $0.0936 shows
+    assert by["McMASTER-CARR"]["Unit Cost"].value == pytest.approx(0.0936)
+    # A piece-priced row keeps Unit Cost x Total Qty and the 2 decimal format.
+    acme = by["Acme"]
+    assert _evaluate(ws, acme["Line Total"].value) == pytest.approx(7.5)
+    assert acme["Unit Cost"].number_format == '"$"#,##0.00'
+
+
+def test_by_vendor_rounds_packs_on_the_summed_quantity(tmp_path, monkeypatch):
+    rows = [_mc(number="P1", qty=30), {**_mc(number="P1", qty=30), "Row Order": "2"}]
+    res = _generate(tmp_path, rows, monkeypatch)
+    ws, vrows = _vendor_rows(openpyxl.load_workbook(res["output_path"]))
+    assert len(vrows) == 1
+    assert vrows[0]["Total Qty"].value == 60
+    assert _evaluate(ws, vrows[0]["Line Total"].value) == pytest.approx(2 * 4.68)
