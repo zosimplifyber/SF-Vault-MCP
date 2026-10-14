@@ -73,7 +73,7 @@ def test_partner_bom_xlsx_title_source_state_and_yellow(tmp_path):
     assert ws["A1"].value == "CD-001882 Acme Machining CNC package"
     assert ws["A2"].value.startswith("Generated: ") and ws["A2"].value.endswith(" | Model state: Primary | Design view: Default | BOM view: Structured")
     assert [c.value for c in ws[3]] == ["Item", "Part Number", "Description", "Qty", "Material", "Material Finish",
-                                        "Process", "REV", "State", "File(s) in package"]
+                                        "Process", "REV", "State", "File(s) in package", "Vendor Number", "Note"]
     assert ws["G5"].value == "guessed: CNC" and ws["I5"].value == "Work in Progress"
     assert ws["J4"].value == "CD-000123 Rev A.stp, CD-000123 Rev A.pdf"
     assert (ws["A4"].fill.fgColor.rgb or "")[-6:] != YELLOW
@@ -261,3 +261,30 @@ def test_manifest_without_scope_is_unchanged(tmp_path):
     z = zipfile.ZipFile(out)
     text = "".join(p.extract_text() or "" for p in PdfReader(BytesIO(z.read("00 Cover.pdf"))).pages)
     assert "Scope:" not in text and "Assembly CD-001882 Rev A" in text
+
+
+def test_mcmaster_rows_note_vendor_number_and_cover_left_out(tmp_path):
+    m = json.loads(_partner_manifest(tmp_path).read_text(encoding="utf-8"))
+    m["rows"].append({"item": "3", "part_number": "91251A537", "description": "Screw", "qty": 8, "material": "", "finish": "",
+                      "process": "", "revision": "", "state": "", "files": [],
+                      "vendor_number": "91251A537", "note": "Buy from McMaster-Carr; CAD not supplied"})
+    m["left_out"] = ["91251A537", "CD-000200: assembly STEP left out: contains McMaster-Carr CAD (test)"]
+    p = tmp_path / "mc.json"; p.write_text(json.dumps(m), encoding="utf-8")
+    out = tmp_path / "p.zip"
+    res = mp.run_package(str(p), str(out))
+    assert res["ok"] is True and res["left_out"] == 2
+    z = zipfile.ZipFile(out)
+    ws = openpyxl.load_workbook(BytesIO(z.read("BOM.xlsx")))["BOM"]
+    assert ws["B6"].value == "91251A537" and ws["K6"].value == "91251A537"
+    assert ws["L6"].value == "Buy from McMaster-Carr; CAD not supplied" and ws["L4"].value in (None, "")
+    assert (ws["A6"].fill.fgColor.rgb or "")[-6:] != YELLOW  # blank state is not flagged on a purchased McMaster row
+    assert not any("91251A537" in n for n in z.namelist())
+    text = "".join(pg.extract_text() or "" for pg in PdfReader(BytesIO(z.read("00 Cover.pdf"))).pages)
+    assert "Left out: McMaster-Carr CAD (supplier terms)" in text and "91251A537" in text and "assembly STEP left out" in text
+
+
+def test_cover_has_no_left_out_section_without_mcmaster(tmp_path):
+    out = tmp_path / "p.zip"
+    mp.run_package(str(_partner_manifest(tmp_path)), str(out))
+    text = "".join(pg.extract_text() or "" for pg in PdfReader(BytesIO(zipfile.ZipFile(out).read("00 Cover.pdf"))).pages)
+    assert "McMaster" not in text

@@ -85,6 +85,12 @@ internal sealed class PackageBuilder
     private static IReadOnlyList<ScopeCandidate> Candidates(IReadOnlyList<BomNode> roots, PrintMaterials materials, IReadOnlyDictionary<string, string?> categories) =>
         PackageRules.Candidates(roots, materials, n => categories.TryGetValue(n.FullPath, out var c) ? c : null);
 
+    /// <summary>The McMaster-Carr parts in scope (every class, Purchased too): they are listed, never exported.</summary>
+    private static IReadOnlyList<ScopeCandidate> McMasterCandidates(PackageContext ctx) =>
+        ctx.Scope == PackageScopeKind.Assembly
+            ? Candidates(ctx.Roots, ctx.Materials, ctx.Categories).Where(c => c.McMaster).ToList()
+            : ctx.Pick?.McMasterParts ?? Array.Empty<ScopeCandidate>();
+
     /// <summary>The grid rows for a Selected or Part scope under the chosen Parts mode.</summary>
     public IReadOnlyList<ScopeRow> ScopeRows(PackageContext ctx, ManufacturingMode mode) =>
         PackageScope.Rows(ctx.Pick?.Candidates ?? Array.Empty<ScopeCandidate>(), mode, ctx.Scope == PackageScopeKind.Part);
@@ -159,6 +165,14 @@ internal sealed class PackageBuilder
             var counter = 0;
             var localCopies = new List<string>();
             var refreshFailed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // McMaster-Carr terms: McMaster CAD never leaves in a package. The parts are listed (BOM and cover), assembly STEPs are exported without them.
+            var mcmaster = McMasterCandidates(ctx);
+            var stepLeftOut = new List<string>();
+            var mcNodes = PackageRules.McMasterNodes(ctx.Roots);
+            var stepGuard = new ModelExporter.McMasterGuard(
+                new HashSet<string>(mcNodes.Select(n => n.FullPath).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => System.IO.Path.GetFullPath(p)), StringComparer.OrdinalIgnoreCase),
+                mcNodes.SelectMany(n => new[] { System.IO.Path.GetFileNameWithoutExtension(n.FileName ?? ""), n.PartNumber })
+                       .Where(s => !string.IsNullOrWhiteSpace(s) && s.Trim().Length >= 4).ToList());
 
             // Make every closed, not checked-out model and drawing the latest Vault version, so the package matches what the gate checked.
             SetStatus($"{prefix}: getting latest from Vault");
@@ -230,9 +244,15 @@ internal sealed class PackageBuilder
                 if (part.Files.HasFlag(PackageFiles.Step))
                     Step("STEP", () =>
                     {
-                        var dest = Unique(PackageRules.Dest(PackageFiles.Step, part));
                         var src = System.IO.Path.Combine(exportDir, $"{counter++:D3}.stp");
-                        ModelExporter.Step(_app, r.ModelLocal!, src, _log);
+                        try { ModelExporter.Step(_app, r.ModelLocal!, src, _log, stepGuard); }
+                        catch (ModelExporter.McMasterStepBlocked blocked)
+                        {
+                            _log($"STEP of {node.PartNumber} left out: {blocked.Message}");
+                            stepLeftOut.Add($"{node.PartNumber}: {McMasterRule.AssemblyStepLeftOut} ({blocked.Message})");
+                            return;
+                        }
+                        var dest = Unique(PackageRules.Dest(PackageFiles.Step, part));
                         files.Add(new PackageFile(src, dest, false)); partFiles.Add(dest);
                     });
                 if (part.Files.HasFlag(PackageFiles.Dxf))
@@ -283,6 +303,10 @@ internal sealed class PackageBuilder
                                             PackageRules.ProcessText(part), node.Revision, node.State, partFiles));
             }
 
+            var leftOutParts = mcmaster.Select(c => c.Node.PartNumber).ToList();
+            var leftOut = leftOutParts.Concat(stepLeftOut).ToList();
+            if (!print) rows.AddRange(PackageRules.McMasterRows(mcmaster));
+
             SetStatus($"{prefix}: building BOM and cover");
             var user = "";
             try { user = VaultSession.Connection.UserName ?? ""; } catch (Exception ex) { _log($"user name unavailable: {ex.Message}"); }
@@ -294,7 +318,7 @@ internal sealed class PackageBuilder
                 print ? "print" : "partner", ctx.Stem, ctx.Top.Description, VaultFiles.RevisionOf(ctx.AssemblyFile),
                 ctx.AssemblyFile is null ? "" : VaultFiles.StateOf(ctx.AssemblyFile), partner, PackageRules.ModeName(mode), source,
                 user, DateTime.Now, rows, files, guessed, missingDrawings, noFlatPattern, failed, quote,
-                ctx.Scope == PackageScopeKind.Assembly ? "" : ctx.ScopeLine)));
+                ctx.Scope == PackageScopeKind.Assembly ? "" : ctx.ScopeLine, leftOut)));
 
             var zipName = print ? PackageRules.PrintZipName(ctx.Stem) : PackageScope.ZipName(ctx.Scope, ctx.Stem, partner, mode, quote);
             var tempZip = System.IO.Path.Combine(temp, zipName);
@@ -313,6 +337,10 @@ internal sealed class PackageBuilder
 
             var warnings = new List<string>();
             var downloadsCopy = Downloads.Keep(tempZip, zipName, _log);
+
+            var leftOutText = McMasterRule.LeftOutText(leftOutParts);
+            if (leftOutText.Length > 0) warnings.Add(leftOutText);
+            foreach (var s in stepLeftOut) warnings.Add("Left out: " + s);
 
             if (quoteLocal || (print && localCopies.Count > 0)) warnings.Add("Exported from the local copy (open in Inventor, checked out or edited locally): " + string.Join(", ", localCopies));
 

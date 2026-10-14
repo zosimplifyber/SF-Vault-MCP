@@ -25,6 +25,99 @@ internal static class ModelExporter
         }
     }
 
+    /// <summary>The McMaster-Carr CAD an assembly STEP must not contain: the component files and the names a leaked one would carry in the STEP.</summary>
+    public sealed record McMasterGuard(IReadOnlySet<string> Files, IReadOnlyList<string> Names);
+
+    /// <summary>The assembly cannot be exported without McMaster-Carr CAD; the message says why. The caller lists it on the cover.</summary>
+    public sealed class McMasterStepBlocked : Exception
+    {
+        public McMasterStepBlocked(string reason) : base(reason) { }
+    }
+
+    private static string Norm(string? p)
+    {
+        try { return System.IO.Path.GetFullPath(p ?? ""); } catch { return p ?? ""; }
+    }
+
+    /// <summary>The leaf occurrences (at any depth) whose file is McMaster-Carr CAD. Read only.</summary>
+    private static List<Inv.ComponentOccurrence> McMasterOccurrences(Inv.AssemblyDocument asm, McMasterGuard guard, Action<string> log)
+    {
+        var found = new List<Inv.ComponentOccurrence>();
+        var def = (Inv.AssemblyComponentDefinition)asm.ComponentDefinition;
+        bool Is(Inv.ComponentOccurrence o)
+        {
+            try
+            {
+                var file = o.ReferencedDocumentDescriptor.FullDocumentName;
+                return McMasterRule.IsMcMasterPath(file) || guard.Files.Contains(Norm(file));
+            }
+            catch (Exception ex) { log($"STEP guard could not read an occurrence's file: {ex.Message}"); return false; }
+        }
+        foreach (Inv.ComponentOccurrence o in def.Occurrences.AllLeafOccurrences)
+            if (Is(o)) found.Add(o);
+        foreach (Inv.ComponentOccurrence o in def.Occurrences)
+            if (!found.Contains(o) && Is(o)) found.Add(o);
+        return found;
+    }
+
+    /// <summary>
+    /// Assembly STEP without McMaster-Carr CAD (supplier terms). Approach: when the assembly contains McMaster components, they are suppressed
+    /// in an invisible in-memory copy of the document that this call opened (never saved, closed with SkipSave), the STEP is written, and the
+    /// STEP's product names are checked for any McMaster part. An assembly the user has open in Inventor is never touched: it is left out instead.
+    /// Any doubt (suppress failed, name found in the STEP) deletes the STEP and throws <see cref="McMasterStepBlocked"/>.
+    /// </summary>
+    public static void Step(Inv.Application app, string modelPath, string outStp, Action<string> log, McMasterGuard? guard)
+    {
+        if (guard is null || (guard.Files.Count == 0 && guard.Names.Count == 0)) { Step(app, modelPath, outStp, log); return; }
+        var translator = FindTranslator(app, StepTranslatorId, log);
+        if (translator is null) throw new BridgeException("no_step_translator", "Inventor's STEP translator add-in is not available.");
+        if (!translator.Activated) translator.Activate();
+        using var d = DocumentOpener.Open(app, modelPath);
+        if (d.Document is not Inv.AssemblyDocument asm) { WriteStep(app, translator, d.Document, outStp, log); return; }
+        var hits = McMasterOccurrences(asm, guard, log);
+        if (hits.Count == 0) { WriteStep(app, translator, d.Document, outStp, log); return; }
+        if (!d.OpenedHere)
+            throw new McMasterStepBlocked("it is open in Inventor and its McMaster-Carr components cannot be removed without changing it; close it and rebuild");
+        log($"STEP guard: suppressing {hits.Count} McMaster-Carr occurrence(s) in an invisible copy of {System.IO.Path.GetFileName(modelPath)} (not saved)");
+        foreach (var o in hits)
+        {
+            try { o.Suppress(); }
+            catch (Exception ex) { throw new McMasterStepBlocked("a McMaster-Carr component could not be suppressed: " + ex.Message); }
+            bool suppressed;
+            try { suppressed = o.Suppressed; } catch { suppressed = false; }
+            if (!suppressed) throw new McMasterStepBlocked("a McMaster-Carr component could not be suppressed");
+        }
+        WriteStep(app, translator, d.Document, outStp, log);
+        IReadOnlyList<string> leaks;
+        try { leaks = McMasterRule.FindLeaks(System.IO.File.ReadLines(outStp), guard.Names); }
+        catch (Exception ex)
+        {
+            try { System.IO.File.Delete(outStp); } catch { }
+            throw new McMasterStepBlocked("the STEP could not be checked for McMaster-Carr parts: " + ex.Message);
+        }
+        if (leaks.Count > 0)
+        {
+            try { System.IO.File.Delete(outStp); } catch { }
+            throw new McMasterStepBlocked("the STEP still named McMaster-Carr parts: " + string.Join(", ", leaks));
+        }
+    }
+
+    private static void WriteStep(Inv.Application app, Inv.TranslatorAddIn translator, Inv.Document doc, string outStp, Action<string> log)
+    {
+        var ctx = app.TransientObjects.CreateTranslationContext();
+        ctx.Type = Inv.IOMechanismEnum.kFileBrowseIOMechanism;
+        var options = app.TransientObjects.CreateNameValueMap();
+        if (translator.HasSaveCopyAsOptions[doc, ctx, options])
+        {
+            options.Value["ApplicationProtocolType"] = 3; // AP214
+            LogOptions(options, "STEP", log);
+        }
+        var medium = app.TransientObjects.CreateDataMedium();
+        medium.FileName = outStp;
+        translator.SaveCopyAs(doc, ctx, options, medium);
+        if (!System.IO.File.Exists(outStp)) throw new BridgeException("export_failed", "Inventor did not write the STEP file.");
+    }
+
     public static void Step(Inv.Application app, string modelPath, string outStp, Action<string> log)
     {
         var translator = FindTranslator(app, StepTranslatorId, log);

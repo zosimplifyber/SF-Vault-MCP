@@ -35,7 +35,7 @@ public sealed class PrintMaterials
 }
 
 /// <summary>One BOM row that is part of the package scope: its item number, node, class and total quantity in the assembly (not pruned by a Purchased, Reference or Buy parent).</summary>
-public sealed record ScopeCandidate(string Item, BomNode Node, PackageClass Class, double Total);
+public sealed record ScopeCandidate(string Item, BomNode Node, PackageClass Class, double Total, bool McMaster = false);
 
 public static class PackageRules
 {
@@ -55,6 +55,8 @@ public static class PackageRules
     public static PackageClass Classify(BomNode node, string? vaultCategory, PrintMaterials materials, bool isSheetMetal)
     {
         if (string.IsNullOrWhiteSpace(node.FullPath) || string.IsNullOrWhiteSpace(node.FileName)) return new PackageClass(PackageKind.None, false);
+        // McMaster-Carr terms: never a Make part for a supplier or a print, whatever its category or process.
+        if (McMasterRule.IsMcMasterCad(node)) return new PackageClass(PackageKind.None, false);
         if (ReviewRules.Classify(node, vaultCategory) != PartKind.Make) return new PackageClass(PackageKind.None, false);
         var process = (node.Process ?? "").Trim();
         if (process.Length > 0)
@@ -114,7 +116,7 @@ public static class PackageRules
             if (skipped) continue;
             if (byPath.TryGetValue(node.FullPath ?? "", out var at)) { order[at] = order[at] with { Total = order[at].Total + m }; continue; }
             byPath[node.FullPath ?? ""] = order.Count;
-            order.Add(new ScopeCandidate(line.Item, node, Classify(node, category, materials, node.IsSheetMetal), m));
+            order.Add(new ScopeCandidate(line.Item, node, Classify(node, category, materials, node.IsSheetMetal), m, McMasterRule.IsMcMasterCad(node)));
         }
         return order;
     }
@@ -123,7 +125,7 @@ public static class PackageRules
                                                     Func<BomNode, string?> categoryOf, BomNode? top = null)
     {
         var parts = new List<PackagePart>();
-        if (top is not null && mode == ManufacturingMode.AllMake)
+        if (top is not null && mode == ManufacturingMode.AllMake && !McMasterRule.IsMcMasterCad(top))
             parts.Add(new PackagePart(TopItem, top, Classify(top, null, materials, false), PackageFiles.Step | PackageFiles.Pdf, 1));
         foreach (var e in Candidates(roots, materials, categoryOf))
         {
@@ -198,6 +200,18 @@ public static class PackageRules
 
     public static string PrintZipName(string assemblyStem) => $"{assemblyStem} 3D Print Package.zip";
 
+    /// <summary>The BOM rows for McMaster-Carr parts in scope: listed so the partner knows what to buy, with no files and the buy note.</summary>
+    public static IReadOnlyList<PackageRow> McMasterRows(IEnumerable<ScopeCandidate> candidates) =>
+        candidates.Where(c => c.McMaster)
+            .Select(c => new PackageRow(c.Item, c.Node.PartNumber, c.Node.Description, c.Total, c.Node.Material, c.Node.MaterialFinish, "",
+                                        c.Node.Revision, c.Node.State, Array.Empty<string>(), c.Node.VendorNumber, McMasterRule.BomNote))
+            .ToList();
+
+    /// <summary>Every McMaster-Carr file in the BOM, including the ones under a Purchased parent (their CAD must stay out of an assembly STEP too).</summary>
+    public static IReadOnlyList<BomNode> McMasterNodes(IEnumerable<BomNode> roots) =>
+        BomOrdering.Flatten(roots).Select(l => l.Node).Where(McMasterRule.IsMcMasterCad)
+            .GroupBy(n => n.FullPath ?? "", StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
+
     public static string PreviewText(IReadOnlyList<PackagePart> parts, ManufacturingMode mode)
     {
         if (parts.Count == 0)
@@ -217,7 +231,8 @@ public static class PackageRules
 }
 
 public sealed record PackageRow(string Item, string PartNumber, string Description, double Qty, string Material, string Finish,
-                                string Process, string Revision, string State, IReadOnlyList<string> Files);
+                                string Process, string Revision, string State, IReadOnlyList<string> Files,
+                                string VendorNumber = "", string Note = "");
 public sealed record PackageFile(string Src, string Dest, bool Stamp);
 public sealed record PackageFailure(string Part, string Reason);
 public sealed record PackageManifestData(string Kind, string Assembly, string Description, string Revision, string State,
@@ -225,7 +240,7 @@ public sealed record PackageManifestData(string Kind, string Assembly, string De
                                          IReadOnlyList<PackageRow> Rows, IReadOnlyList<PackageFile> Files,
                                          IReadOnlyList<string> Guessed, IReadOnlyList<string> MissingDrawings,
                                          IReadOnlyList<string> NoFlatPattern, IReadOnlyList<PackageFailure> Failed,
-                                         bool Quote = false, string Scope = "");
+                                         bool Quote = false, string Scope = "", IReadOnlyList<string>? LeftOut = null);
 
 public static class PackageManifest
 {
@@ -248,6 +263,7 @@ public static class PackageManifest
                 ["item"] = r.Item, ["part_number"] = r.PartNumber, ["description"] = r.Description, ["qty"] = r.Qty,
                 ["material"] = r.Material, ["finish"] = r.Finish, ["process"] = r.Process, ["revision"] = r.Revision,
                 ["state"] = r.State, ["files"] = Strings(r.Files),
+                ["vendor_number"] = r.VendorNumber, ["note"] = r.Note,
             }).ToArray()),
             ["files"] = new JsonArray(m.Files.Select(f => (JsonNode?)new JsonObject { ["src"] = f.Src, ["dest"] = f.Dest, ["stamp"] = f.Stamp }).ToArray()),
             ["guessed"] = Strings(m.Guessed),
@@ -255,6 +271,7 @@ public static class PackageManifest
             ["no_flat_pattern"] = Strings(m.NoFlatPattern),
             ["failed"] = new JsonArray(m.Failed.Select(f => (JsonNode?)new JsonObject { ["part"] = f.Part, ["reason"] = f.Reason }).ToArray()),
             ["quote"] = m.Quote,
+            ["left_out"] = Strings(m.LeftOut ?? Array.Empty<string>()),
         }.WithScope(m.Scope).ToJsonString();
 }
 

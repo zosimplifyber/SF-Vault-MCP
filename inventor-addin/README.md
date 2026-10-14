@@ -82,6 +82,10 @@ Builds a zip of print files for the 3D printed parts of the open assembly. There
 - Zip `<assembly> 3D Print Package.zip`, checked into Vault and copied to `Downloads\SF Vault Bridge\` like the Partner Package.
 - With nothing to print the message is "No 3D print parts found (Process = 3D Print or a print material)." and nothing is exported or written.
 
+### McMaster-Carr CAD stays out of supplier packages
+
+McMaster-Carr's API terms (version 2026-09-17, Use of CAD Models) allow its CAD only to decide to buy and to buy from McMaster. They forbid giving it to suppliers and using it for 3D printing or fabrication. So the Partner Package (every mode and scope) and the 3D Print Package never export the STEP, DXF, STL/3MF or drawing PDF of McMaster CAD. A part is McMaster CAD when its Vendor is McMaster (McMaster-Carr, McMASTER-CARR and McMaster Carr all match) or its Vault path is under `$/DESIGNS/Simplifyber Library/McMaster-Carr/`; this also catches old SF-numbered library parts filed as Part - Engineering. The Partner Package BOM.xlsx still lists these parts with part number, vendor number and quantity, and the note "Buy from McMaster-Carr; CAD not supplied"; the cover and the result message list them under "Left out: McMaster-Carr CAD (supplier terms)". Assembly STEPs are exported with the McMaster components suppressed, in an invisible copy that is never saved; an assembly you have open in Inventor is not touched, so its STEP is left out and listed as "assembly STEP left out: contains McMaster-Carr CAD" (close it and rebuild to get it). If a McMaster part name still shows in the exported STEP, the STEP is deleted and listed the same way. The Assembly Package and Design Review are internal and are not affected.
+
 ### Import New Part
 
 The sixth action button files a vendor STEP and its PDF into Vault as a numbered Part - Purchased. Unlike the others it works with or without a document open; it still needs a Vault sign-in, and a run blocks Inventor until it finishes.

@@ -12,7 +12,10 @@ public enum ScopeDoc { None, Assembly, Part, Other }
 public sealed record ScopeDecision(PackageScopeKind? Kind, string? Message);
 
 /// <summary>What the selection pick found: Make candidates in BOM order, and the picks that were skipped with their text ("not a Make part: CD-1.ipt").</summary>
-public sealed record ScopePick(IReadOnlyList<ScopeCandidate> Candidates, IReadOnlyList<string> Skipped);
+public sealed record ScopePick(IReadOnlyList<ScopeCandidate> Candidates, IReadOnlyList<string> Skipped, IReadOnlyList<ScopeCandidate>? McMaster = null)
+{
+    public IReadOnlyList<ScopeCandidate> McMasterParts => McMaster ?? Array.Empty<ScopeCandidate>();
+}
 
 /// <summary>One grid row for a single or selected scope. Note is set when the chosen Parts mode excludes the part (shown greyed, not built).</summary>
 public sealed record ScopeRow(ScopeCandidate Candidate, int DefaultQty, PackageFiles Files, string? Note)
@@ -48,25 +51,30 @@ public static class PackageScope
         var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skipped = new List<string>();
         var seenSkip = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void Skip(string key, string what) { if (seenSkip.Add(key)) skipped.Add(NotMake(what)); }
+        var wantedMcMaster = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Skip(string key, string what, string? text = null) { if (seenSkip.Add(key)) skipped.Add(text ?? NotMake(what)); }
         foreach (var raw in selectedFiles)
         {
             if (string.IsNullOrWhiteSpace(raw)) { Skip("\0virtual", "a component without a file (virtual)"); continue; }
             var key = Norm(raw);
             var name = Path.GetFileName(key);
             if (byPath.TryGetValue(key, out var c) && c.Class.Kind != PackageKind.None) wanted.Add(key);
+            else if (c is not null && c.McMaster) { Skip(key, c.Node.PartNumber, McMasterSkip(c.Node.PartNumber)); wantedMcMaster.Add(key); }
             else Skip(key, c is null ? name : c.Node.PartNumber);
         }
         var picked = all.Where(c => wanted.Contains(Norm(c.Node.FullPath ?? ""))).ToList();
-        return new ScopePick(picked, skipped);
+        var mcmaster = all.Where(c => c.McMaster && wantedMcMaster.Contains(Norm(c.Node.FullPath ?? ""))).ToList();
+        return new ScopePick(picked, skipped, mcmaster);
     }
+
+    public static string McMasterSkip(string name) => $"McMaster-Carr CAD left out (supplier terms): {name}";
 
     /// <summary>One part document: the same pick rule as a BOM row, so a purchased part is "not a Make part".</summary>
     public static ScopePick PickPart(IReadOnlyList<ScopeCandidate> all)
     {
         var make = all.Where(c => c.Class.Kind != PackageKind.None).ToList();
-        var skipped = all.Where(c => c.Class.Kind == PackageKind.None).Select(c => NotMake(c.Node.PartNumber)).ToList();
-        return new ScopePick(make, skipped);
+        var skipped = all.Where(c => c.Class.Kind == PackageKind.None).Select(c => c.McMaster ? McMasterSkip(c.Node.PartNumber) : NotMake(c.Node.PartNumber)).ToList();
+        return new ScopePick(make, skipped, all.Where(c => c.McMaster).ToList());
     }
 
     public const int MaxSkippedLines = 10;

@@ -35,8 +35,9 @@ QUOTE_TEXT = "FOR QUOTE - NOT FOR PRODUCTION"
 QUOTE_FONT_SIZE = 60
 MODE_LABELS = {"Make": "All Make parts", "CNC": "CNC (machined)", "Sheet Metal": "Sheet metal"}
 PARTNER_COLUMNS = ["Item", "Part Number", "Description", "Qty", "Material", "Material Finish",
-                   "Process", "REV", "State", "File(s) in package"]
-PARTNER_WIDTHS = [8, 18, 44, 8, 22, 18, 16, 8, 18, 48]
+                   "Process", "REV", "State", "File(s) in package", "Vendor Number", "Note"]
+PARTNER_WIDTHS = [8, 18, 44, 8, 22, 18, 16, 8, 18, 48, 18, 36]
+LEFT_OUT_HEADING = "Left out: McMaster-Carr CAD (supplier terms)"
 PRINT_COLUMNS = ["Part Number", "Description", "Qty", "Material", "Process", "REV", "State", "File"]
 PRINT_WIDTHS = [18, 44, 8, 22, 16, 8, 18, 48]
 
@@ -133,14 +134,14 @@ def _write_sheet(path: Path, m: dict[str, Any], rows: list[dict[str, Any]], part
         if partner:
             vals = [row.get("item", ""), row.get("part_number", ""), row.get("description", ""), _qty(row.get("qty")),
                     row.get("material", ""), row.get("finish", ""), row.get("process", ""), row.get("revision", ""),
-                    row.get("state", ""), ", ".join(files)]
+                    row.get("state", ""), ", ".join(files), row.get("vendor_number", ""), row.get("note", "")]
             qty_i = 3
         else:
             vals = [row.get("part_number", ""), row.get("description", ""), _qty(row.get("qty")),
                     row.get("material", ""), row.get("process", ""), row.get("revision", ""),
                     row.get("state", ""), files[0] if files else ""]
             qty_i = 2
-        if not bp.is_released(row.get("state")):
+        if not bp.is_released(row.get("state")) and not row.get("note"):
             fill = bp.UNRELEASED_FILL
         else:
             fill = bp.PALE_BLUE if r % 2 == 0 else bp.WHITE
@@ -177,6 +178,9 @@ def _cover(m: dict[str, Any], counts: dict[str, int], rows: int, failed: list[di
                 ("Missing drawings", [str(x) for x in m.get("missing_drawings") or []]),
                 ("No flat pattern", [str(x) for x in m.get("no_flat_pattern") or []]),
                 ("Could not export", [f"{f.get('part', '')}: {f.get('reason', '')}" for f in failed])]
+    left_out = [str(x) for x in m.get("left_out") or []]
+    if left_out:
+        sections.append((LEFT_OUT_HEADING, left_out))
     for head, items in sections:
         story += [Spacer(1, 12), rp._para(head, st["Heading3"])]
         story += [rp._para(x, N) for x in items] or [rp._para("None", N)]
@@ -271,6 +275,6 @@ def run_package(manifest: str, out_zip: str) -> dict[str, Any]:
         return {"ok": True, "mode": "package", "zip": str(out_zip), "files": total, "rows": len(rows),
                 **counts, "stamped": stamped, "failed": len(all_failed),
                 "guessed": len(m.get("guessed") or []), "missing": len(m.get("missing_drawings") or []),
-                "no_flat_pattern": len(m.get("no_flat_pattern") or [])}
+                "no_flat_pattern": len(m.get("no_flat_pattern") or []), "left_out": len(m.get("left_out") or [])}
     finally:
         shutil.rmtree(staging, ignore_errors=True)
