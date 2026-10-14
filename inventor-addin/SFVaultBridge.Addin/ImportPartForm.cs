@@ -404,7 +404,10 @@ internal sealed class ImportPartForm : Form
         _import.Enabled = !on;
     }
 
-    private sealed record FetchResult(McMasterPrefill Prefill, string Step, string Pdf, string? PriceError);
+    private sealed record FetchResult(McMasterPrefill Prefill, string Step, string Pdf, string? PriceError, string? Note);
+
+    /// <summary>A Fetch (sign-in excluded, it has its own 3 minute limit) never waits longer than this on a stalled server.</summary>
+    private static readonly TimeSpan FetchLimit = TimeSpan.FromMinutes(6);
 
     private async void OnFetch()
     {
@@ -427,7 +430,9 @@ internal sealed class ImportPartForm : Form
             auth = session.Auth;
             auth.Status += OnStatus;
             var materials = _materials;
-            var ct = _closing.Token;
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+            limit.CancelAfter(FetchLimit);
+            var ct = limit.Token;
             var result = await Task.Run(() => FetchAsync(session.Tools, pn, materials, ct));
             if (IsDisposed) return;
             ApplyFetch(pn, result);
@@ -450,7 +455,11 @@ internal sealed class ImportPartForm : Form
     private static async Task<FetchResult> FetchAsync(IMcMasterTools tools, string pn, IReadOnlyList<string> materials, CancellationToken ct)
     {
         var product = await tools.GetProductAsync(pn, ct).ConfigureAwait(false);
-        if (product.PartNumber.Length == 0) product = product with { PartNumber = pn };
+        // The Vendor Number is always the number asked for; a different answer from the server is shown, not used.
+        string? note = null;
+        var answered = McMasterImport.NormalizePartNumber(product.PartNumber);
+        if (answered is not null && answered != pn) note = $"McMaster answered for {answered}; check it is the part you want.";
+        product = product with { PartNumber = pn };
         McMasterPrice? price = null;
         string? priceError = null;
         try { price = await tools.GetPriceAsync(pn, 1, ct).ConfigureAwait(false); }
@@ -467,17 +476,18 @@ internal sealed class ImportPartForm : Form
         await tools.DownloadAsync(stepLink.Url, step, ct).ConfigureAwait(false);
         var pdfLink = await tools.GetCadAsync(pn, pdfFormat, ct).ConfigureAwait(false);
         await tools.DownloadAsync(pdfLink.Url, pdf, ct).ConfigureAwait(false);
-        return new FetchResult(McMasterImport.Prefill(product, price, materials), step, pdf, priceError);
+        return new FetchResult(McMasterImport.Prefill(product, price, materials), step, pdf, priceError, note);
     }
 
     private void ApplyFetch(string pn, FetchResult r)
     {
         var f = r.Prefill;
         SelectVendor(McMasterImport.VendorFolder);
-        _number.Text = f.VendorNumber.Length > 0 ? f.VendorNumber : pn;
+        _number.Text = pn;
         _desc.Text = f.Description;
         _comments.Text = f.Comments;
         var hints = new List<string>();
+        if (r.Note is not null) hints.Add(r.Note);
         if (f.Material.Material is { } m && _material.Items.Contains(m)) _material.SelectedItem = m;
         else { _material.SelectedIndex = -1; hints.Add(f.Material.Hint ?? "Choose the material."); }
         _finish.Text = f.Material.Finish;

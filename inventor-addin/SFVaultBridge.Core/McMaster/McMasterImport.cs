@@ -119,8 +119,16 @@ public static class McMasterImport
         return u.StartsWith("pack", StringComparison.Ordinal) || u.StartsWith("pkg", StringComparison.Ordinal);
     }
 
-    /// <summary>Pieces in one purchasing unit: the pack quantity for a pack unit, 1 for anything else; null for a pack unit with no pack quantity.</summary>
-    public static int? PackSize(string? unit, int? quantityPerPackage) => IsPackUnit(unit) ? quantityPerPackage : 1;
+    /// <summary>Pieces in one purchasing unit: the pack quantity for a pack unit, 1 for each; null for a pack with no pack quantity or any other unit (feet, rolls...).</summary>
+    public static int? PackSize(string? unit, int? quantityPerPackage) =>
+        IsPackUnit(unit) ? quantityPerPackage : IsEachUnit(unit) ? 1 : null;
+
+    /// <summary>True when McMaster sells this by the piece ("Each", "Ea", or no unit). Rolls, feet, cases and the like are neither.</summary>
+    public static bool IsEachUnit(string? unit)
+    {
+        var u = (unit ?? "").Trim().ToLowerInvariant();
+        return u.Length == 0 || u.StartsWith("each", StringComparison.Ordinal) || u == "ea" || u == "ea.";
+    }
 
     /// <summary>Price of one piece: price / pack size for a pack unit, the unit price otherwise; null when a pack unit has no pack size.</summary>
     public static double? PiecePrice(double unitPrice, string? unit, int? quantityPerPackage)
@@ -139,7 +147,10 @@ public static class McMasterImport
         {
             pack = PackSize(price.UnitOfMeasure, qpp);
             cost = PiecePrice(price.UnitPrice, price.UnitOfMeasure, qpp);
-            if (cost is null) costHint = "McMaster sells this by the pack but lists no Quantity per Package; Estimated Cost left blank.";
+            if (cost is null)
+                costHint = IsPackUnit(price.UnitOfMeasure)
+                    ? "McMaster sells this by the pack but lists no Quantity per Package; Estimated Cost left blank."
+                    : $"McMaster sells this by the {price.UnitOfMeasure}, not by the piece; Estimated Cost left blank.";
         }
         else costHint = "No McMaster price; Estimated Cost left blank.";
         return new McMasterPrefill(product.PartNumber, ImportRules.CleanText(product.Family), ImportRules.CleanText(product.Description), match,

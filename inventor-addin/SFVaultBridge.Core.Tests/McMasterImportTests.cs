@@ -117,6 +117,13 @@ public class McMasterImportTests
         var each = McMasterImport.Prefill(product, McMasterShapes.Price(FakeMcMasterServer.Price(unit: 7.25, uom: "Each")), Library);
         Assert.Equal((7.25, 1), (each.EstimatedCost!.Value, each.PackSize!.Value));
         Assert.Contains("$7.25 (Each)", each.Summary);
+        var feet = McMasterImport.Prefill(product, McMasterShapes.Price(FakeMcMasterServer.Price(unit: 12.0, uom: "Feet")), Library);
+        Assert.Null(feet.EstimatedCost);
+        Assert.Null(feet.PackSize);
+        Assert.Contains("by the Feet", feet.CostHint);
+        Assert.True(McMasterImport.IsEachUnit("Each"));
+        Assert.True(McMasterImport.IsEachUnit(""));
+        Assert.False(McMasterImport.IsEachUnit("Rolls"));
         var none = McMasterImport.Prefill(product, null, Library);
         Assert.Null(none.EstimatedCost);
         Assert.Contains("No McMaster price", none.CostHint);
@@ -193,21 +200,47 @@ public class McMasterPricingTests
     }
 
     [Fact]
-    public async Task One_batch_prices_everything_and_pack_sizes_come_from_iproperties_or_products()
+    public async Task One_batch_prices_everything_and_the_live_pack_size_wins_over_the_iproperty()
     {
+        var log = new List<string>();
         var tools = new FakeTools
         {
             Enrich = l => l.Select((x, i) => new McMasterBomLine(i + 1, x.Item1, x.Item1 == "6100K123" ? 12.0 : 4.68, x.Item1 == "6100K123" ? "Each" : "Packs", null)).ToList(),
             Product = pn => Product(pn, "100"),
         };
         var parts = new[] { new McMasterPart("91251A054", 50), new McMasterPart("6100K123", null), new McMasterPart("92196A194", null) };
-        var run = await McMasterPricing.FetchAsync(tools, parts, _ => { }, CancellationToken.None);
-        Assert.Equal(new[] { "enrich_bom:3", "get_product:92196A194" }, tools.Calls);
-        Assert.Equal(new McMasterLivePrice("91251A054", 4.68, 50, "Packs"), run.Live["91251A054"]);
+        var run = await McMasterPricing.FetchAsync(tools, parts, log.Add, CancellationToken.None);
+        Assert.Equal(new[] { "enrich_bom:3", "get_product:91251A054", "get_product:92196A194" }, tools.Calls);
+        Assert.Equal(new McMasterLivePrice("91251A054", 4.68, 100, "Packs"), run.Live["91251A054"]);
+        Assert.Contains(log, l => l.Contains("pack size now 100"));
         Assert.Equal(1, run.Live["6100K123"].PackSize);
         Assert.Equal(100, run.Live["92196A194"].PackSize);
         Assert.Empty(run.FellBack);
         Assert.Empty(run.Problems);
+    }
+
+    [Fact]
+    public async Task Pack_size_iproperty_is_the_fallback_when_the_product_lookup_fails()
+    {
+        var tools = new FakeTools
+        {
+            Enrich = _ => new[] { new McMasterBomLine(1, "A1", 4.68, "Packs", null), new McMasterBomLine(2, "B2", 4.68, "Packs", null) },
+            Product = _ => throw new McMasterToolException("budget used up"),
+        };
+        var run = await McMasterPricing.FetchAsync(tools, new[] { new McMasterPart("A1", 50), new McMasterPart("B2", null) }, _ => { }, CancellationToken.None);
+        Assert.Equal(50, run.Live["A1"].PackSize);
+        Assert.Equal(new[] { "B2" }, run.FellBack);
+    }
+
+    [Fact]
+    public async Task Units_that_are_neither_each_nor_pack_fall_back()
+    {
+        var log = new List<string>();
+        var tools = new FakeTools { Enrich = _ => new[] { new McMasterBomLine(1, "A1", 12.0, "Feet", null), new McMasterBomLine(2, "B2", 3.0, "Each", null) } };
+        var run = await McMasterPricing.FetchAsync(tools, new[] { new McMasterPart("A1", null), new McMasterPart("B2", null) }, log.Add, CancellationToken.None);
+        Assert.Equal(new[] { "B2" }, run.Live.Keys);
+        Assert.Equal(new[] { "A1" }, run.FellBack);
+        Assert.Contains(log, l => l.Contains("Feet"));
     }
 
     [Fact]

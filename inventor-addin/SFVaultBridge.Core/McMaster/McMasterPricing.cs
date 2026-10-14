@@ -19,7 +19,8 @@ public sealed record McMasterPriceRun(IReadOnlyDictionary<string, McMasterLivePr
 /// Live McMaster-Carr prices for the Purchasing Sheet. McMaster rows follow McMasterRule (vendor spelling or the Library McMaster
 /// folder). One enrich_bom call prices every unique part (500 per call); when the server refuses the batch (daily budget, or any
 /// tool error) each part is priced on its own with get_price, so parts already subscribed still price. A pack unit needs a pack size:
-/// the part's Pack Size iProperty, else get_product's Quantity per Package. Anything that fails falls back to the list or file price.
+/// get_product's live Quantity per Package, else the part's Pack Size iProperty. A unit that is neither each nor a pack (feet, rolls)
+/// is not priced per piece. Anything that fails falls back to the list or file price.
 /// </summary>
 public static class McMasterPricing
 {
@@ -87,14 +88,21 @@ public static class McMasterPricing
             }
             foreach (var (pn, (_, unit)) in prices.ToList())
             {
-                if (!McMasterImport.IsPackUnit(unit) || sizes[pn] is > 0) continue;
+                if (!McMasterImport.IsPackUnit(unit))
+                {
+                    if (!McMasterImport.IsEachUnit(unit)) reasons[pn] = $"sold by the {unit}, not by the piece or pack";
+                    continue;
+                }
+                // The live Quantity per Package wins; the Pack Size iProperty (set at import) is the fallback.
+                var known = sizes[pn];
                 try
                 {
                     var product = await tools.GetProductAsync(pn, ct).ConfigureAwait(false);
-                    sizes[pn] = McMasterImport.QuantityPerPackage(product.Specifications);
-                    if (sizes[pn] is null) reasons[pn] = "sold by the pack but no Quantity per Package";
+                    sizes[pn] = McMasterImport.QuantityPerPackage(product.Specifications) ?? known;
+                    if (known is > 0 && sizes[pn] != known) log($"McMaster {pn}: pack size now {sizes[pn]} (Pack Size iProperty says {known}).");
                 }
-                catch (McMasterToolException e) { reasons[pn] = "pack size unknown: " + e.Message; }
+                catch (McMasterToolException e) { if (known is null) reasons[pn] = "pack size unknown: " + e.Message; }
+                if (sizes[pn] is null && !reasons.ContainsKey(pn)) reasons[pn] = "sold by the pack but no Quantity per Package";
             }
         }
         catch (Exception e) when (IsStop(e, ct))
@@ -109,7 +117,7 @@ public static class McMasterPricing
         {
             if (prices.TryGetValue(p.PartNumber, out var pr))
             {
-                var size = McMasterImport.IsPackUnit(pr.Unit) ? sizes[p.PartNumber] : 1;
+                var size = McMasterImport.IsPackUnit(pr.Unit) ? sizes[p.PartNumber] : McMasterImport.IsEachUnit(pr.Unit) ? 1 : null;
                 if (size is > 0) { live[p.PartNumber] = new McMasterLivePrice(p.PartNumber, pr.Price, size.Value, pr.Unit); continue; }
             }
             fellBack.Add(p.PartNumber);
