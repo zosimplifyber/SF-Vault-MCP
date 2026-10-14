@@ -254,6 +254,8 @@ def _vendor_rows(wb):
     rows = []
     for r in range(3, ws.max_row + 1):
         vals = {h: ws.cell(row=r, column=i + 1) for i, h in enumerate(hdr)}
+        if not vals["Vendor"].value:
+            break  # the vendor summary sits below a blank gap
         if vals["Vendor"].value:
             rows.append(vals)
     return ws, rows

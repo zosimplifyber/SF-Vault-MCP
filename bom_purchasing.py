@@ -20,6 +20,7 @@ import pandas as pd
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -587,6 +588,8 @@ def build_purchasing_sheet(
     tariff_pending: list[Any] = []
     has_state = "State" in df.columns
     unreleased_fill = PatternFill("solid", fgColor=UNRELEASED_FILL)
+    flag_ci = n_cols + 2   # hidden helper columns, one blank column clear of the table
+    paid_ci = n_cols + 3
 
     for ri, (df_idx, row) in enumerate(df.iterrows(), start=FIRST_DATA_ROW):
         category = str(row.get("Category Name", "")).strip().lower()
@@ -685,6 +688,14 @@ def build_purchasing_sheet(
             c.border = bdr
             c.alignment = body_align
 
+        # Hidden helper cells the Totals block reads: a 1/0 "part row" flag
+        # (assembly rows are 0, so a roll-up is never counted on top of its
+        # children) and what the line pays for the parts alone, using the same
+        # whole-pack expression as the row's Sub Total.
+        ws.cell(row=ri, column=flag_ci, value=0 if is_assembly else 1)
+        if not is_assembly:
+            ws.cell(row=ri, column=paid_ci, value=f"={paid}").number_format = DOLLAR_FMT
+
     for c in tariff_pending:
         c.fill = PatternFill("solid", fgColor=TARIFF_FILL)
         c.comment = Comment(TARIFF_COMMENT, "SF Vault Bridge")
@@ -726,10 +737,97 @@ def build_purchasing_sheet(
             bottom=Side(style="thin", color=GRAY_BDR),
         )
 
-    _build_vendor_tab(wb, df)
+    ranges = None
+    if len(df):
+        ranges = _write_totals_block(ws, len(df), FIRST_DATA_ROW, flag_ci, paid_ci,
+                                     has_note=bool(unmatched_nums))
+        ws.column_dimensions[get_column_letter(flag_ci)].hidden = True
+        ws.column_dimensions[get_column_letter(paid_ci)].hidden = True
+
+    _build_vendor_tab(wb, df, ranges)
     _build_assembly_costs_tab(wb, df, children_map, FIRST_DATA_ROW)
     wb.save(output_path)
     return output_path
+
+
+TOTALS_GAP_ROWS = 2          # blank rows between the last data row and the block
+NO_PRICE_FILL = "FFC000"
+DOLLAR_TOTAL_FMT = '"$"#,##0.00'
+
+
+def _write_totals_block(ws, n_rows: int, first_row: int, flag_ci: int,
+                        paid_ci: int, has_note: bool = False) -> dict[str, str]:
+    """Write the live Totals block under the Purchasing table.
+
+    Every figure is a formula over the data range and the hidden part-row flag
+    column, so editing a quantity or price updates it. Returns the ranges and
+    cell addresses the By Vendor tab references.
+    """
+    last = first_row + n_rows - 1
+
+    def rng(col_name: str) -> str:
+        col = get_column_letter(SHEET_COLUMNS.index(col_name) + 1)
+        return f"${col}${first_row}:${col}${last}"
+
+    flag_col = get_column_letter(flag_ci)
+    paid_col = get_column_letter(paid_ci)
+    flag = f"${flag_col}${first_row}:${flag_col}${last}"
+    paid = f"${paid_col}${first_row}:${paid_col}${last}"
+    cost, ship, tax = rng("Cost Per"), rng("Shipping"), rng("Tax/Tariff")
+
+    # The Unmatched note sits in the first row below the table; keep a blank
+    # row between it and the block.
+    top = last + 1 + TOTALS_GAP_ROWS + (1 if has_note else 0)
+    names = ["Parts subtotal", "Shipping", "Tax / Tariff", "Grand total",
+             "Lines", "Lines without a price"]
+    row_of = {n: top + 1 + i for i, n in enumerate(names)}
+    addr = {n: f"B{r}" for n, r in row_of.items()}
+    formulas = {
+        "Parts subtotal": f"=SUM({paid})",
+        "Shipping": f"=SUMPRODUCT({flag},{ship})",
+        "Tax / Tariff": f"=SUMPRODUCT({flag},{tax})",
+        "Grand total": (f"={addr['Parts subtotal']}+{addr['Shipping']}"
+                        f"+{addr['Tax / Tariff']}"),
+        "Lines": f"=SUM({flag})",
+        "Lines without a price": (
+            f'=SUMPRODUCT({flag},--((({cost}=0)+({cost}=""))>0))'),
+    }
+    dollar_rows = {"Parts subtotal", "Shipping", "Tax / Tariff", "Grand total"}
+    bdr = _border()
+    for col in (1, 2):
+        h = ws.cell(row=top, column=col, value="Totals" if col == 1 else None)
+        h.font = Font(name="Arial", bold=True, color=WHITE, size=10)
+        h.fill = PatternFill("solid", fgColor=DARK_BLUE)
+    for n in names:
+        r = row_of[n]
+        lc = ws.cell(row=r, column=1, value=n)
+        vc = ws.cell(row=r, column=2, value=formulas[n])
+        lc.font = Font(name="Arial", bold=True, size=10)
+        vc.font = Font(name="Arial", bold=(n == "Grand total"), size=10)
+        for c in (lc, vc):
+            c.border = bdr
+            c.fill = PatternFill("solid", fgColor=PALE_BLUE if n == "Grand total" else WHITE)
+        vc.alignment = Alignment(horizontal="right", vertical="center")
+        vc.number_format = DOLLAR_TOTAL_FMT if n in dollar_rows else "0"
+    if (ws.column_dimensions["B"].width or 0) < 14:
+        ws.column_dimensions["B"].width = 14
+
+    # Warning, live so it clears as prices are filled in.
+    np_cell = addr["Lines without a price"]
+    note = ws.cell(row=row_of["Lines without a price"], column=3)
+    note.value = (f'=IF({np_cell}>0,"Total is low: "&{np_cell}'
+                  f'&" lines have no price","")')
+    note.font = Font(name="Arial", size=9, italic=True, color=DARK_GRAY)
+    ws.conditional_formatting.add(
+        np_cell,
+        FormulaRule(formula=[f"{np_cell}>0"],
+                    fill=PatternFill("solid", start_color=NO_PRICE_FILL,
+                                     end_color=NO_PRICE_FILL)),
+    )
+    return {
+        "flag": flag, "tax": tax, "vendor": rng("Vendor"),
+        "grand": f"{PURCHASING_SHEET_NAME}!$B${row_of['Grand total']}",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -868,7 +966,8 @@ def read_purchasing_sheet(
         wb.close()
 
 
-def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
+def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
+                      purch: dict[str, str] | None = None) -> None:
     """Add the 'By Vendor' tab — a flat, filterable, vendor-grouped table."""
     ws = wb.create_sheet("By Vendor")
     last_col = get_column_letter(len(VENDOR_COLUMNS))
@@ -975,6 +1074,10 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
     last_data_row = HDR + len(agg)
     ws.auto_filter.ref = f"A{HDR}:{last_col}{last_data_row}"
 
+    if purch and len(agg):
+        _write_vendor_summary(ws, agg["Vendor"].drop_duplicates().tolist(),
+                              HDR + 1, last_data_row, purch)
+
     for ci, col_name in enumerate(VENDOR_COLUMNS, 1):
         ws.column_dimensions[get_column_letter(ci)].width = VENDOR_COL_WIDTHS.get(col_name, 15)
     ws.freeze_panes = "A3"
@@ -987,6 +1090,71 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame) -> None:
             right=Side(style="thin", color=GRAY_BDR),
             bottom=Side(style="thin", color=GRAY_BDR),
         )
+
+
+def _write_vendor_summary(ws, vendors: list, first_row: int, last_row: int,
+                          purch: dict[str, str]) -> None:
+    """Vendor summary table under the By Vendor list, with a reconciliation.
+
+    Lines and Subtotal read this tab's list; Tax/Tariff reads the Purchasing
+    tab. The Purchasing tab's Grand total is the authoritative figure.
+    """
+    bdr = _border()
+    vcol = f"$A${first_row}:$A${last_row}"
+    total_rng = f"$H${first_row}:$H${last_row}"
+    pt = PURCHASING_SHEET_NAME
+    top = last_row + 3
+    for i, h in enumerate(["Vendor", "Lines", "Subtotal", "Tax/Tariff", "Total"], 1):
+        c = ws.cell(row=top, column=i, value=h)
+        c.font = Font(name="Arial", bold=True, color=WHITE, size=10)
+        c.fill = PatternFill("solid", fgColor=DARK_BLUE)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = bdr
+    r = top
+    for v in vendors:
+        r += 1
+        crit = f"$A{r}"
+        vals = [
+            v,
+            f"=COUNTIF({vcol},{crit})",
+            f"=SUMIF({vcol},{crit},{total_rng})",
+            (f"=SUMPRODUCT(({pt}!{purch['vendor']}={crit})"
+             f"*{pt}!{purch['flag']}*{pt}!{purch['tax']})"),
+            f"=C{r}+D{r}",
+        ]
+        for i, val in enumerate(vals, 1):
+            c = ws.cell(row=r, column=i, value=val)
+            c.font = Font(name="Arial", size=10)
+            c.border = bdr
+            if i >= 3:
+                c.number_format = DOLLAR_TOTAL_FMT
+    first_v, last_v = top + 1, r
+    r += 1
+    grand_row = r
+    totals = ["Grand total", f"=SUM(B{first_v}:B{last_v})"] + [
+        f"=SUM({col}{first_v}:{col}{last_v})" for col in "CDE"]
+    for i, val in enumerate(totals, 1):
+        c = ws.cell(row=r, column=i, value=val)
+        c.font = Font(name="Arial", bold=True, size=10)
+        c.fill = PatternFill("solid", fgColor=PALE_BLUE)
+        c.border = bdr
+        if i >= 3:
+            c.number_format = DOLLAR_TOTAL_FMT
+    r += 2
+    ws.cell(row=r, column=1, value="Purchasing tab grand total")
+    ws.cell(row=r, column=5, value=f"={purch['grand']}")
+    ws.cell(row=r + 1, column=1, value="Difference")
+    ws.cell(row=r + 1, column=5, value=f"=E{r}-E{grand_row}")
+    for rr in (r, r + 1):
+        ws.cell(row=rr, column=1).font = Font(name="Arial", bold=True, size=10)
+        ws.cell(row=rr, column=5).font = Font(name="Arial", size=10)
+        ws.cell(row=rr, column=5).number_format = DOLLAR_TOTAL_FMT
+    note = ws.cell(row=r + 2, column=1, value=(
+        "The Purchasing tab's Grand total is the authoritative figure. This tab "
+        "rounds McMaster packs up on each part's summed quantity and leaves out "
+        "parts with no vendor, so a difference here is expected when the same "
+        "McMaster part sits on several lines or a part has no vendor."))
+    note.font = Font(name="Arial", size=9, italic=True, color=DARK_GRAY)
 
 
 def _build_assembly_costs_tab(
