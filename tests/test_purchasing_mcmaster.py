@@ -5,6 +5,7 @@ import pytest
 
 import bom_purchasing as bp
 import vault_tools_cli as cli
+from tests.xl_eval import evaluate
 
 COLS = bp.SHEET_COLUMNS
 
@@ -61,6 +62,17 @@ def _paid(ri):
     return f"{_letter('Packs to Buy')}{ri}*{_letter('Cost Per')}{ri}*{_letter('Pack Size')}{ri}"
 
 
+def _packs_formula(ri):
+    p, t = f"{_letter('Pack Size')}{ri}", f"{_letter('Total Qty')}{ri}"
+    return f"=IF(ISNUMBER({p}),IF({p}>0,ROUNDUP({t}/{p},0),{t}),{t})"
+
+
+def _packs(ws, cell):
+    """Packs to Buy is a live formula: check its text, then what it evaluates to."""
+    assert cell.value == _packs_formula(cell.row)
+    return evaluate(ws, cell.coordinate)
+
+
 # ---- columns ---------------------------------------------------------------
 
 def test_pack_columns_follow_price_source():
@@ -89,11 +101,12 @@ def test_packs_to_buy_rounds_up(qty, size, expected):
 # ---- price precedence ------------------------------------------------------
 
 def test_mcmaster_price_per_piece_and_source(tmp_path, monkeypatch):
-    r = _row(_sheet(tmp_path, [_mc(qty=2, price=4.68, size=50)], monkeypatch), 1)
+    ws = _sheet(tmp_path, [_mc(qty=2, price=4.68, size=50)], monkeypatch)
+    r = _row(ws, 1)
     assert r["Cost Per"].value == pytest.approx(4.68 / 50)
     assert r["Price source"].value == "McMaster"
     assert r["Pack Size"].value == 50
-    assert r["Packs to Buy"].value == 1
+    assert _packs(ws, r["Packs to Buy"]) == 1
 
 
 def test_mcmaster_piece_price_shows_four_decimals(tmp_path, monkeypatch):
@@ -110,16 +123,17 @@ def test_mcmaster_wins_over_file_and_list(tmp_path, monkeypatch):
 
 
 def test_blank_pack_size_defaults_to_one(tmp_path, monkeypatch):
-    r = _row(_sheet(tmp_path, [_mc(qty=3, price=1.25, size=None)], monkeypatch), 1)
+    ws = _sheet(tmp_path, [_mc(qty=3, price=1.25, size=None)], monkeypatch)
+    r = _row(ws, 1)
     assert r["Cost Per"].value == 1.25
-    assert (r["Pack Size"].value, r["Packs to Buy"].value) == (1, 3)
+    assert (r["Pack Size"].value, _packs(ws, r["Packs to Buy"])) == (1, 3)
 
 
 @pytest.mark.parametrize("price", [0, None, "", "n/a", -1])
 def test_no_live_price_falls_back_to_file(tmp_path, monkeypatch, price):
     r = _row(_sheet(tmp_path, [_mc(price=price, Cost=3.0)], monkeypatch), 1)
     assert (r["Cost Per"].value, r["Price source"].value) == (3.0, "File")
-    assert r["Pack Size"].value is None and r["Packs to Buy"].value is None
+    assert r["Pack Size"].value == 50   # the part file's Pack Size, not a live one: Price source stays File
 
 
 def test_no_live_price_falls_back_to_list(tmp_path, monkeypatch):
@@ -128,33 +142,73 @@ def test_no_live_price_falls_back_to_list(tmp_path, monkeypatch):
     assert (r["Cost Per"].value, r["Price source"].value) == (9.0, "List")
 
 
+def test_file_row_without_pack_size_buys_by_the_piece(tmp_path, monkeypatch):
+    ws = _sheet(tmp_path, [{"Number": "P1", "Item Qty": 30, "Cost": 2.0, "Vendor": "Acme"}], monkeypatch)
+    r = _row(ws, 1)
+    ri = r["Sub Total"].row
+    assert (r["Pack Size"].value, _packs(ws, r["Packs to Buy"])) == (1, 30)
+    assert evaluate(ws, f"{_letter('Sub Total')}{ri}") == pytest.approx(30 * 2.0 * 1.07)
+
+
+@pytest.mark.parametrize("bad", [0, -2, 2.5, "junk", ""])
+def test_unusable_file_pack_size_is_one(tmp_path, monkeypatch, bad):
+    r = _row(_sheet(tmp_path, [{"Number": "P1", "Cost": 2.0, "Pack Size": bad}], monkeypatch), 1)
+    assert r["Pack Size"].value == 1
+
+
+def test_file_row_with_pack_size_buys_whole_packs(tmp_path, monkeypatch):
+    rows = [{"Number": "P1", "Item Qty": 30, "Cost": 0.5, "Vendor": "Acme", "Pack Size": 25}]
+    ws = _sheet(tmp_path, rows, monkeypatch)
+    r = _row(ws, 1)
+    ri = r["Sub Total"].row
+    assert r["Price source"].value == "File"          # a file Pack Size does not make a row McMaster
+    assert r["Cost Per"].value == 0.5                 # still per piece
+    assert r["Pack Size"].value == 25
+    assert _packs(ws, r["Packs to Buy"]) == 2         # ceil(30 / 25)
+    paid = 2 * 25 * 0.5
+    assert r["Sub Total"].value == f"=({_paid(ri)})+{_letter('Shipping')}{ri}+{_letter('Tax/Tariff')}{ri}"
+    assert evaluate(ws, f"{_letter('Sub Total')}{ri}") == pytest.approx(paid * 1.07)
+    assert evaluate(ws, f"{_letter('Tax/Tariff')}{ri}") == pytest.approx(paid * 0.07)
+    paid_col = openpyxl.utils.get_column_letter(len(COLS) + 3)
+    assert evaluate(ws, f"{paid_col}{ri}") == pytest.approx(paid)
+
+
+def test_file_row_by_vendor_uses_pack_size(tmp_path, monkeypatch):
+    res = _generate(tmp_path, [{"Number": "P1", "Item Qty": 30, "Cost": 0.5, "Vendor": "Acme", "Pack Size": 25}], monkeypatch)
+    ws, rows = _vendor_rows(openpyxl.load_workbook(res["output_path"]))
+    assert rows[0]["Pack Size"].value == 25
+    assert _evaluate(ws, rows[0]["Line Total"].value) == pytest.approx(2 * 25 * 0.5)
+
+
 def test_non_mcmaster_rows_unchanged(tmp_path, monkeypatch):
     ws = _sheet(tmp_path, [{"Number": "P2", "Cost": 4.5, "Vendor": "Acme"}, _mc(number="P1")], monkeypatch)
     plain = next(r for r in (_row(ws, 1), _row(ws, 2)) if r["Price source"].value == "File")
     ri = plain["Cost Per"].row
     c, q, s, t = _letter("Cost Per"), _letter("Total Qty"), _letter("Shipping"), _letter("Tax/Tariff")
     assert plain["Cost Per"].value == 4.5
-    assert plain["Pack Size"].value is None and plain["Packs to Buy"].value is None
-    assert plain["Tax/Tariff"].value == f"={c}{ri}*{q}{ri}*0.07"
-    assert plain["Sub Total"].value == f"=({c}{ri}*{q}{ri})+{s}{ri}+{t}{ri}"
+    assert plain["Pack Size"].value == 1
+    assert plain["Packs to Buy"].value == _packs_formula(ri)
+    assert plain["Tax/Tariff"].value == f"={_paid(ri)}*0.07"
+    assert plain["Sub Total"].value == f"=({_paid(ri)})+{s}{ri}+{t}{ri}"
 
 
 def test_bom_without_mcmaster_columns(tmp_path, monkeypatch):
     r = _row(_sheet(tmp_path, [{"Number": "P1", "Cost": 2.0}], monkeypatch), 1)
     assert r["Price source"].value == "File"
-    assert r["Pack Size"].value is None and r["Packs to Buy"].value is None
+    assert r["Pack Size"].value == 1 and r["Packs to Buy"].value == _packs_formula(r["Packs to Buy"].row)
 
 
 # ---- totals formulas -------------------------------------------------------
 
 def test_mcmaster_sub_total_is_packs_times_pack_price_plus_tax(tmp_path, monkeypatch):
-    r = _row(_sheet(tmp_path, [_mc(qty=120, price=4.68, size=50)], monkeypatch), 1)
+    ws = _sheet(tmp_path, [_mc(qty=120, price=4.68, size=50)], monkeypatch)
+    r = _row(ws, 1)
     ri = r["Sub Total"].row
-    assert r["Packs to Buy"].value == 3
+    assert _packs(ws, r["Packs to Buy"]) == 3
     assert r["Tax/Tariff"].value == f"={_paid(ri)}*0.07"
     assert r["Sub Total"].value == f"=({_paid(ri)})+{_letter('Shipping')}{ri}+{_letter('Tax/Tariff')}{ri}"
     # What the formulas evaluate to: 3 packs at $4.68, plus 7% tax.
-    paid = r["Packs to Buy"].value * r["Cost Per"].value * r["Pack Size"].value
+    paid = _packs(ws, r["Packs to Buy"]) * r["Cost Per"].value * r["Pack Size"].value
     assert paid == pytest.approx(3 * 4.68)
     assert paid * 1.07 == pytest.approx(15.0228)
 
@@ -187,7 +241,7 @@ def test_assembly_rolls_up_pack_sub_totals(tmp_path, monkeypatch):
     assert asm["Pack Size"].value is None and asm["Packs to Buy"].value is None
     tq = f"{_letter('Total Qty')}{asm['Cost Per'].row}"
     assert asm["Cost Per"].value == f"=SUM({_letter('Sub Total')}{part['Sub Total'].row})/IF({tq}>0,{tq},1)"
-    assert part["Packs to Buy"].value == 2
+    assert _packs(ws, part["Packs to Buy"]) == 2
 
 
 def test_info_counts_mcmaster_rows(tmp_path, monkeypatch):
@@ -199,7 +253,7 @@ def test_sheet_reads_back_pack_columns(tmp_path, monkeypatch):
     res = _generate(tmp_path, [_mc(qty=120)], monkeypatch)
     df, _, err = bp.read_purchasing_sheet(res["output_path"])
     assert err is None
-    assert int(df.loc[0, "Pack Size"]) == 50 and int(df.loc[0, "Packs to Buy"]) == 3
+    assert int(df.loc[0, "Pack Size"]) == 50   # Packs to Buy is a formula, so it reads back blank
 
 
 # ---- the BOM file the add-in writes ---------------------------------------
@@ -226,27 +280,16 @@ def test_cli_reads_mcmaster_columns_from_bom_file(tmp_path, monkeypatch):
     ws = openpyxl.load_workbook(out["workbook"])["Purchasing"]
     by_vendor = {r["Vendor"].value: r for r in (_row(ws, 1), _row(ws, 2))}
     mc, plain = by_vendor["McMASTER-CARR"], by_vendor["Acme"]
-    assert (mc["Price source"].value, mc["Pack Size"].value, mc["Packs to Buy"].value) == ("McMaster", 50, 3)
+    assert (mc["Price source"].value, mc["Pack Size"].value, _packs(ws, mc["Packs to Buy"])) == ("McMaster", 50, 3)
     assert mc["Cost Per"].value == pytest.approx(0.0936)
-    assert (plain["Price source"].value, plain["Cost Per"].value, plain["Pack Size"].value) == ("File", 2.25, None)
+    assert (plain["Price source"].value, plain["Cost Per"].value, plain["Pack Size"].value) == ("File", 2.25, 1)
 
 
 # ---- By Vendor tab ---------------------------------------------------------
 
 def _evaluate(ws, formula):
-    """Evaluate the simple arithmetic formulas the writer emits (cell refs, * / + and ROUNDUP)."""
-    import math
-    import re
-
-    def cell(m):
-        v = ws[m.group(0)].value
-        if isinstance(v, str) and v.startswith("="):
-            return f"({_evaluate(ws, v)})"
-        return repr(float(v or 0))
-
-    expr = re.sub(r"\b[A-Z]{1,3}\d+\b", cell, formula.lstrip("="))
-    expr = expr.replace("ROUNDUP(", "_roundup(")
-    return eval(expr, {"_roundup": lambda x, d: math.ceil(round(x, 9))})  # noqa: S307 - test-only, our own formulas
+    """Evaluate the writer's formulas (see tests/xl_eval.py)."""
+    return evaluate(ws, formula)
 
 
 def _vendor_rows(wb):

@@ -7,6 +7,7 @@ from pypdf import PdfReader
 
 import bom_purchasing as bp
 import review_package as rp
+from tests.xl_eval import evaluate
 
 COLS = bp.SHEET_COLUMNS
 NOTE = "PURCHASE AS NEEDED. BUY INSTALL TOOL: McMaster 90240A320 (installation tool for M6 tapping insert)."
@@ -64,7 +65,8 @@ def test_by_vendor_total_qty_uses_extended_quantity(tmp_path, monkeypatch):
     rows = _by_vendor_rows(wb)
     assert len(rows) == 1
     assert rows[0]["Total Qty"] == 76  # 36 x 2 under the sub-assembly + 4 under the root
-    assert rows[0]["Line Total"] == "=G3*F3"
+    assert rows[0]["Pack Size"] == 1
+    assert rows[0]["Line Total"] == "=ROUNDUP(F3/H3,0)*G3*H3"
 
 
 def test_purchasing_tab_money_math_uses_total_qty(tmp_path, monkeypatch):
@@ -75,14 +77,15 @@ def test_purchasing_tab_money_math_uses_total_qty(tmp_path, monkeypatch):
     part = first + 2
     assert ws[f"{tq}{first}"].value == f"=IF(ISNUMBER({_letter('Item Qty')}{first}),{_letter('Item Qty')}{first},1)"
     assert ws[f"{tq}{part}"].value.endswith(f"*{tq}{sub}")
-    assert ws[f"{_letter('Sub Total')}{part}"].value == f"=({cost}{part}*{tq}{part})+{_letter('Shipping')}{part}+{_letter('Tax/Tariff')}{part}"
-    assert ws[f"{_letter('Tax/Tariff')}{part}"].value == f"={cost}{part}*{tq}{part}*0.07"
+    paid = f"{_letter('Packs to Buy')}{part}*{cost}{part}*{_letter('Pack Size')}{part}"
+    assert ws[f"{_letter('Sub Total')}{part}"].value == f"=({paid})+{_letter('Shipping')}{part}+{_letter('Tax/Tariff')}{part}"
+    assert ws[f"{_letter('Tax/Tariff')}{part}"].value == f"={paid}*0.07"
     # The sub-assembly's Cost Per is the cost to make ONE: its children's sub totals spread over its own Total Qty.
     assert ws[f"{cost}{sub}"].value.endswith(f"/IF({tq}{sub}>0,{tq}{sub},1)")
     assert ws[f"{_letter('Sub Total')}{sub}"].value == f"={cost}{sub}*{tq}{sub}"
     # The hidden "paid" helper is the same expression as the line's money.
     paid_col = len(COLS) + 3
-    assert ws.cell(row=part, column=paid_col).value == f"={cost}{part}*{tq}{part}"
+    assert ws.cell(row=part, column=paid_col).value == f"={paid}"
 
 
 def test_mcmaster_pack_rounding_uses_extended_quantity(tmp_path, monkeypatch):
@@ -92,11 +95,13 @@ def test_mcmaster_pack_rounding_uses_extended_quantity(tmp_path, monkeypatch):
     ws = wb["Purchasing"]
     first = bp.HDR_ROW + 1
     packs = _letter("Packs to Buy")
-    assert ws[f"{packs}{first + 2}"].value == 2   # ceil(72 / 50), not ceil(36 / 50)
-    assert ws[f"{packs}{first + 3}"].value == 1   # ceil(4 / 50)
+    # Packs to Buy reads the row's Total Qty: ceil(72 / 50), not ceil(36 / 50)
+    assert evaluate(ws, f"{packs}{first + 2}") == 2
+    assert evaluate(ws, f"{packs}{first + 3}") == 1   # ceil(4 / 50)
     rows = _by_vendor_rows(wb)
     assert rows[0]["Total Qty"] == 76
-    assert rows[0]["Line Total"].startswith("=ROUNDUP(F3/50,0)")
+    assert rows[0]["Pack Size"] == 50
+    assert rows[0]["Line Total"].startswith("=ROUNDUP(F3/H3,0)")
 
 
 def test_notes_on_purchasing_and_by_vendor(tmp_path, monkeypatch):

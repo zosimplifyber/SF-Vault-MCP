@@ -48,6 +48,16 @@ public class BomTests : IDisposable
     }
 
     [Fact]
+    public void Writes_pack_size_without_a_mcmaster_price()
+    {
+        var path = Path.Combine(_dir, "bom-pack.txt");
+        var node = new BomNode("CD-5", "screw", 1, "Each", "Purchased", "", "", "CD-5.ipt", @"C:\x\CD-5.ipt", Array.Empty<BomNode>(), PackSize: 25);
+        BomFile.Write(path, BomOrdering.Flatten(new[] { node }));
+        var row = File.ReadAllLines(path)[1].Split('\t');
+        Assert.Equal(new[] { "", "25", "" }, row.Skip(15).Take(3).ToArray());   // price and date stay blank without a live price
+    }
+
+    [Fact]
     public void Writes_vendor_and_vendor_number_last()
     {
         var path = Path.Combine(_dir, "bom-vendor.txt");

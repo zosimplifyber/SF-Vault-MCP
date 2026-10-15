@@ -340,7 +340,7 @@ public class McMasterPricingTests
             var h = rows[0].ToList();
             Assert.Equal(new[] { "McMaster Pack Price", "Pack Size", "McMaster Price Date" }, h.Skip(15).Take(3).ToArray());
             Assert.Equal(new[] { "4.68", "50", "2026-10-14" }, rows[1].Skip(15).Take(3).ToArray());
-            Assert.Equal(new[] { "", "", "" }, rows[2].Skip(15).Take(3).ToArray());   // a pack size without a live price is not written
+            Assert.Equal(new[] { "", "10", "" }, rows[2].Skip(15).Take(3).ToArray());   // the file's pack size is written; price and date only with a live price
         }
         finally { File.Delete(path); }
     }

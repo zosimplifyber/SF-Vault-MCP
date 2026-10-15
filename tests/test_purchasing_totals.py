@@ -1,10 +1,9 @@
 """Totals block on the Purchasing tab and the vendor summary on By Vendor."""
-import re
-
 import openpyxl
 import pandas as pd
 
 import bom_purchasing as bp
+from tests.xl_eval import evaluate
 
 COLS = bp.SHEET_COLUMNS
 FIRST = bp.HDR_ROW + 1
@@ -25,14 +24,8 @@ def _build(tmp_path, rows):
 
 
 def _val(ws, ref):
-    """Evaluate a data cell: a number, or a product / sum of cell refs."""
-    v = ws[ref].value
-    if isinstance(v, str) and v.startswith("="):
-        expr = re.sub(r"\$?([A-Z]{1,3})\$?(\d+)",
-                      lambda m: repr(_val(ws, m.group(1) + m.group(2))), v[1:])
-        expr = re.sub(r"IF\(ISNUMBER\(([^,]+)\),\1,1\)", r"\1", expr)
-        return eval(expr)
-    return 0 if v is None else v
+    """Evaluate a data cell (see tests/xl_eval.py)."""
+    return evaluate(ws, ref)
 
 
 def _rows():
@@ -144,7 +137,7 @@ def test_vendor_summary_and_grand_total(tmp_path):
     assert ws.cell(row=r + 3, column=5).value == f"=E{r + 2}-E{r}"
     assert "authoritative" in ws.cell(row=r + 4, column=1).value
     # each line total on this tab feeds the subtotal range
-    assert f"$H$3:$H${top - 3}" in ws.cell(row=acme, column=3).value
+    assert f"$I$3:$I${top - 3}" in ws.cell(row=acme, column=3).value
 
 
 def test_empty_bom_has_no_totals(tmp_path):

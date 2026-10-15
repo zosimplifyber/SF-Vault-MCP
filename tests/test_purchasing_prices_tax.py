@@ -99,7 +99,8 @@ def test_shipping_is_zero_and_untariffed_tax_is_the_default_formula(tmp_path, mo
     r = _row(_sheet(tmp_path, [{"Number": "P1"}], monkeypatch, ref), 1)
     cost, qty = r["Cost Per"].coordinate, r["Total Qty"].coordinate
     assert r["Shipping"].value == 0
-    assert r["Tax/Tariff"].value == f"={cost}*{qty}*0.07"
+    packs, pack = r["Packs to Buy"].coordinate, r["Pack Size"].coordinate
+    assert r["Tax/Tariff"].value == f"={packs}*{cost}*{pack}*0.07"
 
 
 def test_custom_sales_tax_rate(tmp_path, monkeypatch):

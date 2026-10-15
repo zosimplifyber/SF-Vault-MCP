@@ -65,9 +65,9 @@ public static class BomFile
                 Field(n.Quantity.ToString("G", CultureInfo.InvariantCulture)), Field(n.Description),
                 Field(n.Revision), Field(n.State), Field(n.Material), Field(n.Process), Field(n.FileName), Field(n.Vendor), Field(n.VendorNumber),
                 n.Cost is { } c ? c.ToString("G", CultureInfo.InvariantCulture) : "", Field(n.HsCode),
-                // Live McMaster price columns: filled only when this run fetched a live price for the row.
+                // McMaster Pack Price and Price Date: filled only when this run fetched a live price. Pack Size goes whenever it is known (live, or the part file's iProperty).
                 n.McMasterPackPrice is { } mp ? mp.ToString("G", CultureInfo.InvariantCulture) : "",
-                n.McMasterPackPrice is not null && n.PackSize is { } ps ? ps.ToString(CultureInfo.InvariantCulture) : "",
+                n.PackSize is { } ps ? ps.ToString(CultureInfo.InvariantCulture) : "",
                 n.McMasterPackPrice is not null ? Field(n.McMasterPriceDate) : "",
                 Field(n.Notes),
             })).Append("\r\n");

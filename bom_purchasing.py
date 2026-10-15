@@ -149,11 +149,11 @@ COLUMN_WIDTHS = {
 
 VENDOR_COLUMNS = [
     "Vendor", "Number", "Description (Item,CO)", "Material",
-    "Vendor Number", "Total Qty", "Unit Cost", "Line Total", "Notes",
+    "Vendor Number", "Total Qty", "Unit Cost", "Pack Size", "Line Total", "Notes",
 ]
 VENDOR_COL_WIDTHS = {
     "Vendor": 18, "Number": 14, "Description (Item,CO)": 44, "Material": 22,
-    "Vendor Number": 20, "Total Qty": 12, "Unit Cost": 14, "Line Total": 14,
+    "Vendor Number": 20, "Total Qty": 12, "Unit Cost": 14, "Pack Size": 10, "Line Total": 14,
     "Notes": 44,
 }
 
@@ -642,12 +642,12 @@ def build_purchasing_sheet(
             and str(row.get("Source", "")).strip() in {"Buy", "Other"}
             and vendor_blank
         )
-        # A live McMaster price is bought by the pack: what is paid is
-        # Packs to Buy x pack price, and the pack price is Cost Per x Pack Size.
-        is_pack = (not is_assembly
-                   and str(row.get("Price source", "")).strip() == PRICE_SOURCE_MCMASTER
-                   and pd.notna(row.get("Pack Size"))
-                   and pd.notna(row.get("Packs to Buy")))
+        # Every priced purchased line is bought by whole packs (Pack Size 1 is
+        # a pack of one): what is paid is Packs to Buy x pack price, and the
+        # pack price is Cost Per x Pack Size. Make rows are not bought.
+        is_pack = (not is_assembly and uses_packs(row))
+        is_mcmaster = str(row.get("Price source", "")).strip() == PRICE_SOURCE_MCMASTER
+        pack_n = pack_size_of(row.get("Pack Size"))
         paid = (f"{packs_col}{ri}*{cost_col}{ri}*{pack_col}{ri}" if is_pack
                 else f"{cost_col}{ri}*{total_qty_col}{ri}")
         if is_unmatched:
@@ -681,9 +681,14 @@ def build_purchasing_sheet(
                 c.value = (None if is_assembly or pd.isna(val)
                            or str(val).strip() == "" else val)
 
-            elif col_name in ("Pack Size", "Packs to Buy"):
-                val = row.get(col_name)
-                c.value = None if is_assembly or not is_pack or pd.isna(val) else int(val)
+            elif col_name == "Pack Size":
+                c.value = pack_n if is_pack else None
+
+            elif col_name == "Packs to Buy":
+                # Live: whole packs to cover Total Qty; a blank or bad Pack Size buys by the piece.
+                p_, t_ = f"{pack_col}{ri}", f"{total_qty_col}{ri}"
+                c.value = (f"=IF(ISNUMBER({p_}),IF({p_}>0,ROUNDUP({t_}/{p_},0),{t_}),{t_})"
+                           if is_pack else None)
 
             elif col_name == "Shipping" and not is_assembly:
                 c.value = 0  # shipping is included in the price
@@ -721,7 +726,8 @@ def build_purchasing_sheet(
 
             if col_name in DOLLAR_COLS:
                 # A McMaster piece price is often under a cent ($4.68 / 50); show up to 4 decimals.
-                c.number_format = PIECE_FMT if is_pack and col_name == "Cost Per" else DOLLAR_FMT
+                c.number_format = (PIECE_FMT if is_pack and col_name == "Cost Per"
+                                   and (is_mcmaster or pack_n > 1) else DOLLAR_FMT)
 
             c.font = body_font
             c.fill = fill
@@ -1048,13 +1054,10 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
     parts = parts[parts["Vendor"].notna() & (parts["Vendor"].astype(str).str.strip() != "")]
 
     parts["_cost_num"] = pd.to_numeric(parts["Cost Per"], errors="coerce").fillna(0)
-    # A live McMaster row is bought by the pack, the same as on the Purchasing
-    # tab: the line pays for whole packs. 0 means bought by the piece.
+    # Every priced line is bought by whole packs, the same as on the Purchasing
+    # tab (1 is a pack of one).
     def pack_of(row: Any) -> int:
-        if str(row.get("Price source", "")).strip() != PRICE_SOURCE_MCMASTER:
-            return 0
-        size = row.get("Pack Size")
-        return pack_size_of(size) if pd.notna(size) else 0
+        return pack_size_of(row.get("Pack Size")) if uses_packs(row) else 1
 
     parts["_pack"] = (parts.apply(pack_of, axis=1) if len(parts)
                       else pd.Series(dtype=int))
@@ -1074,6 +1077,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
 
     qty_col = get_column_letter(VENDOR_COLUMNS.index("Total Qty") + 1)
     unit_cost_col = get_column_letter(VENDOR_COLUMNS.index("Unit Cost") + 1)
+    pack_vcol = get_column_letter(VENDOR_COLUMNS.index("Pack Size") + 1)
     white_fill = PatternFill("solid", fgColor=WHITE)
     alt_fill = PatternFill("solid", fgColor=PALE_BLUE)
 
@@ -1082,12 +1086,9 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
         fill = alt_fill if i % 2 == 0 else white_fill
         qty = row["total_qty"]
         pack = int(row["_pack"])
-        if pack:
-            # Packs to buy x pack price, where the pack price is Unit Cost x pack.
-            line_total = (f"=ROUNDUP({qty_col}{ri}/{pack},0)"
-                          f"*{unit_cost_col}{ri}*{pack}")
-        else:
-            line_total = f"={unit_cost_col}{ri}*{qty_col}{ri}"
+        # Packs to buy x pack price, where the pack price is Unit Cost x Pack Size.
+        line_total = (f"=ROUNDUP({qty_col}{ri}/{pack_vcol}{ri},0)"
+                      f"*{unit_cost_col}{ri}*{pack_vcol}{ri}")
         vals = [
             row["Vendor"],
             row["Number"],
@@ -1096,6 +1097,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
             row["Vendor Number"] if pd.notna(row.get("Vendor Number")) else None,
             int(qty) if qty == int(qty) else qty,
             row["_cost_num"] if row["_cost_num"] != 0 else None,
+            pack,
             line_total,
             row["notes"] or None,
         ]
@@ -1106,7 +1108,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
             c.border = bdr
             c.alignment = Alignment(horizontal="left", vertical="center")
             if VENDOR_COLUMNS[ci - 1] in ("Unit Cost", "Line Total"):
-                c.number_format = (PIECE_FMT if pack and VENDOR_COLUMNS[ci - 1] == "Unit Cost"
+                c.number_format = (PIECE_FMT if pack > 1 and VENDOR_COLUMNS[ci - 1] == "Unit Cost"
                                    else DOLLAR_FMT)
 
     last_data_row = HDR + len(agg)
@@ -1139,7 +1141,8 @@ def _write_vendor_summary(ws, vendors: list, first_row: int, last_row: int,
     """
     bdr = _border()
     vcol = f"$A${first_row}:$A${last_row}"
-    total_rng = f"$H${first_row}:$H${last_row}"
+    lt = get_column_letter(VENDOR_COLUMNS.index("Line Total") + 1)
+    total_rng = f"${lt}${first_row}:${lt}${last_row}"
     pt = PURCHASING_SHEET_NAME
     top = last_row + 3
     for i, h in enumerate(["Vendor", "Lines", "Subtotal", "Tax/Tariff", "Total"], 1):
@@ -1345,6 +1348,14 @@ def pack_size_of(value: Any) -> int:
     return int(n)
 
 
+def uses_packs(row: Any) -> bool:
+    """True for a priced purchased row, which is bought by whole packs; Make rows and unpriced rows are not."""
+    if str(row.get("Source", "")).strip().lower() == "make":
+        return False
+    src = row.get("Price source")
+    return pd.notna(src) and str(src).strip() != ""
+
+
 def packs_to_buy(qty: Any, pack_size: int) -> Optional[int]:
     """ceil(Qty / Pack Size); None when the quantity is not a number."""
     q = parse_money(qty)
@@ -1357,29 +1368,31 @@ def packs_to_buy(qty: Any, pack_size: int) -> Optional[int]:
 
 def apply_mcmaster_price(df: pd.DataFrame, pack_price: pd.Series | None,
                          pack_size: pd.Series | None) -> int:
-    """Live McMaster prices win over File and List.
+    """Live McMaster prices win over File and List, and every row gets a Pack Size.
 
     Where the BOM file's ``McMaster Pack Price`` is > 0: Cost Per = pack price /
-    pack size (pack size defaults to 1), Price source ``McMaster``, and the
-    ``Pack Size`` and ``Packs to Buy`` columns are filled. Every other row gets
-    blank Pack Size / Packs to Buy and keeps its price. Returns the number of
-    rows priced from McMaster.
+    pack size, Price source ``McMaster``. The pack size is the live one the
+    add-in wrote; any other row takes the part file's Pack Size iProperty when it
+    is a whole number >= 1. Anything else is 1. A file Pack Size never changes
+    Price source. Packs to Buy is a live formula on the sheet, so the column
+    stays blank here. Returns the number of rows priced from McMaster.
     """
-    df["Pack Size"] = pd.Series([None] * len(df), index=df.index, dtype=object)
+    sizes = pd.Series([1] * len(df), index=df.index, dtype=object)
+    if pack_size is not None:
+        for idx in df.index:
+            n = parse_money(pack_size.get(idx))
+            if pd.notna(n) and n >= 1 and float(n) == int(n):
+                sizes[idx] = int(n)
+    df["Pack Size"] = sizes
     df["Packs to Buy"] = pd.Series([None] * len(df), index=df.index, dtype=object)
     if pack_price is None:
         return 0
     prices = pack_price.map(parse_money)
     live = prices.notna() & (prices > 0)
     count = 0
-    extended = pd.Series(extended_quantities(df), index=df.index) if "Row Order" in df.columns else None
     for idx in df.index[live]:
-        size = pack_size_of(pack_size.get(idx) if pack_size is not None else None)
-        price = float(prices[idx])
-        df.at[idx, "Cost Per"] = price / size
+        df.at[idx, "Cost Per"] = float(prices[idx]) / pack_size_of(sizes[idx])
         df.at[idx, "Price source"] = PRICE_SOURCE_MCMASTER
-        df.at[idx, "Pack Size"] = size
-        df.at[idx, "Packs to Buy"] = packs_to_buy(df.at[idx, "Item Qty"] if extended is None else extended[idx], size)
         count += 1
     return count
 
