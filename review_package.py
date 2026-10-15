@@ -31,7 +31,7 @@ UNRELEASED_TEXT = "NOT RELEASED"
 FOOTER_COLOR = "#666666"
 FOOTER_SIZE = 7
 FOOTER_BOTTOM = 18
-BOM_COLUMNS = ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
+BOM_COLUMNS = ["Item", "Part Number", "Description", "QTY", "Total QTY", "BOM Structure", "Material", "REV", "State", "Notes"]
 
 
 def _doc(story) -> bytes:
@@ -126,7 +126,12 @@ def bom_table_data(bom: str, no_vendor: set[str] | None = None) -> tuple[list[li
     never flagged (Zak, 2026-10-13). Orange marks purchased rows whose Part Number has no
     vendor drawing in the package (`no_vendor`); orange wins over yellow.
     """
-    df = bp.read_bom_file(bom).fillna("")
+    df = bp.read_bom_file(bom)
+    if {"Item", "QTY"} <= set(df.columns):
+        # QTY is per ONE of the parent; Total QTY multiplies in every ancestor's.
+        ext = bp.extended_quantities(pd.DataFrame({"Row Order": df["Item"], "Item Qty": df["QTY"]}))
+        df["Total QTY"] = [f"{q:g}" for q in ext]
+    df = df.fillna("")
     cols = [c for c in BOM_COLUMNS if c in df.columns]
     data = [cols] + [[str(row[c]) for c in cols] for _, row in df.iterrows()]
     yellow: list[int] = []
@@ -145,8 +150,8 @@ def bom_table_data(bom: str, no_vendor: set[str] | None = None) -> tuple[list[li
 
 
 # Relative column weights; the table is scaled to the page's frame width (landscape letter, 0.5 in margins).
-_COL_WEIGHTS = {"Item": 4, "Part Number": 20, "Description": 30, "QTY": 5, "BOM Structure": 10,
-                "Material": 11, "REV": 5, "State": 11}
+_COL_WEIGHTS = {"Item": 4, "Part Number": 18, "Description": 26, "QTY": 5, "Total QTY": 6, "BOM Structure": 9,
+                "Material": 10, "REV": 5, "State": 10, "Notes": 24}
 _FRAME_WIDTH = landscape(letter)[0] - 72
 
 
@@ -206,18 +211,7 @@ def _money(value: float) -> str:
 
 def _total_quantities(df: pd.DataFrame, children: dict[int, list[int]]) -> list[float]:
     """Total quantity of each row in the assembly: its own QTY times every parent's."""
-    qty = []
-    for v in df["Item Qty"]:
-        q = bp.parse_money(v)
-        qty.append(1.0 if q != q else float(q))  # blank or "-" (the root) counts as 1
-    total = [0.0] * len(df)
-    nested = {c for kids in children.values() for c in kids}
-    stack = [(i, 1.0) for i in range(len(df)) if i not in nested]
-    while stack:
-        i, parent = stack.pop()
-        total[i] = qty[i] * parent
-        stack += [(c, total[i]) for c in children.get(i, [])]
-    return total
+    return bp.extended_quantities(df, children)
 
 
 def _reference_problem(info: dict[str, Any]) -> str | None:

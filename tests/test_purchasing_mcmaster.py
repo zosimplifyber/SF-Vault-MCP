@@ -132,7 +132,7 @@ def test_non_mcmaster_rows_unchanged(tmp_path, monkeypatch):
     ws = _sheet(tmp_path, [{"Number": "P2", "Cost": 4.5, "Vendor": "Acme"}, _mc(number="P1")], monkeypatch)
     plain = next(r for r in (_row(ws, 1), _row(ws, 2)) if r["Price source"].value == "File")
     ri = plain["Cost Per"].row
-    c, q, s, t = _letter("Cost Per"), _letter("Item Qty"), _letter("Shipping"), _letter("Tax/Tariff")
+    c, q, s, t = _letter("Cost Per"), _letter("Total Qty"), _letter("Shipping"), _letter("Tax/Tariff")
     assert plain["Cost Per"].value == 4.5
     assert plain["Pack Size"].value is None and plain["Packs to Buy"].value is None
     assert plain["Tax/Tariff"].value == f"={c}{ri}*{q}{ri}*0.07"
@@ -185,7 +185,8 @@ def test_assembly_rolls_up_pack_sub_totals(tmp_path, monkeypatch):
     ws = _sheet(tmp_path, rows, monkeypatch)
     asm, part = _row(ws, 1), _row(ws, 2)
     assert asm["Pack Size"].value is None and asm["Packs to Buy"].value is None
-    assert asm["Cost Per"].value == f"=SUM({_letter('Sub Total')}{part['Sub Total'].row})"
+    tq = f"{_letter('Total Qty')}{asm['Cost Per'].row}"
+    assert asm["Cost Per"].value == f"=SUM({_letter('Sub Total')}{part['Sub Total'].row})/IF({tq}>0,{tq},1)"
     assert part["Packs to Buy"].value == 2
 
 

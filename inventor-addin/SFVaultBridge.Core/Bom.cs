@@ -8,7 +8,8 @@ public sealed record BomNode(string PartNumber, string Description, double Quant
                              string Vendor = "", string VendorNumber = "", string State = "",
                              string Process = "", string MaterialFinish = "", bool IsSheetMetal = false,
                              double? Cost = null, string HsCode = "", string Source = "",
-                             int? PackSize = null, double? McMasterPackPrice = null, string McMasterPriceDate = "");
+                             int? PackSize = null, double? McMasterPackPrice = null, string McMasterPriceDate = "",
+                             string Notes = "");
 
 public sealed record BomLine(string Item, BomNode Node, int Depth);
 
@@ -49,7 +50,7 @@ public static class BomSource
 public static class BomFile
 {
     public static readonly string[] Headers = { "Item", "Part Number", "BOM Structure", "Unit QTY", "QTY", "Description", "REV", "State", "Material", "Process", "File Name", "Vendor", "Vendor Number", "Cost", "HS/HTS Code",
-                                               "McMaster Pack Price", "Pack Size", "McMaster Price Date" };
+                                               "McMaster Pack Price", "Pack Size", "McMaster Price Date", "Notes" };
 
     public static void Write(string path, IReadOnlyList<BomLine> lines)
     {
@@ -68,6 +69,7 @@ public static class BomFile
                 n.McMasterPackPrice is { } mp ? mp.ToString("G", CultureInfo.InvariantCulture) : "",
                 n.McMasterPackPrice is not null && n.PackSize is { } ps ? ps.ToString(CultureInfo.InvariantCulture) : "",
                 n.McMasterPackPrice is not null ? Field(n.McMasterPriceDate) : "",
+                Field(n.Notes),
             })).Append("\r\n");
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);

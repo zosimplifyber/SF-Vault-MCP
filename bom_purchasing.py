@@ -122,7 +122,10 @@ PRICE_SOURCE_MCMASTER = "McMaster"
 # lookup and the By Vendor roll-up all read it — it is simply not a column on the
 # sheet, which identifies a row by its Title.
 HIDDEN_SHEET_COLUMNS = ("Number",)
-SHEET_COLUMNS = [c for c in ALL_COLUMNS if c not in HIDDEN_SHEET_COLUMNS]
+# "Total Qty" (the extended quantity the money math uses) sits right after the
+# per-parent Item Qty; "Notes" (the part's Comments iProperty) closes the table.
+SHEET_COLUMNS = [c for c in ALL_COLUMNS + ["Notes"] if c not in HIDDEN_SHEET_COLUMNS]
+SHEET_COLUMNS.insert(SHEET_COLUMNS.index("Item Qty") + 1, "Total Qty")
 
 # Header display labels — the sheet's header cell shows these instead of the
 # internal canonical column name (which the vendor/costing logic keys on).
@@ -141,15 +144,17 @@ COLUMN_WIDTHS = {
     "Vendor": 18, "Vendor Number": 18,
     "Cost Per": 12, "Price source": 12, "Pack Size": 10, "Packs to Buy": 10, "HS/HTS Code": 14, "Shipping": 12, "Tax/Tariff": 12,
     "Sub Total": 14, "Lead Time (Business Days)": 24,
+    "Total Qty": 10, "Notes": 44,
 }
 
 VENDOR_COLUMNS = [
     "Vendor", "Number", "Description (Item,CO)", "Material",
-    "Vendor Number", "Total Qty", "Unit Cost", "Line Total",
+    "Vendor Number", "Total Qty", "Unit Cost", "Line Total", "Notes",
 ]
 VENDOR_COL_WIDTHS = {
     "Vendor": 18, "Number": 14, "Description (Item,CO)": 44, "Material": 22,
     "Vendor Number": 20, "Total Qty": 12, "Unit Cost": 14, "Line Total": 14,
+    "Notes": 44,
 }
 
 # The Purchasing tab's layout, shared by the writer and by
@@ -473,6 +478,29 @@ def build_children_map(df: pd.DataFrame) -> dict[int, list[int]]:
     return children
 
 
+def extended_quantities(df: pd.DataFrame, children: dict[int, list[int]] | None = None) -> list[float]:
+    """Extended quantity of each row: its own Item Qty times every ancestor's.
+
+    Inventor's structured BOM gives a child's QTY per ONE of its parent, so a
+    sub-assembly of 2 holding a QTY-36 part needs 72 of them. A blank or "-" QTY
+    (the root) counts as 1. Rows with no Row Order hierarchy are their own QTY.
+    """
+    if children is None:
+        children = build_children_map(df) if "Row Order" in df.columns else {}
+    qty = []
+    for v in (df["Item Qty"] if "Item Qty" in df.columns else [None] * len(df)):
+        q = parse_money(v)
+        qty.append(1.0 if q != q else float(q))
+    total = list(qty)
+    nested = {c for kids in children.values() for c in kids}
+    stack = [(i, 1.0) for i in range(len(df)) if i not in nested]
+    while stack:
+        i, parent = stack.pop()
+        total[i] = qty[i] * parent
+        stack += [(c, total[i]) for c in children.get(i, [])]
+    return total
+
+
 # ---------------------------------------------------------------------------
 # Excel sheet builders
 # ---------------------------------------------------------------------------
@@ -572,6 +600,7 @@ def build_purchasing_sheet(
     body_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
 
     qty_col = get_column_letter(SHEET_COLUMNS.index("Item Qty") + 1)
+    total_qty_col = get_column_letter(SHEET_COLUMNS.index("Total Qty") + 1)
     cost_col = get_column_letter(SHEET_COLUMNS.index("Cost Per") + 1)
     pack_col = get_column_letter(SHEET_COLUMNS.index("Pack Size") + 1)
     packs_col = get_column_letter(SHEET_COLUMNS.index("Packs to Buy") + 1)
@@ -580,6 +609,7 @@ def build_purchasing_sheet(
     sub_col = get_column_letter(SHEET_COLUMNS.index("Sub Total") + 1)
 
     children_map = build_children_map(df)
+    parent_of = {c: p for p, kids in children_map.items() for c in kids}
     FIRST_DATA_ROW = HDR_ROW + 1
     DOLLAR_FMT = '"$"#,##0.00'
     PIECE_FMT = '"$"#,##0.00##'
@@ -619,7 +649,7 @@ def build_purchasing_sheet(
                    and pd.notna(row.get("Pack Size"))
                    and pd.notna(row.get("Packs to Buy")))
         paid = (f"{packs_col}{ri}*{cost_col}{ri}*{pack_col}{ri}" if is_pack
-                else f"{cost_col}{ri}*{qty_col}{ri}")
+                else f"{cost_col}{ri}*{total_qty_col}{ri}")
         if is_unmatched:
             fill = PatternFill("solid", fgColor=UNMATCHED_FILL)
             num_val = row.get("Number")
@@ -634,6 +664,17 @@ def build_purchasing_sheet(
             if col_name in BOM_COLUMNS:
                 val = row.get(col_name)
                 c.value = None if pd.isna(val) else val
+
+            elif col_name == "Total Qty":
+                # Live: own QTY (blank or "-" counts as 1) times the parent's Total Qty.
+                f = f"IF(ISNUMBER({qty_col}{ri}),{qty_col}{ri},1)"
+                if df_idx in parent_of:
+                    f += f"*{total_qty_col}{FIRST_DATA_ROW + parent_of[df_idx]}"
+                c.value = "=" + f
+
+            elif col_name == "Notes":
+                val = row.get(col_name)
+                c.value = None if pd.isna(val) or not str(val).strip() else str(val).strip()
 
             elif col_name == "Price source":
                 val = row.get(col_name)
@@ -662,22 +703,21 @@ def build_purchasing_sheet(
             elif col_name in LOOKUP_COLUMNS:
                 val = row.get(col_name)
                 c.value = None if pd.isna(val) else val
-                # Assembly Cost Per = SUM of children's Sub Totals
+                # Assembly Cost Per = the children's Sub Totals (priced at extended
+                # quantity) spread over the assembly's own Total Qty: cost to make one.
                 if col_name == "Cost Per" and is_assembly and child_indices:
                     child_cells = ",".join(
                         f"{sub_col}{FIRST_DATA_ROW + ci_}" for ci_ in child_indices
                     )
-                    c.value = f"=SUM({child_cells})"
+                    c.value = (f"=SUM({child_cells})"
+                               f"/IF({total_qty_col}{ri}>0,{total_qty_col}{ri},1)")
 
             elif col_name == "Sub Total":
                 if not is_assembly:
                     c.value = f"=({paid})+{ship_col}{ri}+{tax_col}{ri}"
                 elif child_indices:
-                    # Root assembly Qty often = "-"; ISNUMBER guard treats it as 1
-                    c.value = (
-                        f"={cost_col}{ri}"
-                        f"*IF(ISNUMBER({qty_col}{ri}),{qty_col}{ri},1)"
-                    )
+                    # Total Qty already treats a root "-" as 1
+                    c.value = f"={cost_col}{ri}*{total_qty_col}{ri}"
 
             if col_name in DOLLAR_COLS:
                 # A McMaster piece price is often under a cent ($4.68 / 50); show up to 4 decimals.
@@ -999,18 +1039,14 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
     # including outsourced Make parts (machine shop, laser cutter). Make parts
     # built in-house carry no vendor, so they drop out on their own.
     parts = df.copy()
-    for col in ("Vendor", "Vendor Number", "Material", "Cost Per"):
+    for col in ("Vendor", "Vendor Number", "Material", "Cost Per", "Notes"):
         if col not in parts.columns:
             parts[col] = None
+    # Extended quantity, worked out on the whole BOM before the vendor filter.
+    parts["_qty_num"] = extended_quantities(df)
+    parts["Notes"] = parts["Notes"].map(lambda v: "" if pd.isna(v) else str(v).strip())
     parts = parts[parts["Vendor"].notna() & (parts["Vendor"].astype(str).str.strip() != "")]
 
-    def safe_qty(q: Any) -> float:
-        try:
-            return float(q)
-        except (TypeError, ValueError):
-            return 0.0
-
-    parts["_qty_num"] = parts["Item Qty"].apply(safe_qty)
     parts["_cost_num"] = pd.to_numeric(parts["Cost Per"], errors="coerce").fillna(0)
     # A live McMaster row is bought by the pack, the same as on the Purchasing
     # tab: the line pays for whole packs. 0 means bought by the piece.
@@ -1029,7 +1065,8 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
              "Vendor Number", "_cost_num", "_pack"],
             dropna=False, sort=False,
         )
-        .agg(total_qty=("_qty_num", "sum"))
+        .agg(total_qty=("_qty_num", "sum"),
+             notes=("Notes", lambda s: "; ".join(dict.fromkeys(n for n in s if n))))
         .reset_index()
         .sort_values(["Vendor", "Number"])
         .reset_index(drop=True)
@@ -1060,6 +1097,7 @@ def _build_vendor_tab(wb: Workbook, df: pd.DataFrame,
             int(qty) if qty == int(qty) else qty,
             row["_cost_num"] if row["_cost_num"] != 0 else None,
             line_total,
+            row["notes"] or None,
         ]
         for ci, val in enumerate(vals, 1):
             c = ws.cell(row=ri, column=ci, value=val)
@@ -1334,13 +1372,14 @@ def apply_mcmaster_price(df: pd.DataFrame, pack_price: pd.Series | None,
     prices = pack_price.map(parse_money)
     live = prices.notna() & (prices > 0)
     count = 0
+    extended = pd.Series(extended_quantities(df), index=df.index) if "Row Order" in df.columns else None
     for idx in df.index[live]:
         size = pack_size_of(pack_size.get(idx) if pack_size is not None else None)
         price = float(prices[idx])
         df.at[idx, "Cost Per"] = price / size
         df.at[idx, "Price source"] = PRICE_SOURCE_MCMASTER
         df.at[idx, "Pack Size"] = size
-        df.at[idx, "Packs to Buy"] = packs_to_buy(df.at[idx, "Item Qty"], size)
+        df.at[idx, "Packs to Buy"] = packs_to_buy(df.at[idx, "Item Qty"] if extended is None else extended[idx], size)
         count += 1
     return count
 

@@ -303,7 +303,7 @@ def _state_bom(path: Path) -> Path:
 
 def test_bom_table_has_state_after_rev_and_yellow_unreleased_rows(tmp_path):
     data, yellow, _ = rp.bom_table_data(str(_state_bom(tmp_path / "bom.txt")))
-    assert data[0] == ["Item", "Part Number", "Description", "QTY", "BOM Structure", "Material", "REV", "State"]
+    assert data[0] == ["Item", "Part Number", "Description", "QTY", "Total QTY", "BOM Structure", "Material", "REV", "State"]
     assert [r[-1].strip() for r in data[1:]] == ["Released", "Work in Progress", "", "released"]
     assert yellow == [2, 3]
 
