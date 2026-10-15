@@ -52,6 +52,12 @@ internal static partial class VaultFiles
         var ds = conn.WebServiceManager.DocumentService;
         var vaultPath = vaultFolder.TrimEnd('/') + "/" + fileName;
         var existing = FindLatest(vaultPath);
+        string? restored = null;
+        if (existing is null && RestoreFromTrash(vaultFolder, fileName, vaultPath) is { } back)
+        {
+            existing = back;
+            restored = $"{fileName} was in the Vault trash; it was restored and this is a new version of it.";
+        }
         long masterId;
         if (existing is null)
         {
@@ -109,13 +115,39 @@ internal static partial class VaultFiles
         WsFile result;
         try { result = ds.GetLatestFileByMasterId(masterId); }
         catch (Exception ex) { return (null, existing is not null, $"Checked in; could not read back the version: {ex.Message}"); }
-        string? warning = null;
+        string? warning = restored;
         if (CategoryName(result) != "Documents")
         {
             try { SetCategory(result.MasterId, "Documents", comment); result = ds.GetLatestFileByMasterId(result.MasterId); }
-            catch (Exception ex) { warning = $"Could not set the Documents category: {ex.Message}"; }
+            catch (Exception ex) { warning = Join(warning, $"Could not set the Documents category: {ex.Message}"); }
         }
         return (result, existing is not null, warning);
+    }
+
+    private static string? Join(string? a, string b) => a is null ? b : a + "\n" + b;
+
+    /// <summary>
+    /// A deleted file in the Vault 2026 trash still holds its name, so adding a new file of that name fails with 1008.
+    /// Restores the trashed file of this name from this folder (keeping its history) and returns it; null when there is none
+    /// or the restore fails (the add then reports 1008 in words).
+    /// </summary>
+    private static WsFile? RestoreFromTrash(string vaultFolder, string fileName, string vaultPath)
+    {
+        try
+        {
+            var ds = Conn.WebServiceManager.DocumentService;
+            if (!ds.GetTrashBinEnabled()) return null;
+            var folder = ds.FindFoldersByPaths(new[] { vaultFolder })?.FirstOrDefault();
+            if (folder is null || folder.Id <= 0) return null;
+            var trashed = ds.GetTrashedFiles(false, true)?
+                .Where(f => f.FolderId == folder.Id && string.Equals(f.Name, fileName, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(f => f.CreateDate)
+                .FirstOrDefault();
+            if (trashed is null) return null;
+            ds.RestoreFile(trashed.MasterId);
+            return FindLatest(vaultPath);
+        }
+        catch (Exception) { return null; }
     }
 
     internal static void SetCategory(long masterId, string category, string comment)
