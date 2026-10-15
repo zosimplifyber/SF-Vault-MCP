@@ -65,9 +65,19 @@ internal static partial class VaultFiles
             }
             catch (Exception ex) { throw new BridgeException("local_write_failed", $"Could not write {destLocal}: {ex.Message}"); }
             using var stream = System.IO.File.OpenRead(destLocal);
-            var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(destLocal),
-                                                 Array.Empty<FileAssocParam>(), null, FileClassification.None, false, stream);
-            masterId = added.EntityMasterId;
+            try
+            {
+                var added = conn.FileManager.AddFile(folder, fileName, comment, System.IO.File.GetLastWriteTime(destLocal),
+                                                     Array.Empty<FileAssocParam>(), null, FileClassification.None, false, stream);
+                masterId = added.EntityMasterId;
+            }
+            catch (Exception ex) when (ex.Message.Trim() == "1008" || ex.Message.Contains("1008"))
+            {
+                // 1008 = file exists, yet the path lookup above found nothing: the name is held by a file we cannot see (usually one in the Vault trash).
+                throw new BridgeException("name_in_use",
+                    $"Vault already has a {fileName} in {vaultFolder} that this account cannot see, usually a deleted copy in the Vault trash. " +
+                    "Restore it from the trash (keeps its history) or delete it permanently, then run this again.");
+            }
         }
         else
         {
