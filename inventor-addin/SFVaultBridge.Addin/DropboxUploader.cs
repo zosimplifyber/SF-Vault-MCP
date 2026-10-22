@@ -29,8 +29,9 @@ public sealed class DropboxUploader : IDropboxUploader
             return client.UploadManyAsync(plan, _log, ct).GetAwaiter().GetResult();
         }
         catch (OperationCanceledException) { throw new BridgeException("cancelled", "The Dropbox upload was cancelled."); }
-        catch (Exception e) when (e is InvalidOperationException or TimeoutException or HttpRequestException or IOException)
+        catch (Exception e) when (e is not BridgeException)
         {
+            // Any Dropbox refusal (including the client's own DropboxException) is reported as dropbox_failed with its message.
             _log("dropbox upload failed: " + e);
             throw new BridgeException("dropbox_failed", e.Message);
         }

@@ -120,6 +120,29 @@ public static class DropboxJson
         return true;
     }
 
+    /// <summary>A 400 whose plain-text body says the app lacks a scope ("... does not have the required scope 'files.content.write'").</summary>
+    public static bool TryMissingScopeText(string body, out string scope)
+    {
+        scope = "";
+        var m = System.Text.RegularExpressions.Regex.Match(body ?? "", @"required scope '([^']+)'");
+        if (!m.Success) return false;
+        scope = m.Groups[1].Value;
+        return true;
+    }
+
+    /// <summary>A user endpoint called with a team-linked token (the app has team scopes such as team_data.member):
+    /// the call must name a member with the Dropbox-API-Select-User header.</summary>
+    public static bool IsTeamTokenError(string body) =>
+        (body ?? "").Contains("entire Dropbox Business team", StringComparison.OrdinalIgnoreCase)
+        || (body ?? "").Contains("Dropbox-API-Select-User", StringComparison.Ordinal);
+
+    /// <summary>team_member_id of the admin who authorised a team token, from team/token/get_authenticated_admin.</summary>
+    public static bool TryAdminMemberId(string json, out string memberId)
+    {
+        memberId = (Parse(json)?["admin_profile"] as JsonObject)?["team_member_id"]?.GetValue<string>() ?? "";
+        return memberId.Length > 0;
+    }
+
     /// <summary>Seconds to wait before retry number attempt (0-based): Retry-After when given, else 1, 2, 4; capped at 60.</summary>
     public static TimeSpan RetryDelay(int attempt, int? retryAfterSeconds) =>
         TimeSpan.FromSeconds(Math.Min(60, retryAfterSeconds is > 0 ? retryAfterSeconds.Value : 1 << Math.Clamp(attempt, 0, 5)));

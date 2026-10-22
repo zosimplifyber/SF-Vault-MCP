@@ -18,6 +18,7 @@ public sealed class DropboxClient
     private readonly HttpClient _http;
     private string? _rootNs;
     private bool _rootChecked;
+    private string? _selectUser; // team-linked token: the member every user call acts as
 
     public DropboxClient(DropboxAuth auth, HttpClient http)
     {
@@ -27,7 +28,7 @@ public sealed class DropboxClient
     }
 
     /// <summary>Forget the cached team path root; call after a sign-in or sign-out.</summary>
-    public void ResetAccount() { _rootNs = null; _rootChecked = false; }
+    public void ResetAccount() { _rootNs = null; _rootChecked = false; _selectUser = null; }
 
     public static HttpClient NewHttpClient() => new() { Timeout = Timeout.InfiniteTimeSpan };
 
@@ -109,7 +110,28 @@ public sealed class DropboxClient
     private async Task EnsureRootAsync(CancellationToken ct)
     {
         if (_rootChecked) return;
-        var body = await SendAsync(() => Json(Api + "users/get_current_account", null), usePathRoot: false, ct).ConfigureAwait(false);
+        string body;
+        try
+        {
+            body = await SendAsync(() => Json(Api + "users/get_current_account", null), usePathRoot: false, ct).ConfigureAwait(false);
+        }
+        catch (DropboxException e) when (e.Status == 400 && DropboxJson.IsTeamTokenError(e.Body))
+        {
+            // Team-linked app: act as the admin who signed in. Needs team_info.read on the app.
+            string admin;
+            try
+            {
+                admin = await SendAsync(() => Json(Api + "team/token/get_authenticated_admin", null), usePathRoot: false, ct, asMember: false).ConfigureAwait(false);
+            }
+            catch (DropboxException te) when (te.Status is 400 or 401)
+            {
+                throw new InvalidOperationException("This Dropbox app has team permissions, so the bridge must look up who signed in. Tick team_info.read on the app's Permissions tab, save, then sign out of Dropbox in Settings and try again. (" + te.Message + ")");
+            }
+            if (!DropboxJson.TryAdminMemberId(admin, out var member))
+                throw new InvalidOperationException("Dropbox did not say which team member signed in.");
+            _selectUser = member;
+            body = await SendAsync(() => Json(Api + "users/get_current_account", null), usePathRoot: false, ct).ConfigureAwait(false);
+        }
         _rootNs = DropboxJson.NeedsPathRoot(body, out var ns) ? ns : null;
         _rootChecked = true;
     }
@@ -217,7 +239,7 @@ public sealed class DropboxClient
     /// Sends with the bearer token. On 401: one refresh, then one browser sign-in, then give up.
     /// On 429 and 5xx: up to 3 retries with backoff, honouring Retry-After. Each try has its own timeout.
     /// </summary>
-    private async Task<string> SendAsync(Func<HttpRequestMessage> make, bool usePathRoot, CancellationToken ct, TimeSpan? timeout = null)
+    private async Task<string> SendAsync(Func<HttpRequestMessage> make, bool usePathRoot, CancellationToken ct, TimeSpan? timeout = null, bool asMember = true)
     {
         var authStep = 0;
         var retries = 0;
@@ -233,6 +255,8 @@ public sealed class DropboxClient
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             if (usePathRoot && _rootNs is not null)
                 req.Headers.TryAddWithoutValidation("Dropbox-API-Path-Root", DropboxJson.PathRoot(_rootNs));
+            if (asMember && _selectUser is not null)
+                req.Headers.TryAddWithoutValidation("Dropbox-API-Select-User", _selectUser);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout ?? TimeSpan.FromMinutes(2));
             HttpResponseMessage resp;
@@ -261,6 +285,8 @@ public sealed class DropboxClient
                     await Task.Delay(DropboxJson.RetryDelay(retries++, after), ct).ConfigureAwait(false);
                     continue;
                 }
+                if (resp.StatusCode == HttpStatusCode.BadRequest && DropboxJson.TryMissingScopeText(text, out var missing))
+                    throw new InvalidOperationException("The Dropbox app is missing the '" + missing + "' permission. Tick it on the app's Permissions tab, save, then sign out of Dropbox in Settings and try again.");
                 throw new DropboxException((int)resp.StatusCode, text);
             }
         }

@@ -145,6 +145,25 @@ public class DropboxTests
     }
 
     [Fact]
+    public void Missing_scope_plain_text_parsing()
+    {
+        const string body = "Error in call to API function \"files/create_folder_v2\": Your app (ID: 8842465) is not permitted to access this endpoint because it does not have the required scope 'files.content.write'. The owner of the app can enable the scope.";
+        Assert.True(DropboxJson.TryMissingScopeText(body, out var sc));
+        Assert.Equal("files.content.write", sc);
+        Assert.False(DropboxJson.TryMissingScopeText("Error in call to API function: something else", out _));
+    }
+
+    [Fact]
+    public void Team_token_error_and_admin_member_id()
+    {
+        Assert.True(DropboxJson.IsTeamTokenError("Error in call to API function \"users/get_current_account\": This API function operates on a single Dropbox account, but the OAuth 2 access token you provided is for an entire Dropbox Business team.  Since your API app key has team member file access permissions, you can operate on a team member's Dropbox by providing the \"Dropbox-API-Select-User\" HTTP header"));
+        Assert.False(DropboxJson.IsTeamTokenError("{\"error_summary\":\"path/not_found/\"}"));
+        Assert.True(DropboxJson.TryAdminMemberId("{\"admin_profile\":{\"team_member_id\":\"dbmid:AAA\",\"email\":\"z@x\"}}", out var id));
+        Assert.Equal("dbmid:AAA", id);
+        Assert.False(DropboxJson.TryAdminMemberId("{}", out _));
+    }
+
+    [Fact]
     public void Retry_delay_backoff_and_retry_after()
     {
         Assert.Equal(TimeSpan.FromSeconds(1), DropboxJson.RetryDelay(0, null));
