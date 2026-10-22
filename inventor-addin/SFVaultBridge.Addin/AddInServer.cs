@@ -70,8 +70,16 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             ReleaseChannelOps.Register(router, new ReleaseChannel(), new PathGuard(roots), RunOnUi);
             var downloads = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
             var jobs = new JobManager(RunOnUi, log: _log.Write);
+            var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var uploadGuard = new PathGuard(new[]
+            {
+                downloads,
+                System.IO.Path.Combine(profile, "Desktop"), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                System.IO.Path.Combine(profile, "Documents"), Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            }, "Downloads, Desktop or Documents");
             var tools = McpCatalog.Build(new VaultReader(), new InventorReader(_app, _log.Write), _vault, importer, Version, dataCard,
-                new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, jobs, _log.Write, new VaultExtrasReader(), dataCard, pdfFetcher, dataCard);
+                new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, jobs, _log.Write, new VaultExtrasReader(), dataCard, pdfFetcher, dataCard,
+                new DropboxUploader(_log.Write), uploadGuard);
             McpCatalog.RegisterReadOps(router, tools, RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write) { Mcp = new McpServer(token, Version, tools, RunOnUi, log: _log.Write, jobs: jobs) };
             _host.Start();

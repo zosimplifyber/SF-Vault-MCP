@@ -23,18 +23,23 @@ public static class TokenStore
 public sealed class PathGuard
 {
     private readonly string[] _roots;
+    private readonly string _allowed;
 
-    public PathGuard(IEnumerable<string> roots) =>
+    /// <param name="allowed">How the allowed places are named in the error, default "the Vault workspace or Downloads".</param>
+    public PathGuard(IEnumerable<string> roots, string? allowed = null)
+    {
         _roots = roots.Where(r => !string.IsNullOrWhiteSpace(r))
                       .Select(r => Path.GetFullPath(r).TrimEnd('\\', '/') + Path.DirectorySeparatorChar)
                       .ToArray();
+        _allowed = allowed ?? "the Vault workspace or Downloads";
+    }
 
     public string Check(string? path, string field)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new BridgeException("bad_request", $"'{field}' is required.");
         var full = Path.GetFullPath(path);
         if (!_roots.Any(r => full.StartsWith(r, StringComparison.OrdinalIgnoreCase)))
-            throw new BridgeException("path_not_allowed", $"'{field}' must be under the Vault workspace or Downloads: {full}");
+            throw new BridgeException("path_not_allowed", $"'{field}' must be under {_allowed}: {full}");
         return full;
     }
 }

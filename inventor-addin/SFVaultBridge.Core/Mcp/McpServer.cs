@@ -203,9 +203,10 @@ public sealed class McpServer
 
     private JsonNode? RunWithTimeout(McpTool tool, JsonObject args)
     {
+        // Writes run as jobs: never abandoned, and a long one hands back a job_id instead of timing out. A write that never touches
+        // Inventor (UiThread false) runs its job on a worker thread so Inventor stays responsive.
+        if (tool.Kind == McpToolKind.Write) return _jobs.RunOrDetach(tool.Name, () => tool.Handler(args), onUi: tool.UiThread);
         if (!tool.UiThread) return tool.Handler(args);
-        // Writes run as jobs: never abandoned, and a long one hands back a job_id instead of timing out.
-        if (tool.Kind == McpToolKind.Write) return _jobs.RunOrDetach(tool.Name, () => tool.Handler(args));
         return UiCall.Run(_onUi, tool.Name, () => tool.Handler(args), tool.Timeout ?? _callTimeout);
     }
 

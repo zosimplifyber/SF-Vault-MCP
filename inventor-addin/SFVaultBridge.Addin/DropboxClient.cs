@@ -68,6 +68,44 @@ public sealed class DropboxClient
         }
     }
 
+    /// <summary>The generic upload behind the MCP tools: creates every folder the plan needs, uploads each file (a failed file is recorded
+    /// and the rest continue), then shares the plan's target when asked. Folder creation and sign-in failures throw.</summary>
+    public async Task<DropboxUploadOutcome> UploadManyAsync(DropboxUploadPlan plan, Action<string>? log, CancellationToken ct)
+    {
+        var warnings = new List<string>();
+        var results = new List<DropboxFileResult>();
+        await EnsureRootAsync(ct).ConfigureAwait(false);
+        foreach (var folder in DropboxUploadRules.FoldersToCreate(plan))
+            await CreateFolderAsync(folder, ct).ConfigureAwait(false);
+        foreach (var item in plan.Items)
+        {
+            try
+            {
+                await UploadFileAsync(item.LocalPath, item.DropboxPath, ct).ConfigureAwait(false);
+                results.Add(new DropboxFileResult(item.DropboxPath, item.Bytes, true));
+                log?.Invoke($"dropbox: uploaded {item.DropboxPath} ({item.Bytes} bytes)");
+            }
+            catch (Exception e) when (!ct.IsCancellationRequested)
+            {
+                results.Add(new DropboxFileResult(item.DropboxPath, item.Bytes, false, e.Message));
+                log?.Invoke($"dropbox: failed {item.DropboxPath}: {e.Message}");
+            }
+        }
+        if (!plan.Share || results.All(r => !r.Ok))
+            return new DropboxUploadOutcome(results, null, null, warnings);
+        try
+        {
+            var (url, vis) = await ShareAsync(plan.ShareTarget, ct).ConfigureAwait(false);
+            if (vis == "team_only") warnings.Add("Team policy does not allow public links; the link works for Dropbox team members only.");
+            return new DropboxUploadOutcome(results, url, vis, warnings);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            warnings.Add("Dropbox share link failed (the files are uploaded): " + e.Message);
+            return new DropboxUploadOutcome(results, null, null, warnings);
+        }
+    }
+
     private async Task EnsureRootAsync(CancellationToken ct)
     {
         if (_rootChecked) return;

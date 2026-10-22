@@ -84,8 +84,9 @@ public sealed class JobManager
         get { lock (_gate) { Purge(); return _jobs.Count; } }
     }
 
-    /// <summary>Starts the work. Returns its result when it finishes within the wait (or throws its failure); otherwise a "running" object with the job id.</summary>
-    public JsonNode? RunOrDetach(string tool, Func<JsonNode?> work)
+    /// <summary>Starts the work. Returns its result when it finishes within the wait (or throws its failure); otherwise a "running" object with the job id.
+    /// With onUi false the work runs on a worker thread instead of Inventor's UI thread (for tools that never touch Inventor, such as uploads).</summary>
+    public JsonNode? RunOrDetach(string tool, Func<JsonNode?> work, bool onUi = true)
     {
         var job = new Job { Id = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant(), Tool = tool, StartedAt = _clock() };
         lock (_gate)
@@ -100,7 +101,7 @@ public sealed class JobManager
         {
             try
             {
-                var r = _onUi(() =>
+                JsonNode? Guarded()
                 {
                     lock (job)
                     {
@@ -108,7 +109,8 @@ public sealed class JobManager
                         job.UiStarted = true;
                     }
                     return work();
-                });
+                }
+                var r = onUi ? _onUi(Guarded) : Guarded();
                 var failed = r is JsonObject o && o["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var b) && !b;
                 End(job, failed ? JobState.Failed : JobState.Done, r, null, null);
             }
@@ -200,7 +202,7 @@ public sealed class JobManager
 public static class JobTools
 {
     public static McpTool Build(JobManager jobs) => new("job_status", "Job status",
-        "Check a write that was still running when the tool returned {status:\"running\", job_id}: fix_data_card_apply, mcmaster_intake_commit or vault_submit_pdf_job_apply. " +
+        "Check a write that was still running when the tool returned {status:\"running\", job_id}: fix_data_card_apply, mcmaster_intake_commit, vault_submit_pdf_job_apply or dropbox_upload_apply. " +
         "Returns running (call again), done with the final result, failed with the error, or cancelled. Waits up to 20 seconds for a running job. " +
         "Never start the write again while its job is running or after it is done; read the result here. Jobs are kept for 1 hour. " +
         "Set cancel true to cancel a job that has not started yet (rarely needed).",

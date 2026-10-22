@@ -300,9 +300,11 @@ Saved values apply to the next button click with no restart: every command reads
 
 Team settings never overwrite your changes. Save adds each team key whose value you changed (`processValues`, `printMaterials`, `dropboxAppKey`, `salesTaxRate`, `mcmasterServerUrl`) to `userOverrides` in `settings.json`. The installer's team merge (and `SettingsMerge`) skips every key listed there and still fills the others. Edit `userOverrides` by hand (or delete a name from it) to take team values again. Keys the window does not know about are kept as they are.
 
-## Dropbox upload (Partner Packages)
+## Dropbox upload (Partner Packages and MCP)
 
 Partner Packages can upload the zip to `/Suppliers/<Partner>/` in the team Dropbox and make a view-only shared link. Tick Upload to Dropbox on the Partner Package form. If you are not signed in yet, the sign-in happens before the build starts; if it fails or is cancelled you are asked whether to build without the upload.
+
+Any other file or folder can be uploaded through the MCP tools (1.4.0): `dropbox_upload_preview` lists exactly which files under Downloads, Desktop or Documents would be sent, with their Dropbox paths and sizes (at most 500 files and 2 GB per upload; Office lock files and desktop metadata are skipped), and `dropbox_upload_apply` sends them after the engineer approves the list and returns the shared link for the folder (or the file). A folder lands as a subfolder of the target named after it; an upload reruns as an overwrite, so an existing link keeps working. The upload runs as a job on a worker thread, never on Inventor's UI thread, and a long one returns a job_id for `job_status`. The same app key, sign-in and token file serve both paths; a key pasted in Settings is picked up on the next call without restarting Inventor.
 
 One-time app setup (Zak, once for the whole team):
 
@@ -362,6 +364,9 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `vault_revision_schemes` | read | Revision schemes and their label sequences |
 | `vault_users` | read | Users (active only by default) |
 | `vault_groups` | read | Groups with member users and child groups |
+| `dropbox_status` | read | Whether a Dropbox app key is set and this user is signed in |
+| `dropbox_upload_preview` | preview | Lists every file a local file or folder upload would send (sizes, Dropbox paths, total), returns `preview_hash` |
+| `dropbox_upload_apply` | write | Uploads the previewed files to `/Suppliers/<partner>/` (or an explicit folder) and returns a view-only shared link; needs `preview_hash` and `confirm: true` within 10 minutes; runs off the UI thread as a job |
 | `job_status` | read | State and result of a write that was still running (job_id), optional cancel before it starts |
 
 The PDF job is the standard Vault drawing job `Autodesk.Vault.PDF.Create.idw` / `.dwg` with `FileVersionId` and `UpdateViewOption=False` (same as `vault_publish_pdf_from_drawing` and `publish_bom.py`); the preview hash binds file version and job type, so a newer drawing version since the preview is refused. `vault_advanced_search` runs `starts_with` as a contains search and filters the hits afterwards.
