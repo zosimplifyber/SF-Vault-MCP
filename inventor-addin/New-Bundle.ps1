@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
-$bin = Join-Path $root "SFVaultBridge.Addin\bin\$Configuration\net8.0-windows"
+$bin = Join-Path $root "SFVaultBridge.Addin\bin\$Configuration\net10.0-windows"
 if (-not (Test-Path (Join-Path $bin 'SFVaultBridge.Addin.dll'))) { throw "Not built: $bin" }
 if (-not (Test-Path $Tool)) { throw "Missing $Tool" }
 
