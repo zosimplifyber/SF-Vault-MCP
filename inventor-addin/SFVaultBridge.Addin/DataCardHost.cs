@@ -214,15 +214,15 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
     // ---- Revise: lifecycle ----
 
     // States created in Vault Settings get a GUID system Name; people (and FileLfCyc.LfCycStateName) use the display name.
-    private static string Shown(LfCycState s) => string.IsNullOrWhiteSpace(s.DispName) ? s.Name : s.DispName;
+    internal static string Shown(LfCycState s) => string.IsNullOrWhiteSpace(s.DispName) ? s.Name : s.DispName;
 
     private static string StateName(LfCycDef def, long id) => def.StateArray?.FirstOrDefault(s => s.Id == id) is { } st ? Shown(st) : "";
 
-    private static LfCycState? StateNamed(LfCycDef def, string name) =>
+    internal static LfCycState? StateNamed(LfCycDef def, string name) =>
         def.StateArray?.FirstOrDefault(s => string.Equals(Shown(s), name, StringComparison.OrdinalIgnoreCase))
         ?? def.StateArray?.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    private static LfCycDef Definition(WsFile f)
+    internal static LfCycDef Definition(WsFile f)
     {
         var defId = f.FileLfCyc?.LfCycDefId ?? 0;
         if (defId <= 0) throw new InvalidOperationException("could not read the file's lifecycle definition");

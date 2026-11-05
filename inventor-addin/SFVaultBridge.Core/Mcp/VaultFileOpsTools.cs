@@ -48,7 +48,7 @@ public static class VaultFileOpsTools
                     ("comment", Schema.Str("Check-out comment (default \"" + FileOpRules.DefaultCheckoutComment + "\").")),
                     ("local_copy", new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("keep", "replace"), ["description"] = "What to do when the local copy differs from Vault." }),
                     ("reopen_in_inventor", Schema.Bool("Close and reopen an open, clean Inventor document after the checkout so it is writable (default true).", true))), "files"),
-                McpToolKind.Preview, a => PreviewCheckout(ops, store, a)),
+                McpToolKind.Preview, a => PreviewCheckout(ops, store, a), WriteTimeout),
 
             new McpTool("vault_checkout_apply", "Check out Vault files",
                 "Checks out the previewed files to you. A WRITE to Vault. " + Apply, ApplySchema("vault_checkout_preview"),
@@ -62,7 +62,7 @@ public static class VaultFileOpsTools
                 Schema.Obj(Schema.Props(FilesProp(),
                     ("comment", Schema.Str("Check-in comment, required.")),
                     ("keep_checked_out", Schema.Bool("Check in but keep the file checked out (default false).", false))), "files", "comment"),
-                McpToolKind.Preview, a => PreviewCheckin(ops, store, a)),
+                McpToolKind.Preview, a => PreviewCheckin(ops, store, a), WriteTimeout),
 
             new McpTool("vault_checkin_apply", "Check in Vault files",
                 "Checks in the previewed files as new versions. A WRITE to Vault. " + Apply, ApplySchema("vault_checkin_preview"),
@@ -73,7 +73,7 @@ public static class VaultFileOpsTools
                 "Someone else's checkout is refused. Any blocker means no preview_hash.",
                 Schema.Obj(Schema.Props(FilesProp(),
                     ("discard_local_changes", Schema.Bool("Allow throwing away local edits (default false).", false))), "files"),
-                McpToolKind.Preview, a => PreviewUndo(ops, store, a)),
+                McpToolKind.Preview, a => PreviewUndo(ops, store, a), WriteTimeout),
 
             new McpTool("vault_undo_checkout_apply", "Undo Vault check-out",
                 "Undoes the previewed check-outs; the working copy returns to the Vault version. A WRITE to Vault. " + Apply, ApplySchema("vault_undo_checkout_preview"),
@@ -89,7 +89,7 @@ public static class VaultFileOpsTools
                     ("state", Schema.Str("Target state name, for example Released or Work in Progress.")),
                     ("comment", Schema.Str("State-change comment (default \"State change via SF Vault Bridge\").")),
                     ("include_children", Schema.Bool("Also move each file's Dependency children (not library files) to the target state first. Default false.", false))), "files", "state"),
-                McpToolKind.Preview, a => PreviewState(ops, store, a)),
+                McpToolKind.Preview, a => PreviewState(ops, store, a), WriteTimeout),
 
             new McpTool("vault_change_state_apply", "Change Vault state",
                 "Changes the state of the previewed files (children first when included); stops at the first failure. A WRITE to Vault. The result repeats leaving_released. " + Apply,

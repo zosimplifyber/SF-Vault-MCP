@@ -79,7 +79,7 @@ public sealed class AddInServer : Inv.ApplicationAddInServer
             }, "Downloads, Desktop or Documents");
             var tools = McpCatalog.Build(new VaultReader(), new InventorReader(_app, _log.Write), _vault, importer, Version, dataCard,
                 new IntakeHost(_app, _log.Write), new PathGuard(new[] { downloads }), downloads, jobs, _log.Write, new VaultExtrasReader(), dataCard, pdfFetcher, dataCard,
-                new DropboxUploader(_log.Write), uploadGuard);
+                new DropboxUploader(_log.Write), uploadGuard, new VaultFileOpsHost(_app, dataCard, _log.Write));
             McpCatalog.RegisterReadOps(router, tools, RunOnUi);
             _host = new HttpHost(Prefix, router, _log.Write) { Mcp = new McpServer(token, Version, tools, RunOnUi, log: _log.Write, jobs: jobs) };
             _host.Start();

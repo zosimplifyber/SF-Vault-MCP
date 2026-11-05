@@ -367,7 +367,17 @@ While Inventor runs, the add-in also serves MCP (Streamable HTTP, JSON responses
 | `dropbox_status` | read | Whether a Dropbox app key is set and this user is signed in |
 | `dropbox_upload_preview` | preview | Lists every file a local file or folder upload would send (sizes, Dropbox paths, total), returns `preview_hash` |
 | `dropbox_upload_apply` | write | Uploads the previewed files to `/Suppliers/<partner>/` (or an explicit folder) and returns a view-only shared link; needs `preview_hash` and `confirm: true` within 10 minutes; runs off the UI thread as a job |
+| `vault_checkout_preview` | preview | Plans checking out files (names or `$/` paths) to the working folder: holder, state, local copy differs from Vault (`local_copy` keep or replace), open in Inventor; any blocker means no `preview_hash` |
+| `vault_checkout_apply` | write | Checks out the previewed files, local copy writable; reopens a clean open Inventor document so it is writable; needs `preview_hash` and `confirm: true` |
+| `vault_checkin_preview` | preview | Plans checking in files you hold, with a required comment; Inventor associations are carried forward; refuses unsaved Inventor documents, new references, unchanged files |
+| `vault_checkin_apply` | write | Checks in the previewed files as new versions (`keep_checked_out` optional) |
+| `vault_undo_checkout_preview` | preview | Plans undoing your checkouts; local edits are a blocker unless `discard_local_changes` |
+| `vault_undo_checkout_apply` | write | Undoes the previewed checkouts |
+| `vault_change_state_preview` | preview | Plans moving files to a lifecycle state: transition, permission, revision after, blockers (checked out, children not released); `include_children` optional; sets `leaving_released: true` with a warning line per file and revision when a file leaves a released state |
+| `vault_change_state_apply` | write | Changes the previewed states (children first), stops at the first failure; the result repeats `leaving_released` |
 | `job_status` | read | State and result of a write that was still running (job_id), optional cancel before it starts |
+
+Check-out, check-in, undo and state change (1.5.0, spec `docs/superpowers/specs/2026-11-05-vault-checkout-state-design.md`): every pair follows the preview then apply contract, is all-or-nothing (a blocker means no `preview_hash`) and refuses at apply when a file changed in Vault since the preview. Check-in carries the previous version's file associations forward (each child at the version matching the file on disk), so drawings keep their models and assemblies their children; a document open in Inventor with references the old version lacks is refused (use Vault's Check In in Inventor). Moving a file out of a released state (Released, or any state flagged released, such as Library's) is flagged with `leaving_released: true`.
 
 The PDF job is the standard Vault drawing job `Autodesk.Vault.PDF.Create.idw` / `.dwg` with `FileVersionId` and `UpdateViewOption=False` (same as `vault_publish_pdf_from_drawing` and `publish_bom.py`); the preview hash binds file version and job type, so a newer drawing version since the preview is refused. `vault_advanced_search` runs `starts_with` as a contains search and filters the hits afterwards.
 
