@@ -108,14 +108,14 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
     private static WsFile Latest(DataCardFileInfo file) =>
         VaultFiles.FindLatest(file.VaultPath) ?? throw new DataCardStepException("resolve", $"{file.VaultPath} is no longer in Vault.");
 
-    private static string NewTempDir()
+    internal static string NewTempDir()
     {
         var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfvb-datacard-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
         return dir;
     }
 
-    private static void DeleteQuietly(string dir)
+    internal static void DeleteQuietly(string dir)
     {
         try
         {
@@ -128,7 +128,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
     }
 
     /// <summary>Downloads Vault's copy of the latest version (no children) into a private temp folder; the user's working copy is never touched.</summary>
-    private static string DownloadBaseline(WsFile latest, string tempDir)
+    internal static string DownloadBaseline(WsFile latest, string tempDir)
     {
         try
         {
@@ -162,7 +162,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
         if (!SameBytes(local, baseline)) throw new DataCardSkipException(LocalDiffers);
     }
 
-    private static bool SameBytes(string a, string b)
+    internal static bool SameBytes(string a, string b)
     {
         try
         {
@@ -570,7 +570,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
         catch (Exception ex) { return new DataCardApplied(-1, $"Checked in, but the new version number could not be read: {ex.Message}"); }
     }
 
-    private static void ClearReadOnly(string path)
+    internal static void ClearReadOnly(string path)
     {
         try
         {
@@ -601,7 +601,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
         catch (Exception undoEx) { return "the checkout could NOT be undone (" + undoEx.Message + "); undo it in Vault"; }
     }
 
-    private static (VDF.Vault.Currency.Entities.FileIteration, string) CheckOut(VDF.Vault.Currency.Connections.Connection conn, WsFile latest, bool overwrite, string comment)
+    internal static (VDF.Vault.Currency.Entities.FileIteration, string) CheckOut(VDF.Vault.Currency.Connections.Connection conn, WsFile latest, bool overwrite, string comment)
     {
         var settings = new VDF.Vault.Settings.AcquireFilesSettings(conn, false);
         settings.OptionsRelationshipGathering.FileRelationshipSettings.IncludeChildren = false;
@@ -627,7 +627,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
 
     /// <summary>Every child Dependency and Attachment of the version being replaced, with the original reference ids, so the new version keeps them.
     /// Library files are included (includeLibraryFiles): an assembly's Content Center children live in a library folder and are dependencies too.</summary>
-    private static FileAssocParam[]? ChildAssociations(VDF.Vault.Currency.Connections.Connection conn, WsFile latest,
+    internal static FileAssocParam[]? ChildAssociations(VDF.Vault.Currency.Connections.Connection conn, WsFile latest,
                                                        Func<IReadOnlyList<AssocRow>, IReadOnlyList<AssocRow>>? remap = null)
     {
         var ds = conn.WebServiceManager.DocumentService;
@@ -651,7 +651,7 @@ internal sealed partial class DataCardHost : IAttachPdfHost, IMaterialLibraryHos
     /// then ReleasePlan.ChooseChildVersions. A byte compare with a fresh download of the latest version is the fallback when no checksum
     /// matches. Any problem throws DataCardStepException("children") before the checkout.
     /// </summary>
-    private static IReadOnlyList<AssocRow> ChooseOnDisk(VDF.Vault.Currency.Connections.Connection conn, IReadOnlyList<AssocRow> rows, IReadOnlySet<long> touched)
+    internal static IReadOnlyList<AssocRow> ChooseOnDisk(VDF.Vault.Currency.Connections.Connection conn, IReadOnlyList<AssocRow> rows, IReadOnlySet<long> touched)
     {
         var ids = rows.Where(r => r.Type == "Dependency").Select(r => r.CldFileId).Distinct().ToArray();
         if (ids.Length == 0) return rows;

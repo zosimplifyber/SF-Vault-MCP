@@ -260,7 +260,8 @@ public static class McpCatalog
                                                string bridgeVersion, IDataCardHost? dataCard, IIntakeHost? intake, PathGuard downloadsGuard,
                                                string downloadsDir, JobManager jobs, Action<string>? log = null, IVaultExtras? extras = null,
                                                IAttachPdfHost? attachPdf = null, IVendorPdfFetcher? pdfFetcher = null,
-                                               IMaterialLibraryHost? materials = null, IDropboxUploader? dropbox = null, PathGuard? uploadGuard = null)
+                                               IMaterialLibraryHost? materials = null, IDropboxUploader? dropbox = null, PathGuard? uploadGuard = null,
+                                               IVaultFileOps? fileOps = null)
     {
         var list = new List<McpTool>();
         var reads = ReadTools.Build(vault, inventor, session, importer, bridgeVersion, () => list.Count);
@@ -271,6 +272,7 @@ public static class McpCatalog
         if (attachPdf is not null) list.AddRange(AttachPdfTools.Build(attachPdf, pdfFetcher, downloadsGuard, new PreviewStore<AttachPdfRequest>(), log));
         list.AddRange(MaterialLibraryTools.Build(materials, new PreviewStore<AddMaterialRequest>(), log));
         list.AddRange(DropboxTools.Build(dropbox, uploadGuard ?? downloadsGuard, new PreviewStore<DropboxUploadPlan>()));
+        list.AddRange(VaultFileOpsTools.Build(fileOps, new PreviewStore<FileOpPlan>()));
         list.Add(JobTools.Build(jobs));
         return list;
     }
